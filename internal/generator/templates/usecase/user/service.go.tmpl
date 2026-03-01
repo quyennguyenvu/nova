@@ -1,0 +1,87 @@
+package user
+
+import (
+	"context"
+	"log/slog"
+
+	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/internal/domain/repository"
+)
+
+// Service implements the user use case.
+type Service struct {
+	userRepo repository.UserRepository
+	logger   *slog.Logger
+}
+
+// NewService creates a new user use case service.
+func NewService(userRepo repository.UserRepository, logger *slog.Logger) *Service {
+	return &Service{
+		userRepo: userRepo,
+		logger:   logger,
+	}
+}
+
+// CreateUser creates a new user.
+func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*entity.User, error) {
+	// Check if user already exists
+	existing, _ := s.userRepo.GetByEmail(ctx, input.Email)
+	if existing != nil {
+		return nil, ErrUserAlreadyExists
+	}
+
+	user := entity.NewUser(input.Email, input.Name, input.Password)
+
+	if err := s.userRepo.Create(ctx, user); err != nil {
+		s.logger.Error("failed to create user", "error", err)
+		return nil, err
+	}
+
+	s.logger.Info("user created", "id", user.ID, "email", user.Email)
+	return user, nil
+}
+
+// GetUser returns a user by ID.
+func (s *Service) GetUser(ctx context.Context, id int64) (*entity.User, error) {
+	user, err := s.userRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+	return user, nil
+}
+
+// UpdateUser updates an existing user.
+func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInput) (*entity.User, error) {
+	user, err := s.userRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+
+	if input.Name != "" {
+		user.Name = input.Name
+	}
+
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		s.logger.Error("failed to update user", "error", err, "id", id)
+		return nil, err
+	}
+
+	s.logger.Info("user updated", "id", id)
+	return user, nil
+}
+
+// DeleteUser deletes a user by ID.
+func (s *Service) DeleteUser(ctx context.Context, id int64) error {
+	if err := s.userRepo.Delete(ctx, id); err != nil {
+		s.logger.Error("failed to delete user", "error", err, "id", id)
+		return err
+	}
+
+	s.logger.Info("user deleted", "id", id)
+	return nil
+}
+
+// ListUsers returns a paginated list of users.
+func (s *Service) ListUsers(ctx context.Context, limit, offset int) ([]*entity.User, error) {
+	return s.userRepo.List(ctx, limit, offset)
+}

@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+{{- if eq .Database "postgres"}}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME={{.ProjectName}}
+      - DB_SSL_MODE=disable
+{{- end}}
+{{- if eq .Database "mysql"}}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASSWORD=root
+      - DB_NAME={{.ProjectName}}
+{{- end}}
+{{- if .HasRedis}}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+{{- end}}
+    depends_on:
+{{- if eq .Database "postgres"}}
+      - postgres
+{{- end}}
+{{- if eq .Database "mysql"}}
+      - mysql
+{{- end}}
+{{- if .HasRedis}}
+      - redis
+{{- end}}
+
+{{- if eq .Database "postgres"}}
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: {{.ProjectName}}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+{{- end}}
+
+{{- if eq .Database "mysql"}}
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: {{.ProjectName}}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+{{- end}}
+
+{{- if .HasRedis}}
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+{{- end}}
+
+volumes:
+{{- if eq .Database "postgres"}}
+  postgres_data:
+{{- end}}
+{{- if eq .Database "mysql"}}
+  mysql_data:
+{{- end}}
+{{- if .HasRedis}}
+  redis_data:
+{{- end}}

@@ -1,0 +1,112 @@
+package v1
+
+import (
+{{- if eq .HTTPFramework "fiber"}}
+	"github.com/gofiber/fiber/v2"
+{{- end}}
+{{- if eq .HTTPFramework "gin"}}
+	"github.com/gin-gonic/gin"
+{{- end}}
+{{- if eq .HTTPFramework "chi"}}
+	"net/http"
+	"github.com/go-chi/chi/v5"
+{{- end}}
+{{- if eq .HTTPFramework "echo"}}
+	"github.com/labstack/echo/v4"
+{{- end}}
+)
+
+{{- if eq .HTTPFramework "fiber"}}
+
+// RegisterRoutes registers all HTTP routes for the v1 API.
+func RegisterRoutes(app *fiber.App, userHandler *UserHandler) {
+	// Health endpoints
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ok"})
+	})
+	app.Get("/ready", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ready"})
+	})
+
+	// API v1
+	api := app.Group("/api/v1")
+
+	// Users
+	users := api.Group("/users")
+	users.Post("/", userHandler.Create)
+	users.Get("/", userHandler.List)
+	users.Get("/:id", userHandler.GetByID)
+	users.Put("/:id", userHandler.Update)
+	users.Delete("/:id", userHandler.Delete)
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "gin"}}
+
+func RegisterRoutes(r *gin.Engine, userHandler *UserHandler) {
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+	r.GET("/ready", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ready"})
+	})
+
+	api := r.Group("/api/v1")
+
+	users := api.Group("/users")
+	users.POST("/", userHandler.Create)
+	users.GET("/", userHandler.List)
+	users.GET("/:id", userHandler.GetByID)
+	users.PUT("/:id", userHandler.Update)
+	users.DELETE("/:id", userHandler.Delete)
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "chi"}}
+
+func RegisterRoutes(r chi.Router, userHandler *UserHandler) {
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ready"}`))
+	})
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/users", func(r chi.Router) {
+			r.Post("/", userHandler.Create)
+			r.Get("/", userHandler.List)
+			r.Get("/{id}", userHandler.GetByID)
+			r.Put("/{id}", userHandler.Update)
+			r.Delete("/{id}", userHandler.Delete)
+		})
+	})
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "echo"}}
+
+func RegisterRoutes(e *echo.Echo, userHandler *UserHandler) {
+	e.GET("/health", func(c echo.Context) error {
+		return c.JSON(200, map[string]string{"status": "ok"})
+	})
+	e.GET("/ready", func(c echo.Context) error {
+		return c.JSON(200, map[string]string{"status": "ready"})
+	})
+
+	api := e.Group("/api/v1")
+
+	users := api.Group("/users")
+	users.POST("", userHandler.Create)
+	users.GET("", userHandler.List)
+	users.GET("/:id", userHandler.GetByID)
+	users.PUT("/:id", userHandler.Update)
+	users.DELETE("/:id", userHandler.Delete)
+}
+
+{{- end}}

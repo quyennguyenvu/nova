@@ -1,0 +1,88 @@
+package config
+
+import (
+{{- if eq .ConfigFormat "yaml"}}
+	"github.com/ilyakaznacheev/cleanenv"
+{{- end}}
+{{- if eq .ConfigFormat "toml"}}
+	"github.com/ilyakaznacheev/cleanenv"
+{{- end}}
+{{- if eq .ConfigFormat "env"}}
+	"github.com/ilyakaznacheev/cleanenv"
+{{- end}}
+)
+
+// Config holds all application configuration.
+type Config struct {
+	Server   ServerConfig   `yaml:"server" toml:"server"`
+{{- if .HasDatabase}}
+	Database DatabaseConfig `yaml:"database" toml:"database"`
+{{- end}}
+{{- if .HasRedis}}
+	Cache    CacheConfig    `yaml:"cache" toml:"cache"`
+{{- end}}
+	Log      LogConfig      `yaml:"log" toml:"log"`
+}
+
+// ServerConfig holds HTTP server configuration.
+type ServerConfig struct {
+	Port         string `yaml:"port" toml:"port" env:"SERVER_PORT" env-default:"8080"`
+	ReadTimeout  int    `yaml:"read_timeout" toml:"read_timeout" env:"SERVER_READ_TIMEOUT" env-default:"10"`
+	WriteTimeout int    `yaml:"write_timeout" toml:"write_timeout" env:"SERVER_WRITE_TIMEOUT" env-default:"10"`
+}
+
+{{- if .HasDatabase}}
+
+// DatabaseConfig holds database connection configuration.
+type DatabaseConfig struct {
+{{- if eq .Database "postgres"}}
+	Host     string `yaml:"host" toml:"host" env:"DB_HOST" env-default:"localhost"`
+	Port     int    `yaml:"port" toml:"port" env:"DB_PORT" env-default:"5432"`
+	User     string `yaml:"user" toml:"user" env:"DB_USER" env-default:"postgres"`
+	Password string `yaml:"password" toml:"password" env:"DB_PASSWORD"`
+	Name     string `yaml:"name" toml:"name" env:"DB_NAME" env-default:"app"`
+	SSLMode  string `yaml:"ssl_mode" toml:"ssl_mode" env:"DB_SSL_MODE" env-default:"disable"`
+{{- end}}
+{{- if eq .Database "mysql"}}
+	Host     string `yaml:"host" toml:"host" env:"DB_HOST" env-default:"localhost"`
+	Port     int    `yaml:"port" toml:"port" env:"DB_PORT" env-default:"3306"`
+	User     string `yaml:"user" toml:"user" env:"DB_USER" env-default:"root"`
+	Password string `yaml:"password" toml:"password" env:"DB_PASSWORD"`
+	Name     string `yaml:"name" toml:"name" env:"DB_NAME" env-default:"app"`
+{{- end}}
+}
+{{- end}}
+
+{{- if .HasRedis}}
+
+// CacheConfig holds Redis cache configuration.
+type CacheConfig struct {
+	Host     string `yaml:"host" toml:"host" env:"REDIS_HOST" env-default:"localhost"`
+	Port     int    `yaml:"port" toml:"port" env:"REDIS_PORT" env-default:"6379"`
+	Password string `yaml:"password" toml:"password" env:"REDIS_PASSWORD"`
+	DB       int    `yaml:"db" toml:"db" env:"REDIS_DB" env-default:"0"`
+}
+{{- end}}
+
+// LogConfig holds logging configuration.
+type LogConfig struct {
+	Level  string `yaml:"level" toml:"level" env:"LOG_LEVEL" env-default:"info"`
+	Format string `yaml:"format" toml:"format" env:"LOG_FORMAT" env-default:"json"`
+}
+
+// Load reads configuration from the given file path.
+func Load(path string) (*Config, error) {
+	var cfg Config
+
+{{- if eq .ConfigFormat "env"}}
+	if err := cleanenv.ReadEnv(&cfg); err != nil {
+		return nil, err
+	}
+{{- else}}
+	if err := cleanenv.ReadConfig(path, &cfg); err != nil {
+		return nil, err
+	}
+{{- end}}
+
+	return &cfg, nil
+}

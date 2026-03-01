@@ -1,0 +1,82 @@
+package middleware
+
+import (
+{{- if eq .HTTPFramework "fiber"}}
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+{{- end}}
+{{- if eq .HTTPFramework "gin"}}
+	"net/http"
+	"github.com/gin-gonic/gin"
+{{- end}}
+{{- if eq .HTTPFramework "chi"}}
+	"net/http"
+{{- end}}
+{{- if eq .HTTPFramework "echo"}}
+	"github.com/labstack/echo/v4"
+	echomw "github.com/labstack/echo/v4/middleware"
+{{- end}}
+)
+
+{{- if eq .HTTPFramework "fiber"}}
+
+// CORS returns a CORS middleware with sensible defaults.
+func CORS() fiber.Handler {
+	return cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowMethods: "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-Request-ID",
+	})
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "gin"}}
+
+func CORS() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Origin,Content-Type,Accept,Authorization,X-Request-ID")
+
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "chi"}}
+
+func CORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Origin,Content-Type,Accept,Authorization,X-Request-ID")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "echo"}}
+
+func CORS() echo.MiddlewareFunc {
+	return echomw.CORSWithConfig(echomw.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
+	})
+}
+
+{{- end}}

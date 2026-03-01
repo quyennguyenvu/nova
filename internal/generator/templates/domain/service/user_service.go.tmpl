@@ -1,0 +1,16 @@
+package service
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/domain/entity"
+)
+
+// UserService defines domain-level service operations for users.
+type UserService interface {
+	CreateUser(ctx context.Context, user *entity.User) error
+	GetUserByID(ctx context.Context, id int64) (*entity.User, error)
+	GetUserByEmail(ctx context.Context, email string) (*entity.User, error)
+	UpdateUser(ctx context.Context, user *entity.User) error
+	DeleteUser(ctx context.Context, id int64) error
+}

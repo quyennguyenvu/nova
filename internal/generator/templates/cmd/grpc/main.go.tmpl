@@ -1,0 +1,42 @@
+package main
+
+import (
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/infrastructure/server"
+)
+
+func main() {
+{{- if eq .ConfigFormat "yaml"}}
+	cfg, err := config.Load("config/config.yaml")
+{{- else}}
+	cfg, err := config.Load("")
+{{- end}}
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	log := logger.New(cfg)
+
+	grpcServer := server.NewGRPCServer(cfg, log)
+
+	// TODO: Register gRPC services here
+	// proto.RegisterYourServiceServer(grpcServer.Server(), handler)
+
+	go func() {
+		if err := grpcServer.Start("50051"); err != nil {
+			log.Fatalf("gRPC server error: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	grpcServer.Stop()
+}

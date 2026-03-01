@@ -1,0 +1,55 @@
+//go:build wireinject
+
+package di
+
+import (
+	"github.com/google/wire"
+
+	v1 "{{.ModuleName}}/internal/adapter/handler/http/v1"
+{{- if eq .Database "postgres"}}
+	postgresrepo "{{.ModuleName}}/internal/adapter/repository/postgres"
+{{- end}}
+	"{{.ModuleName}}/internal/infrastructure/config"
+{{- if .HasDatabase}}
+	"{{.ModuleName}}/internal/infrastructure/database"
+{{- end}}
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/infrastructure/server"
+	userusecase "{{.ModuleName}}/internal/usecase/user"
+	"{{.ModuleName}}/internal/domain/repository"
+)
+
+func InitializeApp(cfg *config.Config) (*App, error) {
+	wire.Build(
+		// Infrastructure
+{{- if eq .Database "postgres"}}
+		database.NewPostgresDB,
+{{- end}}
+		server.NewHTTPServer,
+		logger.New,
+
+		// Repositories
+{{- if eq .Database "postgres"}}
+		postgresrepo.NewUserRepository,
+		wire.Bind(new(repository.UserRepository), new(*postgresrepo.UserRepository)),
+{{- end}}
+
+		// Use cases
+		userusecase.NewService,
+
+		// Handlers
+		v1.NewUserHandler,
+
+		// App
+		NewApp,
+	)
+	return nil, nil
+}
+
+type App struct {
+	Server *server.HTTPServer
+}
+
+func NewApp(server *server.HTTPServer) *App {
+	return &App{Server: server}
+}

@@ -1,0 +1,79 @@
+APP_NAME={{.ProjectName}}
+{{- if eq .Database "postgres"}}
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/{{.ProjectName}}?sslmode=disable
+{{- end}}
+{{- if eq .Database "mysql"}}
+DATABASE_URL=mysql://root:root@tcp(localhost:3306)/{{.ProjectName}}
+{{- end}}
+
+.PHONY: build run dev test test-coverage lint migrate-up migrate-down migrate-create wire sqlc proto generate docker-build docker-up docker-down
+
+# Build
+build:
+	go build -o bin/api ./cmd/api
+{{- if .HasGRPC}}
+	go build -o bin/grpc ./cmd/grpc
+{{- end}}
+
+run:
+	go run ./cmd/api
+
+# Development
+dev:
+	air -c .air.toml
+
+# Testing
+test:
+	go test -v -race -cover ./...
+
+test-coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
+# Linting
+lint:
+	golangci-lint run
+
+{{- if .HasDatabase}}
+
+# Database
+migrate-up:
+	migrate -path migrations -database "$(DATABASE_URL)" up
+
+migrate-down:
+	migrate -path migrations -database "$(DATABASE_URL)" down
+
+migrate-create:
+	migrate create -ext sql -dir migrations -seq $(name)
+{{- end}}
+
+# Code generation
+{{- if .UseWire}}
+wire:
+	cd internal/infrastructure/di && wire
+{{- end}}
+
+{{- if eq .QueryGen "sqlc"}}
+sqlc:
+	sqlc generate
+{{- end}}
+
+{{- if .HasGRPC}}
+proto:
+	protoc --go_out=. --go-grpc_out=. api/proto/**/*.proto
+{{- end}}
+
+generate:{{if .UseWire}} wire{{end}}{{if eq .QueryGen "sqlc"}} sqlc{{end}}
+
+{{- if .IncludeDocker}}
+
+# Docker
+docker-build:
+	docker build -t $(APP_NAME) .
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
+{{- end}}

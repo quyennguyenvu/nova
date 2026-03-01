@@ -1,0 +1,104 @@
+package middleware
+
+import (
+	"log/slog"
+{{- if eq .HTTPFramework "fiber"}}
+	"github.com/gofiber/fiber/v2"
+{{- end}}
+{{- if eq .HTTPFramework "gin"}}
+	"net/http"
+	"github.com/gin-gonic/gin"
+{{- end}}
+{{- if eq .HTTPFramework "chi"}}
+	"net/http"
+	"runtime/debug"
+{{- end}}
+{{- if eq .HTTPFramework "echo"}}
+	"runtime/debug"
+	"net/http"
+	"github.com/labstack/echo/v4"
+{{- end}}
+)
+
+{{- if eq .HTTPFramework "fiber"}}
+
+// Recovery returns a middleware that recovers from panics.
+func Recovery(logger *slog.Logger) fiber.Handler {
+	return func(c *fiber.Ctx) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("panic recovered", "error", r, "path", c.Path())
+				err = c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error": "internal server error",
+				})
+			}
+		}()
+		return c.Next()
+	}
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "gin"}}
+
+func Recovery(logger *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("panic recovered", "error", r, "path", c.Request.URL.Path)
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+					"error": "internal server error",
+				})
+			}
+		}()
+		c.Next()
+	}
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "chi"}}
+
+func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					logger.Error("panic recovered",
+						"error", rec,
+						"path", r.URL.Path,
+						"stack", string(debug.Stack()),
+					)
+					http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+{{- end}}
+
+{{- if eq .HTTPFramework "echo"}}
+
+func Recovery(logger *slog.Logger) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("panic recovered",
+						"error", r,
+						"path", c.Path(),
+						"stack", string(debug.Stack()),
+					)
+					c.JSON(http.StatusInternalServerError, map[string]string{
+						"error": "internal server error",
+					})
+				}
+			}()
+			return next(c)
+		}
+	}
+}
+
+{{- end}}

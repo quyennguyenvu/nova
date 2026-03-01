@@ -1,0 +1,35 @@
+server:
+  port: "8080"
+  read_timeout: 10
+  write_timeout: 10
+{{- if .HasDatabase}}
+
+database:
+{{- if eq .Database "postgres"}}
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  name: "{{.ProjectName}}"
+  ssl_mode: "disable"
+{{- end}}
+{{- if eq .Database "mysql"}}
+  host: "localhost"
+  port: 3306
+  user: "root"
+  password: "root"
+  name: "{{.ProjectName}}"
+{{- end}}
+{{- end}}
+{{- if .HasRedis}}
+
+cache:
+  host: "localhost"
+  port: 6379
+  password: ""
+  db: 0
+{{- end}}
+
+log:
+  level: "info"
+  format: "json"

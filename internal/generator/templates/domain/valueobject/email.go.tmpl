@@ -1,0 +1,45 @@
+package valueobject
+
+import (
+	"errors"
+	"regexp"
+	"strings"
+)
+
+var (
+	ErrInvalidEmail = errors.New("invalid email address")
+	emailRegex      = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+)
+
+// Email represents a validated email address value object.
+type Email struct {
+	value string
+}
+
+// NewEmail creates a new Email value object after validation.
+func NewEmail(email string) (Email, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if !emailRegex.MatchString(email) {
+		return Email{}, ErrInvalidEmail
+	}
+	return Email{value: email}, nil
+}
+
+// String returns the email address as a string.
+func (e Email) String() string {
+	return e.value
+}
+
+// Equals checks if two email addresses are equal.
+func (e Email) Equals(other Email) bool {
+	return e.value == other.value
+}
+
+// Domain returns the domain part of the email.
+func (e Email) Domain() string {
+	parts := strings.Split(e.value, "@")
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return ""
+}

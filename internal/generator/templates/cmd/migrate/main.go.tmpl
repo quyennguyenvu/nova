@@ -1,0 +1,64 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+
+{{- if eq .Database "postgres"}}
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+{{- end}}
+{{- if eq .Database "mysql"}}
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/mysql"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+{{- end}}
+)
+
+func main() {
+	direction := flag.String("direction", "up", "Migration direction: up or down")
+	steps := flag.Int("steps", 0, "Number of migration steps (0 = all)")
+	flag.Parse()
+
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+{{- if eq .Database "postgres"}}
+		dbURL = "postgres://postgres:postgres@localhost:5432/{{.ProjectName}}?sslmode=disable"
+{{- end}}
+{{- if eq .Database "mysql"}}
+		dbURL = "mysql://root:root@tcp(localhost:3306)/{{.ProjectName}}"
+{{- end}}
+	}
+
+	m, err := migrate.New("file://migrations", dbURL)
+	if err != nil {
+		log.Fatalf("failed to create migrator: %v", err)
+	}
+	defer m.Close()
+
+	switch *direction {
+	case "up":
+		if *steps > 0 {
+			err = m.Steps(*steps)
+		} else {
+			err = m.Up()
+		}
+	case "down":
+		if *steps > 0 {
+			err = m.Steps(-*steps)
+		} else {
+			err = m.Down()
+		}
+	default:
+		log.Fatalf("unknown direction: %s", *direction)
+	}
+
+	if err != nil && err != migrate.ErrNoChange {
+		log.Fatalf("migration failed: %v", err)
+	}
+
+	fmt.Printf("Migration %s completed successfully\n", *direction)
+}
