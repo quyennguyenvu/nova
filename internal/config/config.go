@@ -38,7 +38,6 @@ type ProjectConfig struct {
 	// Optional features
 	IncludeDocker bool `json:"include_docker"`
 	IncludeCI     bool `json:"include_ci"`
-	IncludeMake   bool `json:"include_makefile"`
 }
 
 // HasHTTP returns true if the project includes HTTP transport.
@@ -117,6 +116,5 @@ func DefaultConfig() *ProjectConfig {
 		DI:            "wire",
 		IncludeDocker: true,
 		IncludeCI:     true,
-		IncludeMake:   true,
 	}
 }

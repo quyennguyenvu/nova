@@ -192,11 +192,5 @@ func promptOptionalFeatures(cfg *config.ProjectConfig) error {
 	}, &cfg.IncludeCI); err != nil {
 		return err
 	}
-	if err := survey.AskOne(&survey.Confirm{
-		Message: "Include Makefile?",
-		Default: true,
-	}, &cfg.IncludeMake); err != nil {
-		return err
-	}
 	return nil
 }

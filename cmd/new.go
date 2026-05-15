@@ -42,7 +42,6 @@ Examples:
 	f.String("config", "", "Configuration format: yaml, toml, env")
 	f.String("di", "", "Dependency injection: wire, fx, manual")
 	f.Bool("docker", false, "Include Docker setup")
-	f.Bool("makefile", false, "Include Makefile")
 	f.String("ci", "", "CI/CD: github, none")
 
 	return newCmd
@@ -100,12 +99,9 @@ func runNew(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stdout, "✅ Project generated successfully in ./%s\n\n", cfg.ProjectName)
 	fmt.Fprintln(os.Stdout, "Next steps:")
 	fmt.Fprintf(os.Stdout, "  cd %s\n", cfg.ProjectName)
+	fmt.Fprintln(os.Stdout, "  cp env.example .env  # if using env config")
 	fmt.Fprintln(os.Stdout, "  go mod tidy")
-	if cfg.IncludeMake {
-		fmt.Fprintln(os.Stdout, "  make run")
-	} else {
-		fmt.Fprintln(os.Stdout, "  go run ./cmd/api")
-	}
+	fmt.Fprintln(os.Stdout, "  make gen")
 	if cfg.IncludeDocker {
 		fmt.Fprintln(os.Stdout, "  # or: docker-compose up")
 	}
@@ -150,9 +146,6 @@ func applyFlags(cmd *cobra.Command, cfg *config.ProjectConfig) {
 	}
 	if v, _ := cmd.Flags().GetBool("docker"); v {
 		cfg.IncludeDocker = v
-	}
-	if v, _ := cmd.Flags().GetBool("makefile"); v {
-		cfg.IncludeMake = v
 	}
 	if v, _ := cmd.Flags().GetString("ci"); v == "github" {
 		cfg.IncludeCI = true
