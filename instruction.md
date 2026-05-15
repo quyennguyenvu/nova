@@ -34,186 +34,141 @@ Ask the user for:
 
 ### 2. Project Structure to Generate
 
+The tree below is the **maximum output** when every option is enabled (`--transport=http --http-framework=fiber --database=postgres --db-driver=pgx --query=sqlc --cache=redis --di=wire --docker --makefile --ci=github`). Lines marked `[flag]` are conditional — they appear only when that flag/option is selected. See [internal/generator/generator.go](internal/generator/generator.go) (`buildFileList`) for the authoritative selection logic.
+
 ```bash
 {project}/
-├── main.go                                 # Single entry point — calls cmd.Execute()
-├── cmd/
-│   ├── root.go                             # Cobra root command + subcommand registration
-│   ├── api.go                              # "api" subcommand → starts HTTP server
-│   ├── grpc.go                             # "grpc" subcommand → starts gRPC server (if selected)
-│   └── cron.go                             # "cron" subcommand → runs scheduled jobs
+├── main.go                                 # Calls cmd.Execute()
+├── go.mod
+├── .env.example
+├── .gitignore
+├── .golangci.yaml                          # Lint config (mirrors nova's own)
+├── .sqlfluff                               # [SQL] SQL formatter config
+├── Dockerfile                              # [--docker]
+├── Makefile                                # [--makefile]
+├── README.md
+│
+├── cmd/                                    # Cobra subcommands (one per transport)
+│   ├── root.go                             # Root command + subcommand wiring
+│   ├── api.go                              # [HTTP]   starts the HTTP server
+│   ├── grpc.go                             # [gRPC]   starts the gRPC server
+│   └── cron.go                             # [cron]   one-shot job runner
 │
 ├── internal/
-│   │
 │   ├── app/                                # Application lifecycle (start → signal → cleanup)
-│   │   ├── server.go                       # RunServer() — shared lifecycle for HTTP/gRPC
-│   │   └── cron.go                         # RunCronjob() — one-shot job runner
+│   │   └── api.go                          # [HTTP] RunAPI() — boot, serve, graceful shutdown
 │   │
-│   ├── domain/                             # Layer 1: Enterprise Business Rules (innermost)
-│   │   │                                   # ⚠️  ZERO external dependencies allowed
-│   │   ├── entity/                         # Business entities - pure Go structs
-│   │   │   └── user.go
-│   │   ├── user.go                         # UserRepository interface + UserFilter + UserListResult
-│   │   ├── order.go                        # OrderRepository interface + OrderFilter
-│   │   ├── service/                        # Domain service INTERFACES (business rules/computation ONLY)
-│   │   │   └── pricing_service.go          # Cross-entity business RULES (e.g. pricing, eligibility)
-│   │   ├── event/                          # Domain events + event publisher port
-│   │   │   ├── event.go                    # Event types (UserCreated, OrderPlaced, etc.)
-│   │   │   └── publisher.go                # EventPublisher interface (Kafka/RabbitMQ/NATS)
-│   │   └── valueobject/                    # Value objects (Email, Money, etc.)
-│   │       └── email.go
+│   ├── domain/                             # Layer 1 — Enterprise Business Rules
+│   │   │                                   # ⚠️ ZERO external deps; no framework/DB imports
+│   │   ├── entity/
+│   │   │   └── user.go                     # Pure Go structs (no json/db tags)
+│   │   ├── identity/
+│   │   │   └── principal.go                # Authenticated-caller identity passed via context
+│   │   ├── valueobject/
+│   │   │   └── email.go                    # Self-validating values (Email, Money, …)
+│   │   ├── user.go                         # UserRepository interface + UserFilter
+│   │   └── tx_manager.go                   # TxManager interface (usecase-facing seam)
 │   │
-│   ├── usecase/                            # Layer 2: Application Business Rules
+│   ├── usecase/                            # Layer 2 — Application Business Rules
 │   │   │                                   # Depends on: domain only
 │   │   └── user/
-│   │       ├── service.go                  # Use case implementation (orchestrates domain)
-│   │       └── dto.go                      # Input/Output DTOs for this use case
+│   │       ├── service.go                  # Orchestrates the domain
+│   │       └── dto.go                      # Input/Output DTOs for this feature
 │   │
-│   ├── adapter/                            # Layer 3: Interface Adapters
-│   │   │                                   # Depends on: domain, usecase
-│   │   │                                   # PURPOSE: Implements domain interfaces
-│   │   │
-│   │   ├── repository/                     # Repository IMPLEMENTATIONS
-│   │   │   ├── postgres/                   # Implements domain.UserRepository
-│   │   │   │   ├── user_repository.go
-│   │   │   │   └── dbgen/                  # SQLC generated code (auto-generated)
-│   │   │   │       ├── db.go               # DBTX interface
-│   │   │   │       ├── models.go           # Generated structs from schema
-│   │   │   │       └── user.sql.go         # Generated query methods
-│   │   │   └── cache/                      # Cache repository decorator
-│   │   │       └── user_cache.go
-│   │   │
-│   │   ├── pubsub/                         # Event publisher IMPLEMENTATIONS
-│   │   │   ├── message.go                  # Wire-format message DTOs (json tags live HERE)
-│   │   │   └── kafka_publisher.go          # Implements event.EventPublisher
-│   │   │
-│   │   ├── jwt/                            # JWT authentication adapter (if selected)
-│   │   │   └── jwt.go                      # JWT generation and validation
-│   │   │
-│   │   └── external/                       # External service adapters (calls other APIs)
-│   │       └── payment_gateway.go          # Implements domain.PaymentGateway interface
+│   ├── adapter/                            # Layer 3 — Interface Adapters (implements domain ports)
+│   │   └── repository/
+│   │       ├── postgres/                   # [--database=postgres]
+│   │       │   ├── tx_manager.go           # Implements domain.TxManager
+│   │       │   ├── qx.go                   # TX-aware query executor
+│   │       │   ├── user_repository.go      # Implements domain.UserRepository
+│   │       │   └── mapper/
+│   │       │       └── user.go             # Row ↔ entity mapping (keeps repo file thin)
+│   │       ├── mysql/                      # [--database=mysql]   (same shape as postgres/)
+│   │       └── redis/                      # [--cache=redis]
+│   │           └── user_cache.go           # Read-through cache decorator
 │   │
-│   ├── transport/                          # Delivery mechanisms (HTTP, gRPC, cronjob)
-│   │   │                                   # Each transport owns its own middleware/utils.
-│   │   │                                   # Nothing HTTP-specific leaks to sibling transports.
-│   │   │
-│   │   ├── http/
-│   │   │   ├── app.go                      # Fiber app factory (middleware registration)
-│   │   │   │
-│   │   │   ├── middleware/                 # ← HTTP-specific (Fiber handlers).
-│   │   │   │   ├── auth.go                 #    gRPC would have grpc/interceptor/ instead.
-│   │   │   │   ├── locale.go               #    Kept under http/ because middleware is a
-│   │   │   │   ├── logging.go              #    Fiber/net-http concept, NOT a gRPC one.
-│   │   │   │   └── recovery.go
-│   │   │   │
-│   │   │   ├── httputil/                   # ← HTTP-specific utilities.
-│   │   │   │   └── error_parser.go         #    Imports Fiber + middleware.LangFromCtx.
-│   │   │   │                               #    Can't be pkg/ (imports internal), not
-│   │   │   │                               #    reusable across transports.
-│   │   │   │
-│   │   │   ├── dto/                        # ← Shared HTTP DTOs (pagination, filters).
-│   │   │   │   └── pagination.go           #    gRPC uses different pagination (page tokens).
-│   │   │   │
-│   │   │   └── v1/                         # API version 1
-│   │   │       ├── registrar.go            # Registers all v1 feature routes
-│   │   │       └── user/                   # ← one package per feature
-│   │   │           ├── handler.go          # HTTP endpoint logic
-│   │   │           ├── dto.go              # Request/response structs (json + validate tags)
-│   │   │           ├── assembler.go        # Maps dto ↔ usecase input/output
-│   │   │           └── router.go           # Route registration for this feature
-│   │   │
-│   │   ├── grpc/                           # gRPC transport
-│   │   │   ├── interceptor/                # ← gRPC equivalent of HTTP middleware
-│   │   │   │   └── auth.go
-│   │   │   └── v1/
-│   │   │       └── user/
-│   │   │           └── handler.go
-│   │   │
-│   │   └── cronjob/                        # Cron job handlers (no middleware needed)
-│   │       └── scan_expired.go             # Thin wrapper → calls usecase
+│   ├── transport/                          # Delivery mechanisms — separate from adapter/
+│   │   └── http/                           # [HTTP]
+│   │       ├── app.go                      # Framework app factory + middleware registration
+│   │       ├── middleware/                 # Framework-specific (Fiber/Gin/Chi/Echo handlers)
+│   │       │   ├── auth.go
+│   │       │   ├── cors.go
+│   │       │   ├── locale.go
+│   │       │   ├── logging.go
+│   │       │   ├── recovery.go
+│   │       │   └── requestid.go
+│   │       └── v1/
+│   │           └── user/                   # One package per feature
+│   │               ├── handler.go          # Endpoint logic
+│   │               ├── dto.go              # Request/response structs (json + validate tags)
+│   │               ├── assembler.go        # dto ↔ usecase DTO mapping
+│   │               └── router.go           # Route registration for this feature
 │   │
-│   └── infrastructure/                     # Layer 4: Frameworks & Drivers (outermost)
-│       │                                   # Depends on: all layers
-│       │                                   # PURPOSE: Technical capabilities, NOT business logic
-│       │
-│       ├── config/                         # Configuration loading
-│       │   ├── config.go
-│       │   └── config.yaml
-│       │
-│       ├── database/                       # Database CONNECTION (not queries!)
-│       │   └── postgres.go                 # Returns *pgxpool.Pool - connection factory
-│       │
-│       ├── cache/                          # Cache CONNECTION
-│       │   └── redis.go                    # Returns *redis.Client - connection factory
-│       │
-│       ├── pubsub/                         # Message queue CONNECTION
-│       │   └── kafka.go                    # Returns kafka producer/consumer
-│       │
-│       ├── server/                         # Server bootstrap
-│       │   ├── http.go                     # HTTP server setup + graceful shutdown
-│       │   └── grpc.go                     # gRPC server setup
-│       │
-│       ├── logger/                         # Logging setup
-│       │   └── logger.go
-│       │
-│       ├── observability/                  # Monitoring setup
-│       │   ├── tracer.go                   # OpenTelemetry tracing setup
-│       │   └── metrics.go                  # Prometheus metrics setup
-│       │
-│       └── di/                             # Dependency injection wiring
-│           ├── wire.go
-│           └── wire_gen.go
+│   └── infrastructure/                     # Layer 4 — Frameworks & Drivers
+│       │                                   # PURPOSE: technical capabilities, no business logic
+│       ├── config/
+│       │   ├── config.go                   # Loader + Config struct
+│       │   ├── constant.go
+│       │   ├── base.yaml                   # [--config=yaml] shared defaults
+│       │   ├── development.yaml            # [--config=yaml] dev overrides
+│       │   └── production.yaml             # [--config=yaml] prod overrides
+│       ├── database/
+│       │   └── postgres.go                 # [--database=postgres] returns *pgxpool.Pool
+│       ├── cache/
+│       │   └── redis.go                    # [--cache=redis]       returns *redis.Client
+│       ├── jwt/                            # JWT verifier (used directly by auth middleware —
+│       │   ├── claims.go                   # no domain interface; see §3.3 "Consumer Owns…")
+│       │   └── verifier.go
+│       ├── logger/
+│       │   └── zerolog.go                  # Implements pkg/observability.Logger
+│       ├── server/
+│       │   └── http.go                     # [HTTP] HTTP server bootstrap + graceful shutdown
+│       ├── tracing/
+│       │   └── otel.go                     # OpenTelemetry setup
+│       └── di/
+│           ├── provider.go                 # Provider set (Wire-friendly constructors)
+│           ├── app.go                      # Top-level app graph
+│           └── wire.go                     # [--di=wire] go:generate wire directive
 │
-├── pkg/                                    # Public shared packages
-│ ├── errors/
-│ │   └── errors.go                         # Custom error types
-│ ├── locale/                               # i18n / localized error messages
-│ │   ├── locale.go                         # Error code constants + Locale type + core API
-│ │   ├── locale_en.go                      # English translations
-│ │   └── locale_vi.go                      # Vietnamese translations
-│ └── validator/
-│     └── validator.go                      # Input validation
+├── pkg/                                    # Cross-cutting utilities (no layer affiliation)
+│   ├── errors/
+│   │   └── errors.go                       # AppError + wrap/classify helpers
+│   ├── httputil/                           # HTTP response envelope + per-framework writers
+│   │   ├── response.go                     # Standard {success,data,error,meta} envelope
+│   │   └── writer.go                       # WriteJSON / WriteError for the chosen framework
+│   ├── locale/                             # i18n error codes + translations
+│   │   ├── locale.go                       # Error code constants + Locale type
+│   │   ├── locale_en.go
+│   │   └── locale_vi.go
+│   ├── logctx/
+│   │   └── logctx.go                       # Context-attached logger (with(ctx) / from(ctx))
+│   └── observability/
+│       └── observability.go                # Logger port — implementations live in infrastructure/
 │
-├── api/                                    # API Definitions
-│ ├── openapi/
-│ │ └── openapi.yaml                        # OpenAPI 3.0 spec
-│ └── proto/
-│     └── user/
-│         └── user.proto                    # Protobuf definitions
+├── api/
+│   └── openapi/
+│       └── openapi.yaml                    # OpenAPI 3.0 spec
 │
-├── sqlc/                                   # SQLC configuration & SQL files (if using SQLC)
-│   ├── sqlc.yaml                           # SQLC configuration
-│   ├── schema/                             # Database schema definitions
-│   │   └── users.sql                       # CREATE TABLE statements
-│   ├── query/                              # SQL queries (SQLC reads these)
-│   │   └── user.sql                        # SELECT, INSERT, UPDATE, DELETE for users
-│   └── migrations/                         # Database migrations (golang-migrate format)
-│       ├── 000001_create_users_table.up.sql
-│       └── 000001_create_users_table.down.sql
+├── sqlc/                                   # [--query=sqlc]
+│   ├── sqlc.yaml                           # SQLC config (pg or mysql variant)
+│   ├── query/
+│   │   └── user.sql                        # Annotated SQL — SQLC generates Go from these
+│   └── migrations/
+│       ├── {ts}_create_users_table.up.sql  # golang-migrate format
+│       └── {ts}_create_users_table.down.sql
 │
-├── scripts/
-│   └── generate.sh                         # Code generation script
-│
-├── .github/
-│   └── workflows/
-│       ├── ci.yaml                         # CI pipeline
-│       ├── pull_request_template.md        # Pull request template
-│       └── release.yaml                    # Release pipeline
-│
-├── config/
-│ ├── config.yaml                           # Development config
-│ ├── config.prod.yaml                      # Production config
-│ └── config.example.yaml                   # Example config for documentation
-│
-├── Dockerfile
-├── docker-compose.yaml
-├── Makefile
-├── go.mod
-├── go.sum
-├── .gitignore
-├── .env.example
-└── README.md
+└── .github/                                # [--ci=github]
+    ├── pull_request_template.md
+    └── workflows/
+        └── ci.yaml                         # Lint + test pipeline
 ```
+
+**Notes on placement that differ from older versions of this spec:**
+
+- `httputil/` lives in `pkg/`, not `transport/http/`. It is framework-coupled (imports the chosen HTTP framework) but does **not** import `internal/`, so the Go visibility rule isn't violated. The earlier rationale in §3.2 assumed `httputil` imported the middleware package directly; the current implementation passes locale via `context.Context` and avoids that dependency.
+- `observability/` lives in `pkg/` as a **port** (Logger interface). The implementation lives in `internal/infrastructure/logger/`. This keeps inner layers (`usecase`, `adapter/repository`) able to depend on the logger via `logctx.From(ctx)` without importing infrastructure.
+- `jwt/` lives in `infrastructure/`, not `adapter/`. It is used directly by the auth middleware and is never called from a usecase — so per §3.3 ("consumer owns the interface"), no domain interface is needed and the package belongs with other technical bootstrapping.
+- `tx_manager.go` is split: the interface lives in `domain/`, the postgres implementation in `adapter/repository/postgres/`. Usecases inject `domain.TxManager` and call it without knowing which DB is wired in.
 
 ### 3. Clean Architecture Principles to Enforce
 
