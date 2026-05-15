@@ -1,92 +1,15 @@
-# Go Clean Architecture Project Generator
+# Nova — Design Spec for Generated Projects
 
-Go CLI tool called "nova" that generates a new Go project with Clean Architecture. The tool should have interactive prompts and generate a complete, production-ready project structure.
+This document is the **design reference for what `nova new` generates**, not docs for the CLI itself (see [README.md](README.md) for that). It captures the intent behind every layer, file, and placement decision so the templates stay consistent as new framework/DB variants are added.
 
-## Table of Contents
+**How to read this doc:**
 
-- [Go Clean Architecture Project Generator](#go-clean-architecture-project-generator)
-  - [Table of Contents](#table-of-contents)
-  - [Requirements](#requirements)
-    - [1. Interactive Prompts (using promptui or survey library)](#1-interactive-prompts-using-promptui-or-survey-library)
-    - [2. Project Structure to Generate](#2-project-structure-to-generate)
-    - [3. Clean Architecture Principles to Enforce](#3-clean-architecture-principles-to-enforce)
-    - [3.1. Adapter vs Infrastructure: The Decision Guide](#31-adapter-vs-infrastructure-the-decision-guide)
-      - [**ADAPTER Layer** - "Implements Business Interfaces"](#adapter-layer---implements-business-interfaces)
-      - [**INFRASTRUCTURE Layer** - "Provides Technical Capabilities"](#infrastructure-layer---provides-technical-capabilities)
-      - [**Decision Flowchart**](#decision-flowchart)
-      - [**Concrete Examples**](#concrete-examples)
-      - [**The Key Insight**](#the-key-insight)
-    - [3.2. Placement Rationale — Why Things Live Where They Do](#32-placement-rationale--why-things-live-where-they-do)
-      - [Why `middleware/` is under `transport/http/`, NOT `transport/`](#why-middleware-is-under-transporthttp-not-transport)
-      - [Why `httputil/` is under `transport/http/`, NOT `pkg/`](#why-httputil-is-under-transporthttp-not-pkg)
-      - [Why `pkg/locale/` is in `pkg/`, not `internal/`](#why-pkglocale-is-in-pkg-not-internal)
-      - [Why `transport/` is a sibling of `adapter/`, not inside it](#why-transport-is-a-sibling-of-adapter-not-inside-it)
-      - [`pkg/` vs `internal/shared/` — do you actually need `pkg/`?](#pkg-vs-internalshared--do-you-actually-need-pkg)
-    - [3.3. Where to Put Adapter Interfaces — Consumer Owns the Interface](#33-where-to-put-adapter-interfaces--consumer-owns-the-interface)
-      - [If the usecase calls it → interface in `domain/`](#if-the-usecase-calls-it--interface-in-domain)
-      - [If only transport calls it → NO domain interface](#if-only-transport-calls-it--no-domain-interface)
-      - [Decision flowchart](#decision-flowchart-1)
-      - [Summary table](#summary-table)
-      - [File layout for `domain/` with adapter interfaces](#file-layout-for-domain-with-adapter-interfaces)
-    - [4. Code Templates to Generate](#4-code-templates-to-generate)
-      - [Domain Layer](#domain-layer)
-      - [internal/domain/entity/user.go](#internaldomainentityusergo)
-      - [internal/domain/valueobject/ — What are Value Objects?](#internaldomainvalueobject--what-are-value-objects)
-      - [internal/domain/valueobject/email.go](#internaldomainvalueobjectemailgo)
-      - [internal/domain/valueobject/money.go](#internaldomainvalueobjectmoneygo)
-      - [internal/domain/user.go — Repository Interface + Filter (one file per aggregate)](#internaldomainusergo--repository-interface--filter-one-file-per-aggregate)
-      - [internal/domain/service/pricing_service.go](#internaldomainservicepricing_servicego)
-      - [internal/domain/event/event.go](#internaldomaineventeventgo)
-      - [internal/domain/event/publisher.go](#internaldomaineventpublishergo)
-      - [Use Case Layer](#use-case-layer)
-      - [internal/usecase/pricing/service.go (Domain Service IMPLEMENTATION)](#internalusecasepricingservicego-domain-service-implementation)
-      - [How domain services are USED (injected into use cases, never called from handlers)](#how-domain-services-are-used-injected-into-use-cases-never-called-from-handlers)
-      - [internal/usecase/user/service.go](#internalusecaseuserservicego)
-      - [internal/usecase/user/dto.go](#internalusecaseuserdtogo)
-      - [Transport Layer](#transport-layer)
-      - [internal/transport/http/v1/user/ — Per-Feature Package](#internaltransporthttpv1user--per-feature-package)
-      - [internal/transport/http/v1/user/dto.go](#internaltransporthttpv1userdtogo)
-      - [internal/transport/http/v1/user/assembler.go](#internaltransporthttpv1userassemblergo)
-      - [internal/transport/http/v1/user/handler.go](#internaltransporthttpv1userhandlergo)
-      - [internal/transport/http/v1/user/router.go](#internaltransporthttpv1userroutergo)
-      - [internal/transport/http/v1/registrar.go](#internaltransporthttpv1registrargo)
-      - [internal/transport/cronjob/ — Cron Job Handlers](#internaltransportcronjob--cron-job-handlers)
-      - [Shared Packages (pkg/)](#shared-packages-pkg)
-      - [pkg/locale/locale.go — Error Codes + Locale Type](#pkglocalelocalego--error-codes--locale-type)
-      - [pkg/locale/locale_en.go — English Translations](#pkglocalelocale_engo--english-translations)
-      - [pkg/locale/locale_vi.go — Vietnamese Translations](#pkglocalelocale_vigo--vietnamese-translations)
-      - [pkg/locale/resolve.go — Translate Error to User's Language](#pkglocaleresolvego--translate-error-to-users-language)
-      - [Middleware \& HTTP Utilities](#middleware--http-utilities)
-      - [internal/transport/http/middleware/locale.go — Language Middleware](#internaltransporthttpmiddlewarelocalego--language-middleware)
-      - [internal/transport/http/httputil/error_parser.go — Locale Error → HTTP Response](#internaltransporthttphttputilerror_parsergo--locale-error--http-response)
-      - [Infrastructure Layer](#infrastructure-layer)
-      - [internal/infrastructure/server/http.go](#internalinfrastructureserverhttpgo)
-      - [internal/infrastructure/config/config.go](#internalinfrastructureconfigconfiggo)
-      - [internal/infrastructure/database/postgres.go — PostgreSQL Connection Pool](#internalinfrastructuredatabasepostgresgo--postgresql-connection-pool)
-      - [Adapter Layer](#adapter-layer)
-      - [internal/adapter/repository/postgres/tx_manager.go — Transaction Manager](#internaladapterrepositorypostgrestx_managergo--transaction-manager)
-      - [internal/adapter/repository/postgres/qx.go — TX-Aware Query Executor](#internaladapterrepositorypostgresqxgo--tx-aware-query-executor)
-      - [SQLC Configuration \& SQL](#sqlc-configuration--sql)
-      - [sqlc/sqlc.yaml (SQLC Configuration)](#sqlcsqlcyaml-sqlc-configuration)
-      - [sqlc/schema/001_users.sql](#sqlcschema001_userssql)
-      - [sqlc/query/user.sql](#sqlcqueryusersql)
-      - [internal/adapter/repository/postgres/user_repository.go (uses SQLC)](#internaladapterrepositorypostgresuser_repositorygo-uses-sqlc)
-      - [internal/infrastructure/pubsub/kafka.go — Kafka Connection Factory](#internalinfrastructurepubsubkafkago--kafka-connection-factory)
-      - [internal/adapter/pubsub/message.go — Wire-format Message DTOs](#internaladapterpubsubmessagego--wire-format-message-dtos)
-      - [internal/adapter/pubsub/kafka_publisher.go — Kafka EventPublisher Implementation](#internaladapterpubsubkafka_publishergo--kafka-eventpublisher-implementation)
-      - [Dependency Injection \& App Lifecycle](#dependency-injection--app-lifecycle)
-      - [internal/infrastructure/di/wire.go](#internalinfrastructurediwirego)
-      - [internal/app/server.go — Server Lifecycle](#internalappservergo--server-lifecycle)
-      - [Entry Points](#entry-points)
-      - [main.go — Single Entry Point](#maingo--single-entry-point)
-      - [cmd/root.go — Cobra Root Command](#cmdrootgo--cobra-root-command)
-      - [cmd/api.go — API Subcommand](#cmdapigo--api-subcommand)
-      - [Build \& Deploy](#build--deploy)
-      - [Makefile](#makefile)
-      - [docker-compose.yaml](#docker-composeyaml)
-    - [5. CLI Usage](#5-cli-usage)
-    - [6. Key Features to Include](#6-key-features-to-include)
-  - [Quick Start (Simple Version)](#quick-start-simple-version)
+- **Section 1** — the interactive prompts the CLI asks (what each option means).
+- **Section 2** — the full directory layout `nova` produces.
+- **Section 3** — the Clean Architecture rules the layout enforces. Subsections answer the recurring questions: adapter vs infrastructure (3.1), why files live where they do (3.2), where to put adapter interfaces (3.3).
+- **Section 4** — reference Go code for every layer. Consult this when a template's intent is unclear or when you're adding a new template variant.
+
+GitHub renders a navigable outline from the headings — no hand-maintained TOC.
 
 ## Requirements
 
@@ -2752,90 +2675,23 @@ volumes:
   kafka_data:
 ```
 
-### 5. CLI Usage
+### 5. Cross-Cutting Features the Generated Project Must Include
 
-```bash
-# Interactive mode
-nova new
+Every generated project ships with these production concerns wired in. Templates should never omit them — adding a new framework variant means re-implementing this list for that framework, not removing items.
 
-# With flags (skip prompts)
-nova new myproject \
-  --module=github.com/myorg/myproject \
-  --transport=http \
-  --http-framework=fiber \
-  --database=postgres \
-  --db-driver=pgx \
-  --query=sqlc \
-  --cache=redis \
-  --queue=none \
-  --config=yaml \
-  --di=wire \
-  --docker \
-  --makefile \
-  --ci=github
+- **Graceful shutdown** — signal handling, ordered resource cleanup
+- **Context propagation** — `context.Context` threaded through every layer
+- **Structured logging** — `slog` (Go 1.21+)
+- **Request ID middleware** — for tracing across logs
+- **Health endpoints** — `/health` (liveness), `/ready` (readiness)
+- **Metrics endpoint** — `/metrics` for Prometheus
+- **OpenTelemetry hooks** — distributed tracing
+- **Input validation** — `go-playground/validator` on request DTOs
+- **Error handling** — custom error types with locale codes (see `pkg/locale/`)
+- **API versioning** — URL-path versioning (`/api/v1/...`)
+- **CORS middleware** — configurable
+- **Rate limiting middleware**
+- **Request/response logging middleware**
+- **Panic recovery middleware**
 
-# Generate additional components
-nova generate entity Order
-nova generate usecase order
-nova generate handler order
-nova generate repository order --type=postgres
-```
-
-### 6. Key Features to Include
-
-- **Graceful shutdown** with signal handling
-- **Context propagation** through all layers
-- **Structured logging** with slog (Go 1.21+)
-- **Request ID** middleware for tracing
-- **Health check** endpoint (`/health`, `/ready`)
-- **Metrics** endpoint for Prometheus (`/metrics`)
-- **OpenTelemetry** hooks for distributed tracing
-- **Input validation** with go-playground/validator
-- **Error handling** with custom error types and codes
-- **API versioning** via URL path (`/api/v1/...`)
-- **CORS** middleware (configurable)
-- **Rate limiting** middleware
-- **Request/response logging** middleware
-- **Panic recovery** middleware
-
-Generate the complete scaffolding tool with all templates embedded using go:embed directive.
-
----
-
-## Quick Start (Simple Version)
-
-If you just want to generate a project directly without building the CLI tool:
-
-Generate a Go REST API project with Clean Architecture.
-
-Stack:
-
-- HTTP: Fiber framework
-- Database: PostgreSQL with pgx driver
-- Query: SQLC for type-safe queries
-- Cache: Redis
-- Config: YAML with cleanenv + env override
-- DI: Google Wire
-- CLI: Cobra for multiple entry points
-
-Structure:
-
-- internal/domain/entity/ - Business entities (pure Go)
-- internal/domain/ - Repository interfaces + filter structs (one file per aggregate: user.go, order.go)
-- internal/usecase/{feature}/ - Business logic services
-- internal/adapter/repository/ - Repository implementations
-- internal/transport/http/ - HTTP handlers, middleware, httputil (per-feature packages)
-- internal/transport/cronjob/ - Cron job handlers
-- internal/infrastructure/ - Config, DB, server setup, DI
-
-Include:
-
-- Example User CRUD
-- Graceful shutdown
-- Health endpoints
-- Structured logging (slog)
-- Docker + docker-compose
-- Makefile
-- GitHub Actions CI
-
-The domain layer must have zero external dependencies.
+All templates are embedded with `//go:embed all:templates` and rendered through `text/template`. See [README.md](README.md) for CLI usage and flag reference.
