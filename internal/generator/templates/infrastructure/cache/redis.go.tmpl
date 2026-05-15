@@ -5,25 +5,101 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
 	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+
+	"github.com/redis/go-redis/v9"
 )
 
-// NewRedisClient creates a new Redis client connection.
-func NewRedisClient(cfg *config.Config) (*redis.Client, error) {
-	client := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", cfg.Cache.Host, cfg.Cache.Port),
-		Password: cfg.Cache.Password,
-		DB:       cfg.Cache.DB,
-	})
+const (
+	single   = "single"
+	sentinel = "sentinel"
+	cluster  = "cluster"
+)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// Client is a thin wrapper so callers depend on an interface, not a concrete type.
+// Both *redis.Client and *redis.ClusterClient satisfy redis.UniversalClient.
+type Client struct {
+	redis.UniversalClient
+}
 
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to redis: %w", err)
+// New is the single factory entry-point — picks mode from config.
+func New(cfg *config.Config, log *logger.Logger) (*Client, func(), error) {
+	rdbCfg := &cfg.Redis
+	var uc redis.UniversalClient
+
+	switch rdbCfg.Mode {
+	case single:
+		uc = newSingle(rdbCfg)
+	case sentinel:
+		uc = newSentinel(rdbCfg)
+	case cluster:
+		uc = newCluster(rdbCfg)
+	default:
+		return nil, nil, fmt.Errorf("redis: unknown mode %q", rdbCfg.Mode)
 	}
 
-	return client, nil
+	if err := ping(uc); err != nil {
+		return nil, nil, fmt.Errorf("redis: ping failed (%s): %w", rdbCfg.Mode, err)
+	}
+
+	cleanup := func() {
+		if err := uc.Close(); err != nil {
+			log.Error("failed to close redis client", "error", err)
+		}
+	}
+
+	return &Client{uc}, cleanup, nil
+}
+
+func newSingle(cfg *config.RedisConfig) redis.UniversalClient {
+	return redis.NewClient(&redis.Options{
+		Addr:            cfg.Addrs[0],
+		Password:        cfg.Password,
+		DB:              cfg.DB,
+		PoolSize:        cfg.PoolSize,
+		MinIdleConns:    cfg.MinIdleConns,
+		MaxIdleConns:    cfg.MaxIdleConns,
+		ConnMaxLifetime: cfg.ConnMaxLifetime,
+		ConnMaxIdleTime: cfg.ConnMaxIdleTime,
+		DialTimeout:     cfg.DialTimeout,
+		ReadTimeout:     cfg.ReadTimeout,
+		WriteTimeout:    cfg.WriteTimeout,
+	})
+}
+
+func newSentinel(cfg *config.RedisConfig) redis.UniversalClient {
+	return redis.NewFailoverClient(&redis.FailoverOptions{
+		MasterName:      cfg.MasterName,
+		SentinelAddrs:   cfg.Addrs,
+		Password:        cfg.Password,
+		DB:              cfg.DB,
+		PoolSize:        cfg.PoolSize,
+		MinIdleConns:    cfg.MinIdleConns,
+		ConnMaxLifetime: cfg.ConnMaxLifetime,
+		DialTimeout:     cfg.DialTimeout,
+		ReadTimeout:     cfg.ReadTimeout,
+		WriteTimeout:    cfg.WriteTimeout,
+	})
+}
+
+func newCluster(cfg *config.RedisConfig) redis.UniversalClient {
+	return redis.NewClusterClient(&redis.ClusterOptions{
+		Addrs:           cfg.Addrs,
+		Password:        cfg.Password,
+		PoolSize:        cfg.PoolSize,
+		MinIdleConns:    cfg.MinIdleConns,
+		ConnMaxLifetime: cfg.ConnMaxLifetime,
+		DialTimeout:     cfg.DialTimeout,
+		ReadTimeout:     cfg.ReadTimeout,
+		WriteTimeout:    cfg.WriteTimeout,
+		// Route read-only commands to replicas
+		RouteRandomly: true,
+	})
+}
+
+func ping(uc redis.UniversalClient) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return uc.Ping(ctx).Err()
 }

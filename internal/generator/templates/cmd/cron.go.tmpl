@@ -1,0 +1,19 @@
+package cmd
+
+import (
+	"github.com/spf13/cobra"
+
+	"{{.ModuleName}}/internal/app"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+func cronCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cron",
+		Short: "Start the cron job scheduler",
+		Run: func(*cobra.Command, []string) {
+			locale.NewMapping()
+			app.RunCronJobScheduler()
+		},
+	}
+}

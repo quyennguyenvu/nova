@@ -7,10 +7,11 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
 // NewMySQLDB creates a new MySQL database connection.
-func NewMySQLDB(cfg *config.Config) (*sql.DB, error) {
+func NewMySQLDB(cfg *config.Config, log *logger.Logger) (*sql.DB, func(), error) {
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%d)/%s?parseTime=true",
 		cfg.Database.User,
@@ -22,15 +23,21 @@ func NewMySQLDB(cfg *config.Config) (*sql.DB, error) {
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 
 	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return db, nil
+	cleanup := func() {
+		log.Info("[db] closing connection pool...")
+		_ = db.Close()
+		log.Info("[db] closed")
+	}
+
+	return db, cleanup, nil
 }

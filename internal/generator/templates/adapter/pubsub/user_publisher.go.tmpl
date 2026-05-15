@@ -1,0 +1,17 @@
+package pubsub
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/domain"
+)
+
+func (p *Publisher) PublishUserCreated(ctx context.Context, evt domain.UserCreated) error {
+	msg := UserCreatedMessage{
+		UserID:    evt.UserID,
+		Email:     evt.Email,
+		Name:      evt.Name,
+		CreatedAt: evt.CreatedAt,
+	}
+	return p.publish(ctx, "user.created", msg)
+}

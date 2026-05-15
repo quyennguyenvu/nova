@@ -6,17 +6,17 @@
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `nova new [name]` | Generate a new project (interactive or flags) |
-| `nova generate entity <Name>` | Scaffold a domain entity |
-| `nova generate usecase <name>` | Scaffold a use case |
-| `nova generate handler <name>` | Scaffold an HTTP handler |
-| `nova generate repository <name>` | Scaffold a repository |
+| Command                           | Description                                   |
+| --------------------------------- | --------------------------------------------- |
+| `nova new [name]`                 | Generate a new project (interactive or flags) |
+| `nova generate entity <Name>`     | Scaffold a domain entity                      |
+| `nova generate usecase <name>`    | Scaffold a use case                           |
+| `nova generate handler <name>`    | Scaffold an HTTP handler                      |
+| `nova generate repository <name>` | Scaffold a repository                         |
 
 ## Project Structure
 
-```
+```bash
 nova/
 ├── main.go                           # CLI entry point
 ├── cmd/                              # Cobra commands (root, new, generate)
@@ -30,7 +30,7 @@ nova/
 ├── .goreleaser.yaml                  # Cross-platform binary builds
 ├── .github/workflows/
 │   └── release.yaml                  # Tag-triggered release pipeline
-├── makefile                          # Dev workflow commands
+├── Makefile                          # Dev workflow commands
 └── README.md                         # User-facing documentation
 ```
 

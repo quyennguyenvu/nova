@@ -1,0 +1,118 @@
+package user
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+
+	useruc "{{.ModuleName}}/internal/usecase/user"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/httputil"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// UserHandler is the HTTP boundary for user operations.
+type UserHandler struct {
+	userService *useruc.Service
+}
+
+func NewUserHandler(userService *useruc.Service) *UserHandler {
+	return &UserHandler{userService: userService}
+}
+
+// mapAndLog converts a wrapped domain/usecase error into an *AppError and,
+// for 5xx cases only, emits a single log line carrying the full wrap chain.
+// Client errors (4xx) are not logged here — the access log in the Logging
+// middleware already records them.
+func mapAndLog(ctx context.Context, err error) *errors.AppError {
+	app := errors.ToAppError(err)
+	if app.Code >= 500 {
+		logctx.From(ctx).Error("handler error", "err", err.Error(), "trace", app.Trace())
+	}
+	return app
+}
+
+func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var input useruc.CreateUserInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeErr(w, r, errors.BadRequest(err.Error()))
+		return
+	}
+	user, err := h.userService.CreateUser(r.Context(), input)
+	if err != nil {
+		writeErr(w, r, mapAndLog(r.Context(), err))
+		return
+	}
+	resp := ToUserResponse(user)
+	httputil.WriteJSON(w, http.StatusCreated, httputil.SuccessResponse(resp))
+}
+
+func (h *UserHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, r, errors.BadRequest("invalid id"))
+		return
+	}
+	user, err := h.userService.GetUser(r.Context(), id)
+	if err != nil {
+		writeErr(w, r, mapAndLog(r.Context(), err))
+		return
+	}
+	resp := ToUserResponse(user)
+	httputil.WriteJSON(w, http.StatusOK, httputil.SuccessResponse(resp))
+}
+
+func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, r, errors.BadRequest("invalid id"))
+		return
+	}
+	var input useruc.UpdateUserInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeErr(w, r, errors.BadRequest(err.Error()))
+		return
+	}
+	user, err := h.userService.UpdateUser(r.Context(), id, input)
+	if err != nil {
+		writeErr(w, r, mapAndLog(r.Context(), err))
+		return
+	}
+	resp := ToUserResponse(user)
+	httputil.WriteJSON(w, http.StatusOK, httputil.SuccessResponse(resp))
+}
+
+func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, r, errors.BadRequest("invalid id"))
+		return
+	}
+	if err := h.userService.DeleteUser(r.Context(), id); err != nil {
+		writeErr(w, r, mapAndLog(r.Context(), err))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if limit == 0 {
+		limit = 10
+	}
+	users, err := h.userService.ListUsers(r.Context(), toListFilter(limit, offset))
+	if err != nil {
+		writeErr(w, r, mapAndLog(r.Context(), err))
+		return
+	}
+	resp := ToUserListResponse(users)
+	httputil.WriteJSON(w, http.StatusOK, httputil.SuccessResponse(resp))
+}
+
+func writeErr(w http.ResponseWriter, r *http.Request, app *errors.AppError) {
+	httputil.WriteError(w, r, app)
+}

@@ -1,0 +1,52 @@
+package postgres
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/domain"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pkg/errors"
+)
+
+var _ domain.TxManager = (*TxManager)(nil)
+
+type txKey struct{}
+type TxManager struct{ pool *pgxpool.Pool }
+
+func NewTxManager(pool *pgxpool.Pool) *TxManager { return &TxManager{pool: pool} }
+
+// WithinTx runs fn inside a db transaction. Nested calls reuse the ambient tx.
+func (t *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	// If we're already in a tx, just reuse it
+	if _, ok := txFromCtx(ctx); ok {
+		return fn(ctx)
+	}
+
+	// Start a new transaction
+	tx, err := t.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to begin tx")
+	}
+
+	// Ensure rollback on early return
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Run the function with tx in context
+	if err = fn(withTx(ctx, tx)); err != nil {
+		return errors.Wrap(err, "failed to execute function within tx")
+	}
+
+	// Commit if all good
+	return tx.Commit(ctx)
+}
+
+func withTx(ctx context.Context, tx pgx.Tx) context.Context {
+	return context.WithValue(ctx, txKey{}, tx)
+}
+
+func txFromCtx(ctx context.Context) (pgx.Tx, bool) {
+	tx, ok := ctx.Value(txKey{}).(pgx.Tx)
+	return tx, ok
+}

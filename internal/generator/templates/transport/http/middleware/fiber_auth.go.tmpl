@@ -1,0 +1,17 @@
+package middleware
+
+import "github.com/gofiber/fiber/v2"
+
+// Auth returns an authentication middleware.
+// TODO: Implement authentication middleware based on your auth strategy.
+func Auth() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		token := c.Get("Authorization")
+		if token == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "unauthorized",
+			})
+		}
+		return c.Next()
+	}
+}

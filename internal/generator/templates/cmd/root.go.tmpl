@@ -1,0 +1,28 @@
+package cmd
+
+import "github.com/spf13/cobra"
+
+func Execute() {
+	root := &cobra.Command{
+		Use:   "{{.ProjectName}}",
+		Short: "Project description",
+	}
+
+	root.AddCommand(
+	{{- if .HasHTTP }}
+		apiCommand(),
+	{{- end }}
+
+	{{- if .HasGRPC }}
+		grpcCommand(),
+	{{- end }}
+	
+	{{- if .HasCron }}
+		cronCommand(),
+	{{- end }}
+	)
+
+	if err := root.Execute(); err != nil {
+		panic(err)
+	}
+}

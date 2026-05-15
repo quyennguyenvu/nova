@@ -1,0 +1,19 @@
+package cmd
+
+import (
+	"github.com/spf13/cobra"
+
+	"{{.ModuleName}}/internal/app"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+func apiCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "api",
+		Short: "Start the HTTP server",
+		Run: func(*cobra.Command, []string) {
+			locale.NewMapping()
+			app.RunHTTPServer()
+		},
+	}
+}

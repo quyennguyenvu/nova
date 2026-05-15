@@ -1,28 +1,19 @@
-APP_NAME={{.ProjectName}}
-{{- if eq .Database "postgres"}}
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/{{.ProjectName}}?sslmode=disable
-{{- end}}
-{{- if eq .Database "mysql"}}
-DATABASE_URL=mysql://root:root@tcp(localhost:3306)/{{.ProjectName}}
-{{- end}}
+.SILENT:
+GOPATH = $(shell go env GOPATH)
+WIRE_PATH = "$(GOPATH)/bin/wire"
+export
 
-.PHONY: build run dev test test-coverage lint migrate-up migrate-down migrate-create wire sqlc proto generate docker-build docker-up docker-down
+.PHONY: help
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-# Build
-build:
-	go build -o bin/api ./cmd/api
-{{- if .HasGRPC}}
-	go build -o bin/grpc ./cmd/grpc
-{{- end}}
-
-run:
-	go run ./cmd/api
-
-# Development
-dev:
-	air -c .air.toml
+.PHONY: setup
+setup: ## Set up git hooks for local development
+	git config core.hooksPath .githooks
 
 # Testing
+.PHONY: test test-coverage
 test:
 	go test -v -race -cover ./...
 
@@ -31,43 +22,55 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 
 # Linting
+.PHONY: lint
 lint:
-	golangci-lint run
+	golangci-lint run{{if eq .QueryGen "sqlc"}} && sqlfluff lint --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}
+
+.PHONY: fmt
+fmt:
+	golangci-lint fmt{{if eq .QueryGen "sqlc"}} && sqlfluff fix --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}
+
+.PHONY: vet
+vet: ## Run go vet
+	go vet ./...
 
 {{- if .HasDatabase}}
-
 # Database
+.PHONY: migrate-create migrate-up migrate-down
+migrate-create:
+	migrate create -ext sql -dir {{- if eq .QueryGen "sqlc"}} sqlc/migrations {{- else }} migrations {{- end}} $(name) 
+
 migrate-up:
-	migrate -path migrations -database "$(DATABASE_URL)" up
+	migrate -path migrations -database '${MIGRATE_DATABASE_URL}' up
 
 migrate-down:
-	migrate -path migrations -database "$(DATABASE_URL)" down
-
-migrate-create:
-	migrate create -ext sql -dir migrations -seq $(name)
+	migrate -path migrations -database '${MIGRATE_DATABASE_URL}' down
 {{- end}}
 
 # Code generation
 {{- if .UseWire}}
-wire:
-	cd internal/infrastructure/di && wire
+.PHONY: wire-gen
+wire-gen:
+	rm $(PWD)/internal/infrastructure/di/wire_gen.go 2> /dev/null; $(WIRE_PATH) $(PWD)/internal/infrastructure/di/*
 {{- end}}
 
 {{- if eq .QueryGen "sqlc"}}
-sqlc:
-	sqlc generate
+.PHONY: sqlc-gen
+sqlc-gen:
+	rm -rf $(PWD)/internal/adapter/repository/dbgen 2> /dev/null; cd sqlc && sqlc generate
 {{- end}}
 
 {{- if .HasGRPC}}
-proto:
+.PHONY: proto-gen
+proto-gen:
 	protoc --go_out=. --go-grpc_out=. api/proto/**/*.proto
 {{- end}}
 
-generate:{{if .UseWire}} wire{{end}}{{if eq .QueryGen "sqlc"}} sqlc{{end}}
+gen:{{if .UseWire}} wire-gen{{end}}{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}}{{if .HasGRPC}} proto-gen{{end}}
 
 {{- if .IncludeDocker}}
-
 # Docker
+.PHONY: docker-build docker-up docker-down
 docker-build:
 	docker build -t $(APP_NAME) .
 

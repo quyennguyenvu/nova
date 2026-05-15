@@ -1,0 +1,24 @@
+package identity
+
+type Principal struct {
+	UserID int32
+	Email  string
+}
+
+type UserPrincipal struct {
+	Principal
+
+	Name      string
+	Phone     string
+	DeviceID  string
+	Platform  string
+	SessionID string
+}
+
+type AdminPrincipal struct {
+	Principal
+
+	Username    string
+	Permissions []string
+	GroupIDs    []int32
+}

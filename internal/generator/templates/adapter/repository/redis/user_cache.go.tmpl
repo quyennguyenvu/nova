@@ -1,0 +1,95 @@
+package redis
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/internal/domain/entity"
+)
+
+const (
+	userCachePrefix = "user:"
+	userCacheTTL    = 15 * time.Minute
+)
+
+// UserCacheRepository is a caching decorator for UserRepository.
+type UserCacheRepository struct {
+	repo  domain.UserRepository
+{{- if .HasRedis}}
+	cache *redis.Client
+{{- end}}
+}
+
+// NewUserCacheRepository creates a new cache-aware user domain.
+{{- if .HasRedis}}
+func NewUserCacheRepository(repo domain.UserRepository, cache *redis.Client) *UserCacheRepository {
+	return &UserCacheRepository{repo: repo, cache: cache}
+}
+{{- else}}
+func NewUserCacheRepository(repo domain.UserRepository) *UserCacheRepository {
+	return &UserCacheRepository{repo: repo}
+}
+{{- end}}
+
+func (r *UserCacheRepository) Create(ctx context.Context, user *entity.User) error {
+	return r.repo.Create(ctx, user)
+}
+
+func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.User, error) {
+{{- if .HasRedis}}
+	// Try cache first
+	key := fmt.Sprintf("%s%d", userCachePrefix, id)
+	cached, err := r.cache.Get(ctx, key).Result()
+	if err == nil {
+		var user entity.User
+		if err := json.Unmarshal([]byte(cached), &user); err == nil {
+			return &user, nil
+		}
+	}
+
+	// Fallback to database
+	user, err := r.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	if data, err := json.Marshal(user); err == nil {
+		r.cache.Set(ctx, key, data, userCacheTTL)
+	}
+
+	return user, nil
+{{- else}}
+	return r.repo.GetByID(ctx, id)
+{{- end}}
+}
+
+func (r *UserCacheRepository) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
+	return r.repo.GetByEmail(ctx, email)
+}
+
+func (r *UserCacheRepository) Update(ctx context.Context, user *entity.User) error {
+{{- if .HasRedis}}
+	// Invalidate cache
+	key := fmt.Sprintf("%s%d", userCachePrefix, user.ID)
+	r.cache.Del(ctx, key)
+{{- end}}
+	return r.repo.Update(ctx, user)
+}
+
+func (r *UserCacheRepository) Delete(ctx context.Context, id int64) error {
+{{- if .HasRedis}}
+	key := fmt.Sprintf("%s%d", userCachePrefix, id)
+	r.cache.Del(ctx, key)
+{{- end}}
+	return r.repo.Delete(ctx, id)
+}
+
+func (r *UserCacheRepository) List(ctx context.Context, params domain.UserFilter) ([]*entity.User, error) {
+	return r.repo.List(ctx, params)
+}

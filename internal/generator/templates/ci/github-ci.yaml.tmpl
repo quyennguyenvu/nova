@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '{{.GoVersion}}'
 
       - name: Download dependencies
         run: go mod download
@@ -83,7 +83,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '{{.GoVersion}}'
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
@@ -99,7 +99,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '{{.GoVersion}}'
 
       - name: Build
         run: go build -o bin/api ./cmd/api

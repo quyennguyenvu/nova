@@ -1,0 +1,30 @@
+package di
+
+import (
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/infrastructure/server"
+)
+
+{{- if .HasHTTP}}
+
+// HTTPApp bundles every dependency the HTTP entry point needs from DI. The
+// Logger is the single instance wired into every service — entry-point code
+// uses it for startup/shutdown messages so all logs share format and trace
+// enrichment.
+type HTTPApp struct {
+	Logger *logger.Logger
+	Server *server.HTTPServer
+}
+{{- end}}
+
+{{- if .HasGRPC}}
+
+// GRPCApp bundles every dependency the gRPC entry point needs from DI. Same
+// shape as HTTPApp — keeps the entry point free of multiple Initialize return
+// values and makes future additions (admin server, metrics provider) a struct
+// field, not a signature change.
+type GRPCApp struct {
+	Logger *logger.Logger
+	Server *server.GRPCServer
+}
+{{- end}}

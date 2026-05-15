@@ -1,0 +1,39 @@
+package middleware
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/google/uuid"
+)
+
+const RequestIDHeader = "X-Request-ID"
+
+type requestIDKey struct{}
+
+// RequestIDFrom returns the request ID attached to ctx, or "" if none. Safe to
+// call from any layer (usecase, repository) that needs to log or propagate the
+// ID to downstream services.
+func RequestIDFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(requestIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func withRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// RequestID injects a unique request ID into the request headers and its context.
+func RequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get(RequestIDHeader)
+		if id == "" {
+			id = uuid.New().String()
+		}
+		w.Header().Set(RequestIDHeader, id)
+		r = r.WithContext(withRequestID(r.Context(), id))
+		next.ServeHTTP(w, r)
+	})
+}

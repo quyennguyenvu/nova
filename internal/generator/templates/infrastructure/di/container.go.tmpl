@@ -1,19 +1,9 @@
 package di
 
 import (
-	"log/slog"
+	"context"
 
-{{- if eq .Database "postgres"}}
-	"github.com/jackc/pgx/v5/pgxpool"
-{{- end}}
-{{- if eq .Database "mysql"}}
-	"database/sql"
-{{- end}}
-{{- if .HasRedis}}
-	"github.com/redis/go-redis/v9"
-{{- end}}
-
-	v1 "{{.ModuleName}}/internal/adapter/handler/http/v1"
+{{- if .HasHTTP}}
 {{- if eq .Database "postgres"}}
 	postgresrepo "{{.ModuleName}}/internal/adapter/repository/postgres"
 {{- end}}
@@ -23,130 +13,157 @@ import (
 {{- if .HasCache}}
 	cacherepo "{{.ModuleName}}/internal/adapter/repository/cache"
 {{- end}}
+{{- if .HasMessageQueue}}
+	"{{.ModuleName}}/internal/adapter/pubsub"
+{{- end}}
+{{- end}}
 	"{{.ModuleName}}/internal/infrastructure/config"
-{{- if eq .Database "postgres"}}
+{{- if and .HasHTTP .HasDatabase}}
 	"{{.ModuleName}}/internal/infrastructure/database"
 {{- end}}
-{{- if eq .Database "mysql"}}
-	"{{.ModuleName}}/internal/infrastructure/database"
-{{- end}}
-{{- if .HasRedis}}
+{{- if and .HasHTTP .HasRedis}}
 	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
+{{- end}}
+{{- if and .HasHTTP .HasMessageQueue}}
+	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
 {{- end}}
 	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/internal/infrastructure/server"
+{{- if .HasHTTP}}
+	transporthttp "{{.ModuleName}}/internal/transport/http"
+{{- if .HasDatabase}}
+	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 	userusecase "{{.ModuleName}}/internal/usecase/user"
+{{- end}}
+{{- end}}
 )
 
-// Container holds all application dependencies.
-type Container struct {
-	Config      *config.Config
-	Logger      *slog.Logger
-{{- if eq .Database "postgres"}}
-	DB          *pgxpool.Pool
-{{- end}}
-{{- if eq .Database "mysql"}}
-	DB          *sql.DB
-{{- end}}
-{{- if .HasRedis}}
-	Cache       *redis.Client
-{{- end}}
-	HTTPServer  *server.HTTPServer
-	UserHandler *v1.UserHandler
-}
+{{- if .HasHTTP}}
 
-// NewContainer wires all dependencies together.
-func NewContainer(cfg *config.Config) (*Container, error) {
-	// Logger
+// InitializeHTTPServer wires every dependency the HTTP server needs and returns
+// the HTTPApp bundle together with a single cleanup that tears everything down
+// in reverse order. ctx flows into the HTTP server so its graceful-shutdown
+// can react to cancellation.
+func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	log := logger.New(cfg)
 
-{{- if eq .Database "postgres"}}
-	// Database
-	db, err := database.NewPostgresDB(cfg)
-	if err != nil {
-		return nil, err
+	var cleanups []func()
+	cleanup := func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
 	}
+	fail := func(err error) (*HTTPApp, func(), error) {
+		cleanup()
+		return nil, nil, err
+	}
+
+{{- if eq .Database "postgres"}}
+	db, dbCleanup, err := database.NewPostgresDB(cfg, log)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, dbCleanup)
 	log.Info("connected to PostgreSQL")
 {{- end}}
-
 {{- if eq .Database "mysql"}}
-	db, err := database.NewMySQLDB(cfg)
+	db, dbCleanup, err := database.NewMySQLDB(cfg, log)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
+	cleanups = append(cleanups, dbCleanup)
 	log.Info("connected to MySQL")
 {{- end}}
 
 {{- if .HasRedis}}
-	// Cache
-	cacheClient, err := infraCache.NewRedisClient(cfg)
+	cacheClient, cacheCleanup, err := infraCache.New(cfg, log)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
+	cleanups = append(cleanups, cacheCleanup)
 	log.Info("connected to Redis")
 {{- end}}
 
-	// Repositories
+{{- if eq .MessageQueue "kafka"}}
+	producer, producerCleanup, err := infraPubsub.NewKafkaProducer(&cfg.Kafka, log)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, producerCleanup)
+	publisher := pubsub.NewPublisher(producer)
+	log.Info("connected to Kafka")
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+	conn, err := infraPubsub.NewRabbitMQConnection(&cfg.RabbitMQ)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, func() { _ = conn.Close() })
+	publisher, err := pubsub.NewPublisher(conn)
+	if err != nil {
+		return fail(err)
+	}
+	log.Info("connected to RabbitMQ")
+{{- end}}
+
+{{- if .HasDatabase}}
 {{- if eq .Database "postgres"}}
 	userRepo := postgresrepo.NewUserRepository(db)
 {{- end}}
 {{- if eq .Database "mysql"}}
 	userRepo := mysqlrepo.NewUserRepository(db)
 {{- end}}
-
-{{- if and .HasCache .HasDatabase}}
-	// Wrap with cache decorator
+{{- if .HasCache}}
 {{- if .HasRedis}}
 	cachedUserRepo := cacherepo.NewUserCacheRepository(userRepo, cacheClient)
 {{- else}}
 	cachedUserRepo := cacherepo.NewUserCacheRepository(userRepo)
 {{- end}}
-	// Use cases
-	userService := userusecase.NewService(cachedUserRepo, log)
-{{- else if .HasDatabase}}
-	// Use cases
-	userService := userusecase.NewService(userRepo, log)
+	userService := userusecase.NewService(cachedUserRepo{{- if .HasMessageQueue}}, publisher{{- end}})
+{{- else}}
+	userService := userusecase.NewService(userRepo{{- if .HasMessageQueue}}, publisher{{- end}})
 {{- end}}
 
-	// Handlers
-{{- if .HasDatabase}}
-	userHandler := v1.NewUserHandler(userService)
+	userHandler := userv1.NewUserHandler(userService)
+	userRoutes := userv1.NewRoutes(userHandler)
+	app := transporthttp.NewApp(cfg, log, provideRegistrars(userRoutes))
+{{- else}}
+	app := transporthttp.NewApp(cfg, log, nil)
 {{- end}}
 
-	// HTTP Server
-	httpServer := server.NewHTTPServer(cfg, log)
+	httpServer, httpCleanup, err := server.NewHTTPServer(ctx, cfg, log, app)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, httpCleanup)
 
-	return &Container{
-		Config:      cfg,
-		Logger:      log,
-{{- if .HasDatabase}}
-		DB:          db,
-{{- end}}
-{{- if .HasRedis}}
-		Cache:       cacheClient,
-{{- end}}
-		HTTPServer:  httpServer,
-{{- if .HasDatabase}}
-		UserHandler: userHandler,
-{{- end}}
-	}, nil
+	return &HTTPApp{Logger: log, Server: httpServer}, cleanup, nil
 }
+{{- end}}
 
-// Close cleans up all resources.
-func (c *Container) Close() {
-{{- if eq .Database "postgres"}}
-	if c.DB != nil {
-		c.DB.Close()
+{{- if .HasGRPC}}
+
+// InitializeGRPCServer wires the gRPC server. Service registration is the
+// caller's responsibility — use app.Server.Server() to access the underlying
+// *grpc.Server and register your generated service implementations on it.
+func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, err
 	}
-{{- end}}
-{{- if eq .Database "mysql"}}
-	if c.DB != nil {
-		c.DB.Close()
+
+	log := logger.New(cfg)
+
+	grpcServer, cleanup, err := server.NewGRPCServer(ctx, cfg, log)
+	if err != nil {
+		return nil, nil, err
 	}
-{{- end}}
-{{- if .HasRedis}}
-	if c.Cache != nil {
-		c.Cache.Close()
-	}
-{{- end}}
+
+	return &GRPCApp{Logger: log, Server: grpcServer}, cleanup, nil
 }
+{{- end}}

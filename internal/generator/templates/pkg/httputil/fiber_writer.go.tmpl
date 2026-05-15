@@ -1,0 +1,22 @@
+package httputil
+
+import (
+	"github.com/gofiber/fiber/v2"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// WriteJSON writes a successful JSON response wrapped in the standard envelope.
+func WriteJSON(c *fiber.Ctx, status int, data any) error {
+	return c.Status(status).JSON(SuccessResponse(data))
+}
+
+// WriteError writes an error JSON response wrapped in the standard envelope.
+// The HTTP status is taken from app.Code. The message is translated using the
+// language carried in the request context (set by the Locale middleware) when
+// app carries a Locale code; otherwise app.Message is used as-is.
+func WriteError(c *fiber.Ctx, app *errors.AppError) error {
+	lang := locale.LanguageFromContext(c.UserContext())
+	return c.Status(app.Code).JSON(ErrorResponseFromApp(app, lang))
+}

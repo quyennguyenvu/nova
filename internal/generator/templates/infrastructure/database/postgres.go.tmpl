@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pkg/errors"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
 // NewPostgresDB creates a new PostgreSQL connection pool.
-func NewPostgresDB(cfg *config.Config) (*pgxpool.Pool, error) {
+func NewPostgresDB(cfg *config.Config, log *logger.Logger) (*pgxpool.Pool, func(), error) {
 	dsn := fmt.Sprintf(
 		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		cfg.Database.User,
@@ -24,7 +26,7 @@ func NewPostgresDB(cfg *config.Config) (*pgxpool.Pool, error) {
 
 	poolCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse database config: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to parse database config")
 	}
 
 	poolCfg.MaxConns = 25
@@ -37,12 +39,18 @@ func NewPostgresDB(cfg *config.Config) (*pgxpool.Pool, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to connect to database")
 	}
 
 	if err := pool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to ping database")
 	}
 
-	return pool, nil
+	cleanup := func() {
+		log.Info("[db] closing connection pool...")
+		pool.Close()
+		log.Info("[db] closed")
+	}
+
+	return pool, cleanup, nil
 }

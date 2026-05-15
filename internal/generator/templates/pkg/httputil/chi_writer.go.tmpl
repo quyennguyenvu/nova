@@ -1,0 +1,27 @@
+package httputil
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// WriteJSON writes a successful JSON response wrapped in the standard envelope.
+func WriteJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(SuccessResponse(data))
+}
+
+// WriteError writes an error JSON response wrapped in the standard envelope.
+// The HTTP status is taken from app.Code. The message is translated using the
+// language carried in r's context (set by the Locale middleware) when app
+// carries a Locale code; otherwise app.Message is used as-is.
+func WriteError(w http.ResponseWriter, r *http.Request, app *errors.AppError) {
+	lang := locale.LanguageFromContext(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(app.Code)
+	_ = json.NewEncoder(w).Encode(ErrorResponseFromApp(app, lang))
+}

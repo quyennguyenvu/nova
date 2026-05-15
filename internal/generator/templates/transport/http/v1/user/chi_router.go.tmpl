@@ -1,0 +1,23 @@
+package user
+
+import "github.com/go-chi/chi/v5"
+
+// Routes is the user feature's HTTP route registrar. It implements the
+// transport/http.Registrar interface — wired into the app at /api/v1.
+type Routes struct {
+	handler *UserHandler
+}
+
+func NewRoutes(h *UserHandler) *Routes { return &Routes{handler: h} }
+
+// Register attaches /users routes to the given router subtree. The caller
+// (transport/http.NewApp) supplies the /api/v1 prefix via chi.Router.Route.
+func (r *Routes) Register(router chi.Router) {
+	router.Route("/users", func(sub chi.Router) {
+		sub.Post("/", r.handler.Create)
+		sub.Get("/", r.handler.List)
+		sub.Get("/{id}", r.handler.GetByID)
+		sub.Put("/{id}", r.handler.Update)
+		sub.Delete("/{id}", r.handler.Delete)
+	})
+}

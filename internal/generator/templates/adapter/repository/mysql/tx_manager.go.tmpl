@@ -1,0 +1,43 @@
+package mysql
+
+import (
+	"context"
+	"database/sql"
+
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+var _ domain.TxManager = (*TxManager)(nil)
+
+type txKey struct{}
+type TxManager struct{ db *sql.DB }
+
+func NewTxManager(db *sql.DB) *TxManager { return &TxManager{db: db} }
+
+// WithinTx runs fn inside a db transaction. Nested calls reuse the ambient tx.
+func (t *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if _, ok := txFromCtx(ctx); ok {
+		return fn(ctx)
+	}
+
+	tx, err := t.db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.Wrapf(err, "begin tx")
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err = fn(withTx(ctx, tx)); err != nil {
+		return errors.Wrapf(err, "execute within tx")
+	}
+	return tx.Commit()
+}
+
+func withTx(ctx context.Context, tx *sql.Tx) context.Context {
+	return context.WithValue(ctx, txKey{}, tx)
+}
+
+func txFromCtx(ctx context.Context) (*sql.Tx, bool) {
+	tx, ok := ctx.Value(txKey{}).(*sql.Tx)
+	return tx, ok
+}

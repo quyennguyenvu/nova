@@ -1,0 +1,22 @@
+package user
+
+import "time"
+
+type CreateUserRequest struct {
+	Email    string `json:"email"    validate:"required,email"`
+	Name     string `json:"name"     validate:"required,min=2,max=100"`
+	Password string `json:"password" validate:"required,min=8"`
+}
+
+type UpdateUserRequest struct {
+	Name string `json:"name" validate:"omitempty,min=2,max=100"`
+}
+
+// HTTP response bodies — these own json tags.
+type UserResponse struct {
+	ID        int64     `json:"id"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}

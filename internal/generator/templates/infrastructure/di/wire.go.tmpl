@@ -1,55 +1,115 @@
 //go:build wireinject
+// +build wireinject
 
 package di
 
 import (
-	"github.com/google/wire"
+	"context"
 
-	v1 "{{.ModuleName}}/internal/adapter/handler/http/v1"
+{{- if .HasMessageQueue}}
+	"{{.ModuleName}}/internal/adapter/pubsub"
+{{- end}}
 {{- if eq .Database "postgres"}}
 	postgresrepo "{{.ModuleName}}/internal/adapter/repository/postgres"
 {{- end}}
+{{- if eq .Database "mysql"}}
+	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
+{{- end}}
+	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/infrastructure/config"
 {{- if .HasDatabase}}
 	"{{.ModuleName}}/internal/infrastructure/database"
 {{- end}}
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+{{- if .HasMessageQueue}}
+	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
+{{- end}}
+{{- if or .HasHTTP .HasGRPC}}
 	"{{.ModuleName}}/internal/infrastructure/server"
+{{- end}}
+{{- if .HasHTTP}}
+	transporthttp "{{.ModuleName}}/internal/transport/http"
+	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
+{{- end}}
 	userusecase "{{.ModuleName}}/internal/usecase/user"
-	"{{.ModuleName}}/internal/domain/repository"
+
+	"github.com/google/wire"
 )
 
-func InitializeApp(cfg *config.Config) (*App, error) {
-	wire.Build(
-		// Infrastructure
+var infraSet = wire.NewSet(
+	config.Load,
+	logger.New,
+	jwtsec.NewVerifier,
 {{- if eq .Database "postgres"}}
-		database.NewPostgresDB,
+	database.NewPostgresDB,
 {{- end}}
-		server.NewHTTPServer,
-		logger.New,
+{{- if eq .Database "mysql"}}
+	database.NewMySQLDB,
+{{- end}}
+{{- if .HasHTTP}}
+	transporthttp.NewApp,
+	server.NewHTTPServer,
+{{- end}}
+{{- if .HasGRPC}}
+	server.NewGRPCServer,
+{{- end}}
+{{- if .HasMessageQueue}}
+{{- if eq .MessageQueue "kafka"}}
+	infraPubsub.NewKafkaProducer,
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+	infraPubsub.NewRabbitMQConnection,
+{{- end}}
+{{- end}}
+)
 
-		// Repositories
+var adapterSet = wire.NewSet(
 {{- if eq .Database "postgres"}}
-		postgresrepo.NewUserRepository,
-		wire.Bind(new(repository.UserRepository), new(*postgresrepo.UserRepository)),
+	postgresrepo.NewUserRepository,
+	wire.Bind(new(domain.UserRepository), new(*postgresrepo.UserRepository)),
+{{- end}}
+{{- if eq .Database "mysql"}}
+	mysqlrepo.NewUserRepository,
+	wire.Bind(new(domain.UserRepository), new(*mysqlrepo.UserRepository)),
+{{- end}}
+{{- if .HasMessageQueue}}
+	pubsub.NewPublisher,
+	wire.Bind(new(domain.UserPublisher), new(*pubsub.Publisher)),
+{{- end}}
+)
+
+var usecaseSet = wire.NewSet(
+	userusecase.NewService,
+)
+
+{{- if .HasHTTP}}
+var transportSet = wire.NewSet(
+	userv1.NewUserHandler,
+	userv1.NewRoutes,
+	provideRegistrars,
+)
+
+// InitializeHTTPServer returns the HTTPApp bundle so the entry point gets the
+// same *logger.Logger that DI wired into every service.
+func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
+	panic(wire.Build(
+		infraSet,
+		adapterSet,
+		usecaseSet,
+		transportSet,
+		wire.Struct(new(HTTPApp), "*"),
+	))
+}
 {{- end}}
 
-		// Use cases
-		userusecase.NewService,
-
-		// Handlers
-		v1.NewUserHandler,
-
-		// App
-		NewApp,
-	)
-	return nil, nil
+{{- if .HasGRPC}}
+// InitializeGRPCServer wires the gRPC server. Service registration is the
+// caller's responsibility — call app.Server.Server() to get the underlying *grpc.Server.
+func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
+	panic(wire.Build(
+		infraSet,
+		wire.Struct(new(GRPCApp), "*"),
+	))
 }
-
-type App struct {
-	Server *server.HTTPServer
-}
-
-func NewApp(server *server.HTTPServer) *App {
-	return &App{Server: server}
-}
+{{- end}}

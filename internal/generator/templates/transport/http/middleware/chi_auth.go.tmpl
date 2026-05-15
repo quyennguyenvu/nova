@@ -1,0 +1,16 @@
+package middleware
+
+import "net/http"
+
+// Auth returns an authentication middleware.
+// TODO: Implement authentication middleware based on your auth strategy.
+func Auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

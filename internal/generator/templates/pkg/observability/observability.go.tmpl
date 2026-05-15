@@ -1,0 +1,49 @@
+// Package observability defines the cross-cutting telemetry ports used across
+// the application. Logger is the canonical structured-logging surface —
+// pkg/logctx aliases it, internal/infrastructure/logger satisfies it, and
+// inner layers (usecase, repository) depend on it via logctx.From(ctx).
+//
+// Tracing and metrics are not modeled as ports here: OpenTelemetry's
+// otel.Tracer and otel.Meter package-level APIs are themselves the seam, and
+// span context is already threaded through context.Context.
+package observability
+
+import "context"
+
+// Logger is the minimal structured-logging surface the application relies on.
+// kv arguments are alternating string keys and any values; odd-length input is
+// dropped by the implementation.
+type Logger interface {
+	Debug(msg string, kv ...any)
+	Info(msg string, kv ...any)
+	Warn(msg string, kv ...any)
+	Error(msg string, kv ...any)
+}
+
+type Tracer interface {
+	Start(ctx context.Context, name string) (context.Context, Span)
+}
+
+type Span interface {
+	End()
+	SetAttr(key string, value any)
+	RecordError(err error)
+}
+
+type Meter interface {
+	Counter(name string) Counter
+	Histogram(name string) Histogram
+}
+type Counter interface {
+	Add(ctx context.Context, n int64, kv ...any)
+}
+type Histogram interface {
+	Observe(ctx context.Context, v float64, kv ...any)
+}
+
+// The bundle use cases take:
+type Observer struct {
+	Log    Logger
+	Tracer Tracer
+	Meter  Meter
+}

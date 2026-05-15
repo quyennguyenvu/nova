@@ -1,0 +1,15 @@
+package middleware
+
+import (
+	"github.com/labstack/echo/v4"
+	echomw "github.com/labstack/echo/v4/middleware"
+)
+
+// CORS returns a CORS middleware with sensible defaults.
+func CORS() echo.MiddlewareFunc {
+	return echomw.CORSWithConfig(echomw.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
+	})
+}

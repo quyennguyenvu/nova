@@ -1,0 +1,22 @@
+package user
+
+import "github.com/labstack/echo/v4"
+
+// Routes is the user feature's HTTP route registrar. It implements the
+// transport/http.Registrar interface — wired into the app at /api/v1.
+type Routes struct {
+	handler *UserHandler
+}
+
+func NewRoutes(h *UserHandler) *Routes { return &Routes{handler: h} }
+
+// Register attaches /users routes to the given router subtree. The caller
+// (transport/http.NewApp) supplies the /api/v1 prefix.
+func (r *Routes) Register(router *echo.Group) {
+	users := router.Group("/users")
+	users.POST("", r.handler.Create)
+	users.GET("", r.handler.List)
+	users.GET("/:id", r.handler.GetByID)
+	users.PUT("/:id", r.handler.Update)
+	users.DELETE("/:id", r.handler.Delete)
+}

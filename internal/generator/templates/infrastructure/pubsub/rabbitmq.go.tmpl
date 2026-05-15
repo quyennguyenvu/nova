@@ -1,0 +1,19 @@
+package pubsub
+
+import (
+	"fmt"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+)
+
+// NewRabbitMQConnection dials RabbitMQ.
+// This is infrastructure — connection setup only, no business logic.
+func NewRabbitMQConnection(cfg *config.RabbitMQConfig) (*amqp.Connection, error) {
+	conn, err := amqp.Dial(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("dial rabbitmq: %w", err)
+	}
+	return conn, nil
+}

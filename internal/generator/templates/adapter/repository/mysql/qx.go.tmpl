@@ -1,0 +1,30 @@
+package mysql
+
+import (
+	"context"
+	"database/sql"
+
+	"{{.ModuleName}}/internal/adapter/repository/mysql/dbgen"
+)
+
+// qx routes sqlc query calls to either the ambient tx or the pool, mirroring
+// the postgres qx pattern. Keeps repository methods tx-agnostic.
+type qx struct {
+	db   *sql.DB
+	base *dbgen.Queries // bound to db (non-tx)
+}
+
+func newQX(db *sql.DB) *qx {
+	return &qx{
+		db:   db,
+		base: dbgen.New(db),
+	}
+}
+
+// Q returns *dbgen.Queries bound to the current tx if present; otherwise to the db.
+func (q *qx) Q(ctx context.Context) *dbgen.Queries {
+	if tx, ok := txFromCtx(ctx); ok {
+		return dbgen.New(tx)
+	}
+	return q.base
+}

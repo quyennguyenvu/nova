@@ -10,52 +10,99 @@ import (
 
 // RunInteractive prompts the user for all project configuration options.
 func RunInteractive(cfg *config.ProjectConfig) error {
-	// Project basics
+	if err := promptProjectBasics(cfg); err != nil {
+		return err
+	}
+	if err := promptTransport(cfg); err != nil {
+		return err
+	}
+	if err := promptHTTPFramework(cfg); err != nil {
+		return err
+	}
+	if err := promptGRPCGateway(cfg); err != nil {
+		return err
+	}
+	if err := promptDatabase(cfg); err != nil {
+		return err
+	}
+	if err := promptSQL(cfg); err != nil {
+		return err
+	}
+	if err := promptCache(cfg); err != nil {
+		return err
+	}
+	if err := promptMessageQueue(cfg); err != nil {
+		return err
+	}
+	if err := promptConfigFormat(cfg); err != nil {
+		return err
+	}
+	if err := promptDI(cfg); err != nil {
+		return err
+	}
+	if err := promptOptionalFeatures(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func promptProjectBasics(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Input{
 		Message: "Project name:",
 		Default: cfg.ProjectName,
 	}, &cfg.ProjectName, survey.WithValidator(survey.Required)); err != nil {
 		return err
 	}
-
 	if err := survey.AskOne(&survey.Input{
 		Message: "Go module name:",
 		Default: fmt.Sprintf("github.com/myorg/%s", cfg.ProjectName),
 	}, &cfg.ModuleName, survey.WithValidator(survey.Required)); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// Transport
+func promptTransport(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Transport layer:",
-		Options: []string{"http", "grpc", "both"},
+		Options: []string{"http", "grpc", "cron", "cli"},
 		Default: "http",
 	}, &cfg.Transport); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// HTTP Framework
-	if cfg.HasHTTP() {
-		if err := survey.AskOne(&survey.Select{
-			Message: "HTTP framework:",
-			Options: []string{"fiber", "gin", "chi", "echo", "nethttp"},
-			Default: "fiber",
-		}, &cfg.HTTPFramework); err != nil {
-			return err
-		}
+func promptHTTPFramework(cfg *config.ProjectConfig) error {
+	if !cfg.HasHTTP() {
+		return nil
 	}
 
-	// gRPC Gateway
-	if cfg.HasGRPC() {
-		if err := survey.AskOne(&survey.Confirm{
-			Message: "Include gRPC-Gateway?",
-			Default: false,
-		}, &cfg.GRPCGateway); err != nil {
-			return err
-		}
+	if err := survey.AskOne(&survey.Select{
+		Message: "HTTP framework:",
+		Options: []string{"fiber", "gin", "chi", "echo", "nethttp"},
+		Default: "fiber",
+	}, &cfg.HTTPFramework); err != nil {
+		return err
+	}
+	return nil
+}
+
+func promptGRPCGateway(cfg *config.ProjectConfig) error {
+	if !cfg.HasGRPC() {
+		return nil
 	}
 
-	// Database
+	if err := survey.AskOne(&survey.Confirm{
+		Message: "Include gRPC-Gateway?",
+		Default: false,
+	}, &cfg.GRPCGateway); err != nil {
+		return err
+	}
+	return nil
+}
+
+func promptDatabase(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Database:",
 		Options: []string{"postgres", "mysql", "sqlite", "mongodb", "none"},
@@ -63,27 +110,32 @@ func RunInteractive(cfg *config.ProjectConfig) error {
 	}, &cfg.Database); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// DB Driver (only for SQL databases)
-	if cfg.HasSQL() {
-		if err := survey.AskOne(&survey.Select{
-			Message: "Database driver:",
-			Options: []string{"pgx", "sqlx", "gorm", "database/sql"},
-			Default: "pgx",
-		}, &cfg.DBDriver); err != nil {
-			return err
-		}
-
-		if err := survey.AskOne(&survey.Select{
-			Message: "Query generation:",
-			Options: []string{"sqlc", "raw", "gorm"},
-			Default: "sqlc",
-		}, &cfg.QueryGen); err != nil {
-			return err
-		}
+func promptSQL(cfg *config.ProjectConfig) error {
+	if !cfg.HasSQL() {
+		return nil
 	}
 
-	// Cache
+	if err := survey.AskOne(&survey.Select{
+		Message: "Database driver:",
+		Options: []string{"pgx", "sqlx", "gorm", "database/sql"},
+		Default: "pgx",
+	}, &cfg.DBDriver); err != nil {
+		return err
+	}
+	if err := survey.AskOne(&survey.Select{
+		Message: "Query generation:",
+		Options: []string{"sqlc", "raw", "gorm"},
+		Default: "sqlc",
+	}, &cfg.QueryGen); err != nil {
+		return err
+	}
+	return nil
+}
+
+func promptCache(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Cache:",
 		Options: []string{"redis", "bigcache", "none"},
@@ -91,8 +143,10 @@ func RunInteractive(cfg *config.ProjectConfig) error {
 	}, &cfg.Cache); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// Message Queue
+func promptMessageQueue(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Message queue:",
 		Options: []string{"kafka", "rabbitmq", "nats", "none"},
@@ -100,8 +154,10 @@ func RunInteractive(cfg *config.ProjectConfig) error {
 	}, &cfg.MessageQueue); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// Config format
+func promptConfigFormat(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Configuration format:",
 		Options: []string{"yaml", "toml", "env"},
@@ -109,37 +165,38 @@ func RunInteractive(cfg *config.ProjectConfig) error {
 	}, &cfg.ConfigFormat); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// DI
+func promptDI(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Dependency injection:",
 		Options: []string{"wire", "fx", "manual"},
-		Default: "manual",
+		Default: "wire",
 	}, &cfg.DI); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// Optional features
+func promptOptionalFeatures(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Confirm{
 		Message: "Include Docker setup?",
 		Default: true,
 	}, &cfg.IncludeDocker); err != nil {
 		return err
 	}
-
 	if err := survey.AskOne(&survey.Confirm{
 		Message: "Include CI/CD (GitHub Actions)?",
 		Default: true,
 	}, &cfg.IncludeCI); err != nil {
 		return err
 	}
-
 	if err := survey.AskOne(&survey.Confirm{
 		Message: "Include Makefile?",
 		Default: true,
 	}, &cfg.IncludeMake); err != nil {
 		return err
 	}
-
 	return nil
 }

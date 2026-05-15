@@ -28,15 +28,16 @@ generate: build ## Generate a sample project in interactive mode
 generate-all: build ## Generate a sample project to test templates (Fiber/Postgres/Redis)
 	rm -rf $(TEST_DIR)
 	./$(BINARY) new testproject \
-		--module=github.com/test/testproject \
+		--module=nova/testproject \
 		--transport=http \
 		--http-framework=fiber \
 		--database=postgres \
 		--db-driver=pgx \
+		--query=sqlc \
 		--cache=redis \
 		--queue=none \
 		--config=yaml \
-		--di=manual \
+		--di=wire \
 		--docker \
 		--makefile \
 		--ci=github
@@ -47,7 +48,7 @@ generate-all: build ## Generate a sample project to test templates (Fiber/Postgr
 generate-minimal: build ## Generate a minimal project (no DB, no cache, no Docker)
 	rm -rf $(TEST_DIR)
 	./$(BINARY) new testproject \
-		--module=github.com/test/testproject \
+		--module=nova/testproject \
 		--transport=http \
 		--http-framework=fiber \
 		--database=none \
@@ -67,8 +68,8 @@ verify-gen: generate ## Generate + list all output files for review
 diff-gen: generate ## Generate + show key template outputs for quick review
 	@echo "=== go.mod ==="
 	@cat $(TEST_DIR)/go.mod
-	@echo "\n=== cmd/api/main.go ==="
-	@cat $(TEST_DIR)/cmd/api/main.go
+	@echo "\n=== cmd/api.go ==="
+	@cat $(TEST_DIR)/cmd/api.go
 	@echo "\n=== internal/infrastructure/di/container.go ==="
 	@cat $(TEST_DIR)/internal/infrastructure/di/container.go
 
@@ -81,7 +82,7 @@ lint: ## Run linter
 	golangci-lint run
 
 fmt: ## Format all Go source files
-	gofmt -w .
+	golangci-lint fmt
 
 vet: ## Run go vet
 	go vet ./...

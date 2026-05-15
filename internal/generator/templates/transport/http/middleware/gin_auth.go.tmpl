@@ -1,0 +1,20 @@
+package middleware
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+// Auth returns an authentication middleware.
+// TODO: Implement authentication middleware based on your auth strategy.
+func Auth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := c.GetHeader("Authorization")
+		if token == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		c.Next()
+	}
+}

@@ -1,0 +1,18 @@
+version: "2"
+sql:
+  - engine: "mysql"
+    queries: "./query"
+    schema:
+      - "./migrations"
+    gen:
+      go:
+        package: "dbgen"
+        out: "../internal/adapter/repository/mysql/dbgen"
+        sql_package: "database/sql"
+        emit_prepared_queries: true
+        overrides:
+          - db_type: "json"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+            nullable: true

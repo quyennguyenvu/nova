@@ -1,0 +1,17 @@
+package domain
+
+import (
+	"context"
+	"time"
+)
+
+type UserCreated struct {
+	UserID    int64
+	Email     string
+	Name      string
+	CreatedAt time.Time
+}
+
+type UserPublisher interface {
+	PublishUserCreated(ctx context.Context, evt UserCreated) error
+}

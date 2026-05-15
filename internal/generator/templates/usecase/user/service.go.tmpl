@@ -2,59 +2,88 @@ package user
 
 import (
 	"context"
-	"log/slog"
 
+	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
-	"{{.ModuleName}}/internal/domain/repository"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+{{- if .HasMessageQueue}}
+	"{{.ModuleName}}/pkg/logctx"
+{{- end}}
 )
 
-// Service implements the user use case.
+// Service implements the user use case. It never calls the logger directly —
+// it wraps errors with errors.Wrapf and lets the transport boundary log once.
 type Service struct {
-	userRepo repository.UserRepository
-	logger   *slog.Logger
+{{- if .HasMessageQueue}}
+	userRepo  domain.UserRepository
+	publisher domain.UserPublisher
+{{- else}}
+	userRepo domain.UserRepository
+{{- end}}
 }
 
-// NewService creates a new user use case service.
-func NewService(userRepo repository.UserRepository, logger *slog.Logger) *Service {
+func NewService(
+	userRepo domain.UserRepository,
+{{- if .HasMessageQueue}}
+	publisher domain.UserPublisher,
+{{- end}}
+) *Service {
 	return &Service{
+{{- if .HasMessageQueue}}
+		userRepo:  userRepo,
+		publisher: publisher,
+{{- else}}
 		userRepo: userRepo,
-		logger:   logger,
+{{- end}}
 	}
 }
 
-// CreateUser creates a new user.
 func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*entity.User, error) {
-	// Check if user already exists
 	existing, _ := s.userRepo.GetByEmail(ctx, input.Email)
 	if existing != nil {
-		return nil, ErrUserAlreadyExists
+		// Locale-coded error: transport translates UserEmailExists with input.Email
+		// substituted into the user's language (e.g. "Email foo@bar already exists").
+		return nil, errors.ConflictL(locale.UserEmailExists, input.Email)
 	}
 
 	user := entity.NewUser(input.Email, input.Name, input.Password)
-
 	if err := s.userRepo.Create(ctx, user); err != nil {
-		s.logger.Error("failed to create user", "error", err)
-		return nil, err
+		return nil, errors.Wrapf(err, "register user email=%s", input.Email)
 	}
 
-	s.logger.Info("user created", "id", user.ID, "email", user.Email)
+{{- if .HasMessageQueue}}
+	// best-effort publish — user is already persisted; broker outage shouldn't fail the request.
+	// Failure is logged so it can drive an alert; the API still returns success.
+	if err := s.publisher.PublishUserCreated(ctx, domain.UserCreated{
+		UserID:    user.ID,
+		Email:     user.Email,
+		Name:      user.Name,
+		CreatedAt: user.CreatedAt,
+	}); err != nil {
+		logctx.From(ctx).Error("publish user.created failed",
+			"user_id", user.ID,
+			"error", err,
+		)
+	}
+
+{{- end}}
+
 	return user, nil
 }
 
-// GetUser returns a user by ID.
 func (s *Service) GetUser(ctx context.Context, id int64) (*entity.User, error) {
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, ErrUserNotFound
+		return nil, errors.Wrapf(err, "get user id=%d", id)
 	}
 	return user, nil
 }
 
-// UpdateUser updates an existing user.
 func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInput) (*entity.User, error) {
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, ErrUserNotFound
+		return nil, errors.Wrapf(err, "update user id=%d: load", id)
 	}
 
 	if input.Name != "" {
@@ -62,26 +91,22 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInpu
 	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
-		s.logger.Error("failed to update user", "error", err, "id", id)
-		return nil, err
+		return nil, errors.Wrapf(err, "update user id=%d: persist", id)
 	}
-
-	s.logger.Info("user updated", "id", id)
 	return user, nil
 }
 
-// DeleteUser deletes a user by ID.
 func (s *Service) DeleteUser(ctx context.Context, id int64) error {
 	if err := s.userRepo.Delete(ctx, id); err != nil {
-		s.logger.Error("failed to delete user", "error", err, "id", id)
-		return err
+		return errors.Wrapf(err, "delete user id=%d", id)
 	}
-
-	s.logger.Info("user deleted", "id", id)
 	return nil
 }
 
-// ListUsers returns a paginated list of users.
-func (s *Service) ListUsers(ctx context.Context, limit, offset int) ([]*entity.User, error) {
-	return s.userRepo.List(ctx, limit, offset)
+func (s *Service) ListUsers(ctx context.Context, filter domain.UserFilter) ([]*entity.User, error) {
+	users, err := s.userRepo.List(ctx, filter)
+	if err != nil {
+		return nil, errors.Wrapf(err, "list users limit=%d offset=%d", filter.Limit, filter.Offset)
+	}
+	return users, nil
 }

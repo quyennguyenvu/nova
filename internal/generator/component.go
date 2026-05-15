@@ -71,9 +71,9 @@ type %sRepository interface {
 		return err
 	}
 
-	fmt.Printf("✅ Generated entity: %s\n", entityName)
-	fmt.Printf("   📄 %s\n", outPath)
-	fmt.Printf("   📄 %s\n", repoPath)
+	fmt.Fprintf(os.Stdout, "✅ Generated entity: %s\n", entityName)
+	fmt.Fprintf(os.Stdout, "   📄 %s\n", outPath)
+	fmt.Fprintf(os.Stdout, "   📄 %s\n", repoPath)
 
 	return nil
 }
@@ -89,17 +89,13 @@ func (g *ComponentGenerator) GenerateUseCase(name string) error {
 
 import (
 	"context"
-	"log/slog"
 )
 
 type Service struct {
-	logger *slog.Logger
 }
 
-func NewService(logger *slog.Logger) *Service {
-	return &Service{
-		logger: logger,
-	}
+func NewService() *Service {
+	return &Service{}
 }
 
 func (s *Service) Create%s(ctx context.Context, input Create%sInput) (interface{}, error) {
@@ -144,10 +140,10 @@ var (
 		if err := writeFile(path, content); err != nil {
 			return err
 		}
-		fmt.Printf("   📄 %s\n", path)
+		fmt.Fprintf(os.Stdout, "   📄 %s\n", path)
 	}
 
-	fmt.Printf("✅ Generated use case: %s\n", lowerName)
+	fmt.Fprintf(os.Stdout, "✅ Generated use case: %s\n", lowerName)
 	return nil
 }
 
@@ -196,8 +192,8 @@ func (h *%sHandler) Delete(c *fiber.Ctx) error {
 		return err
 	}
 
-	fmt.Printf("✅ Generated handler: %sHandler\n", entityName)
-	fmt.Printf("   📄 %s\n", outPath)
+	fmt.Fprintf(os.Stdout, "✅ Generated handler: %sHandler\n", entityName)
+	fmt.Fprintf(os.Stdout, "   📄 %s\n", outPath)
 	return nil
 }
 
@@ -253,8 +249,8 @@ func (r *%sRepository) List(ctx context.Context, limit, offset int) ([]interface
 		return err
 	}
 
-	fmt.Printf("✅ Generated repository: %sRepository (%s)\n", entityName, repoType)
-	fmt.Printf("   📄 %s\n", outPath)
+	fmt.Fprintf(os.Stdout, "✅ Generated repository: %sRepository (%s)\n", entityName, repoType)
+	fmt.Fprintf(os.Stdout, "   📄 %s\n", outPath)
 	return nil
 }
 
@@ -262,10 +258,10 @@ func (r *%sRepository) List(ctx context.Context, limit, offset int) ([]interface
 
 func writeFile(path, content string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func toTitle(s string) string {

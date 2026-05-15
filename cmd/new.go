@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -11,27 +12,26 @@ import (
 	"nova/internal/prompt"
 )
 
-var newCmd = &cobra.Command{
-	Use:   "new [project-name]",
-	Short: "Generate a new Go Clean Architecture project",
-	Long: `Generate a new Go project with Clean Architecture structure.
-
+func newCommand() *cobra.Command {
+	var newCmd = &cobra.Command{
+		Use:   "new [project-name]",
+		Short: "Generate a new Go Clean Architecture project",
+		Long: `
+Generate a new Go project with Clean Architecture structure.
 Run without arguments for interactive mode, or use flags to skip prompts.
 
 Examples:
-  nova new
-  nova new myproject --module=github.com/myorg/myproject --transport=http
-  nova new myproject --http-framework=fiber --database=postgres --db-driver=pgx`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: runNew,
-}
-
-func init() {
-	rootCmd.AddCommand(newCmd)
+	nova new
+	nova new myproject --module=github.com/myorg/myproject --transport=http
+	nova new myproject --http-framework=fiber --database=postgres --db-driver=pgx`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runNew,
+	}
 
 	f := newCmd.Flags()
 	f.String("module", "", "Go module name (e.g. github.com/myorg/myproject)")
-	f.String("transport", "", "Transport layer: http, grpc, both")
+	f.String("type", "", "Project type: api, worker, cron, cli")
+	f.String("transport", "", "Transport layer: http, grpc, cron, cli")
 	f.String("http-framework", "", "HTTP framework: fiber, gin, chi, echo, nethttp")
 	f.Bool("grpc-gateway", false, "Include gRPC-Gateway")
 	f.String("database", "", "Database: postgres, mysql, sqlite, mongodb, none")
@@ -44,6 +44,8 @@ func init() {
 	f.Bool("docker", false, "Include Docker setup")
 	f.Bool("makefile", false, "Include Makefile")
 	f.String("ci", "", "CI/CD: github, none")
+
+	return newCmd
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
@@ -55,15 +57,15 @@ func runNew(cmd *cobra.Command, args []string) error {
 
 	// Check if any flag was explicitly set
 	flagsSet := false
-	cmd.Flags().Visit(func(f *pflag.Flag) {
+	cmd.Flags().Visit(func(_ *pflag.Flag) {
 		flagsSet = true
 	})
 
 	if flagsSet {
 		applyFlags(cmd, cfg)
 	} else {
-		fmt.Println("🚀 Nova — Go Clean Architecture Project Generator")
-		fmt.Println()
+		fmt.Fprintln(os.Stdout, "🚀 Nova — Go Clean Architecture Project Generator")
+		fmt.Fprintln(os.Stdout)
 		if err := prompt.RunInteractive(cfg); err != nil {
 			return fmt.Errorf("prompt error: %w", err)
 		}
@@ -74,19 +76,19 @@ func runNew(cmd *cobra.Command, args []string) error {
 		cfg.ModuleName = fmt.Sprintf("github.com/myorg/%s", cfg.ProjectName)
 	}
 
-	fmt.Printf("\n📦 Generating project: %s\n", cfg.ProjectName)
-	fmt.Printf("   Module: %s\n", cfg.ModuleName)
-	fmt.Printf("   Transport: %s\n", cfg.Transport)
+	fmt.Fprintf(os.Stdout, "\n📦 Generating project: %s\n", cfg.ProjectName)
+	fmt.Fprintf(os.Stdout, "   Module: %s\n", cfg.ModuleName)
+	fmt.Fprintf(os.Stdout, "   Transport: %s\n", cfg.Transport)
 	if cfg.HasHTTP() {
-		fmt.Printf("   HTTP Framework: %s\n", cfg.HTTPFramework)
+		fmt.Fprintf(os.Stdout, "   HTTP Framework: %s\n", cfg.HTTPFramework)
 	}
 	if cfg.HasDatabase() {
-		fmt.Printf("   Database: %s (%s)\n", cfg.Database, cfg.DBDriver)
+		fmt.Fprintf(os.Stdout, "   Database: %s (%s)\n", cfg.Database, cfg.DBDriver)
 	}
 	if cfg.HasCache() {
-		fmt.Printf("   Cache: %s\n", cfg.Cache)
+		fmt.Fprintf(os.Stdout, "   Cache: %s\n", cfg.Cache)
 	}
-	fmt.Println()
+	fmt.Fprintln(os.Stdout)
 
 	gen := generator.New(cfg)
 	outputDir := cfg.ProjectName
@@ -95,19 +97,19 @@ func runNew(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generation failed: %w", err)
 	}
 
-	fmt.Printf("✅ Project generated successfully in ./%s\n\n", cfg.ProjectName)
-	fmt.Println("Next steps:")
-	fmt.Printf("  cd %s\n", cfg.ProjectName)
-	fmt.Println("  go mod tidy")
+	fmt.Fprintf(os.Stdout, "✅ Project generated successfully in ./%s\n\n", cfg.ProjectName)
+	fmt.Fprintln(os.Stdout, "Next steps:")
+	fmt.Fprintf(os.Stdout, "  cd %s\n", cfg.ProjectName)
+	fmt.Fprintln(os.Stdout, "  go mod tidy")
 	if cfg.IncludeMake {
-		fmt.Println("  make run")
+		fmt.Fprintln(os.Stdout, "  make run")
 	} else {
-		fmt.Println("  go run ./cmd/api")
+		fmt.Fprintln(os.Stdout, "  go run ./cmd/api")
 	}
 	if cfg.IncludeDocker {
-		fmt.Println("  # or: docker-compose up")
+		fmt.Fprintln(os.Stdout, "  # or: docker-compose up")
 	}
-	fmt.Println()
+	fmt.Fprintln(os.Stdout)
 
 	return nil
 }

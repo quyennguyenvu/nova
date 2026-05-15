@@ -1,0 +1,22 @@
+package httputil
+
+import (
+	"github.com/labstack/echo/v4"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// WriteJSON writes a successful JSON response wrapped in the standard envelope.
+func WriteJSON(c echo.Context, status int, data any) error {
+	return c.JSON(status, SuccessResponse(data))
+}
+
+// WriteError writes an error JSON response wrapped in the standard envelope.
+// The HTTP status is taken from app.Code. The message is translated using the
+// language carried in the request context (set by the Locale middleware) when
+// app carries a Locale code; otherwise app.Message is used as-is.
+func WriteError(c echo.Context, app *errors.AppError) error {
+	lang := locale.LanguageFromContext(c.Request().Context())
+	return c.JSON(app.Code, ErrorResponseFromApp(app, lang))
+}

@@ -2,88 +2,82 @@ package postgres
 
 import (
 	"context"
-	"fmt"
+	stderrors "errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"{{.ModuleName}}/internal/adapter/repository/postgres/dbgen"
+	"{{.ModuleName}}/internal/adapter/repository/postgres/mapper"
+	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/pkg/errors"
 )
 
-// UserRepository implements domain.UserRepository using PostgreSQL.
+var _ domain.UserRepository = (*UserRepository)(nil)
+
+// UserRepository implements domain.UserRepository using sqlc-generated queries.
+// It never calls row.Scan directly — all hydration goes through the mapper package.
 type UserRepository struct {
-	pool *pgxpool.Pool
+	qx *qx
 }
 
-// NewUserRepository creates a new PostgreSQL user repository.
 func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
-	return &UserRepository{pool: pool}
+	return &UserRepository{qx: newQX(pool)}
 }
 
 func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
-	query := `
-		INSERT INTO users (email, name, password, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id`
-
-	return r.pool.QueryRow(ctx, query,
-		user.Email, user.Name, user.Password, user.CreatedAt, user.UpdatedAt,
-	).Scan(&user.ID)
+	row, err := r.qx.Q(ctx).CreateUser(ctx, mapper.UserToCreateParams(user))
+	if err != nil {
+		return errors.Wrapf(err, "user repo: insert email=%s", user.Email)
+	}
+	user.ID = row.ID
+	return nil
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (*entity.User, error) {
-	query := `SELECT id, email, name, password, created_at, updated_at FROM users WHERE id = $1`
-
-	user := &entity.User{}
-	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&user.ID, &user.Email, &user.Name, &user.Password, &user.CreatedAt, &user.UpdatedAt,
-	)
+	row, err := r.qx.Q(ctx).GetUserByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("user not found: %w", err)
+		if stderrors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.Wrapf(errors.ErrNotFound, "user repo: select id=%d", id)
+		}
+		return nil, errors.Wrapf(err, "user repo: select id=%d", id)
 	}
-	return user, nil
+	return mapper.UserToEntity(row), nil
 }
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
-	query := `SELECT id, email, name, password, created_at, updated_at FROM users WHERE email = $1`
-
-	user := &entity.User{}
-	err := r.pool.QueryRow(ctx, query, email).Scan(
-		&user.ID, &user.Email, &user.Name, &user.Password, &user.CreatedAt, &user.UpdatedAt,
-	)
+	row, err := r.qx.Q(ctx).GetUserByEmail(ctx, email)
 	if err != nil {
-		return nil, fmt.Errorf("user not found: %w", err)
+		if stderrors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.Wrapf(errors.ErrNotFound, "user repo: select email=%s", email)
+		}
+		return nil, errors.Wrapf(err, "user repo: select email=%s", email)
 	}
-	return user, nil
+	return mapper.UserToEntity(row), nil
 }
 
 func (r *UserRepository) Update(ctx context.Context, user *entity.User) error {
-	query := `UPDATE users SET name = $1, updated_at = NOW() WHERE id = $2`
-	_, err := r.pool.Exec(ctx, query, user.Name, user.ID)
-	return err
+	if err := r.qx.Q(ctx).UpdateUser(ctx, mapper.UserToUpdateParams(user)); err != nil {
+		return errors.Wrapf(err, "user repo: update id=%d", user.ID)
+	}
+	return nil
 }
 
 func (r *UserRepository) Delete(ctx context.Context, id int64) error {
-	query := `DELETE FROM users WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
+	if err := r.qx.Q(ctx).DeleteUser(ctx, id); err != nil {
+		return errors.Wrapf(err, "user repo: delete id=%d", id)
+	}
+	return nil
 }
 
-func (r *UserRepository) List(ctx context.Context, limit, offset int) ([]*entity.User, error) {
-	query := `SELECT id, email, name, password, created_at, updated_at FROM users ORDER BY id LIMIT $1 OFFSET $2`
-
-	rows, err := r.pool.Query(ctx, query, limit, offset)
+func (r *UserRepository) List(ctx context.Context, filter domain.UserFilter) ([]*entity.User, error) {
+	rows, err := r.qx.Q(ctx).ListUsers(ctx, dbgen.ListUsersParams{
+		Limit:  int32(filter.Limit),
+		Offset: int32(filter.Offset),
+	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "user repo: list")
 	}
-	defer rows.Close()
-
-	var users []*entity.User
-	for rows.Next() {
-		user := &entity.User{}
-		if err := rows.Scan(&user.ID, &user.Email, &user.Name, &user.Password, &user.CreatedAt, &user.UpdatedAt); err != nil {
-			return nil, err
-		}
-		users = append(users, user)
-	}
-	return users, nil
+	return mapper.UsersToEntities(rows), nil
 }

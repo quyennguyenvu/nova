@@ -1,0 +1,14 @@
+package pubsub
+
+import "time"
+
+// Wire-format message DTOs — these own json tags.
+// Domain events have NO json tags. The publisher maps domain → message DTO before serializing.
+
+// UserCreatedMessage is the wire format for the "user.created" topic.
+type UserCreatedMessage struct {
+	UserID    int64     `json:"userId"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"createdAt"`
+}

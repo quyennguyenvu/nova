@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"nova/internal/config"
 
@@ -17,6 +18,16 @@ import (
 
 //go:embed all:templates
 var templateFS embed.FS
+
+const (
+	postgres = "postgres"
+	mysql    = "mysql"
+	mongodb  = "mongodb"
+	yaml     = "yaml"
+	toml     = "toml"
+	kafka    = "kafka"
+	rabbitmq = "rabbitmq"
+)
 
 // Generator creates a new project from templates.
 type Generator struct {
@@ -49,7 +60,7 @@ type templateFile struct {
 
 // Generate creates the full project structure in the given output directory.
 func (g *Generator) Generate(outputDir string) error {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -69,88 +80,379 @@ func (g *Generator) Generate(outputDir string) error {
 }
 
 func (g *Generator) buildFileList() []templateFile {
+	var files []templateFile
+	files = append(files, g.entryPointFiles()...)
+	files = append(files, g.rootFiles()...)
+	files = append(files, g.domainFiles()...)
+	files = append(files, g.usecaseFiles()...)
+	files = append(files, g.adapterFiles()...)
+	files = append(files, g.transportFiles()...)
+	files = append(files, g.infrastructureFiles()...)
+	files = append(files, g.pkgFiles()...)
+	files = append(files, g.migrationFiles()...)
+	files = append(files, g.sqlcFiles()...)
+	files = append(files, g.toolingFiles()...)
+	return files
+}
+
+// sqlcEngineAlias maps cfg.Database to the template-filename prefix used for
+// sqlc config + queries (pg_sqlc.yaml.tmpl, mysql_sqlc.yaml.tmpl, …).
+func sqlcEngineAlias(db string) string {
+	switch db {
+	case postgres:
+		return "pg"
+	case mysql:
+		return "mysql"
+	default:
+		return ""
+	}
+}
+
+// sqlcFiles registers the sqlc config + per-engine query templates. Source
+// templates are engine-prefixed (pg_sqlc.yaml.tmpl, mysql_user.sql.tmpl) so
+// both variants live side-by-side, but the generated project sees clean
+// names: sqlc/sqlc.yaml, sqlc/query/user.sql.
+func (g *Generator) sqlcFiles() []templateFile {
 	cfg := g.cfg
-	files := []templateFile{
-		// go.mod & root files
+	if cfg.QueryGen != "sqlc" || !cfg.HasSQL() {
+		return nil
+	}
+	engine := sqlcEngineAlias(cfg.Database)
+	if engine == "" {
+		return nil
+	}
+	return []templateFile{
+		{
+			fmt.Sprintf("templates/sqlc/%s_sqlc.yaml.tmpl", engine),
+			"sqlc/sqlc.yaml",
+			true,
+		},
+		{
+			fmt.Sprintf("templates/sqlc/query/%s_user.sql.tmpl", engine),
+			"sqlc/query/user.sql",
+			true,
+		},
+	}
+}
+
+func (g *Generator) rootFiles() []templateFile {
+	return []templateFile{
 		{"templates/gomod.tmpl", "go.mod", true},
 		{"templates/gitignore.tmpl", ".gitignore", true},
+		{"templates/main.go.tmpl", "main.go", true},
 		{"templates/env.example.tmpl", ".env.example", true},
 		{"templates/README.md.tmpl", "README.md", true},
+	}
+}
 
-		// Domain layer
+func (g *Generator) domainFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
 		{"templates/domain/entity/user.go.tmpl", "internal/domain/entity/user.go", true},
-		{"templates/domain/repository/user_repository.go.tmpl", "internal/domain/repository/user_repository.go", true},
-		{"templates/domain/service/user_service.go.tmpl", "internal/domain/service/user_service.go", true},
+		{"templates/domain/user.go.tmpl", "internal/domain/user.go", true},
+		{"templates/domain/tx_manager.go.tmpl", "internal/domain/tx_manager.go", true},
+		{"templates/domain/identity/principal.go.tmpl", "internal/domain/identity/principal.go", true},
 		{"templates/domain/valueobject/email.go.tmpl", "internal/domain/valueobject/email.go", true},
+		{"templates/domain/user_publisher.go.tmpl", "internal/domain/user_publisher.go", cfg.HasMessageQueue()},
+	}
+}
 
-		// Use case layer
+func (g *Generator) usecaseFiles() []templateFile {
+	return []templateFile{
 		{"templates/usecase/user/service.go.tmpl", "internal/usecase/user/service.go", true},
 		{"templates/usecase/user/dto.go.tmpl", "internal/usecase/user/dto.go", true},
-		{"templates/usecase/user/errors.go.tmpl", "internal/usecase/user/errors.go", true},
+	}
+}
 
-		// Adapter - repository
-		{"templates/adapter/repository/postgres/user_repository.go.tmpl", "internal/adapter/repository/postgres/user_repository.go", cfg.HasSQL() && (cfg.Database == "postgres")},
-		{"templates/adapter/repository/mysql/user_repository.go.tmpl", "internal/adapter/repository/mysql/user_repository.go", cfg.HasSQL() && (cfg.Database == "mysql")},
-		{"templates/adapter/repository/cache/user_cache.go.tmpl", "internal/adapter/repository/cache/user_cache.go", cfg.HasCache()},
+func (g *Generator) adapterFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
+		// Pubsub
+		{
+			"templates/adapter/pubsub/user_message.go.tmpl",
+			"internal/adapter/pubsub/user_message.go",
+			cfg.HasMessageQueue(),
+		},
+		{"templates/adapter/pubsub/publisher.go.tmpl", "internal/adapter/pubsub/publisher.go", cfg.HasMessageQueue()},
+		{
+			"templates/adapter/pubsub/user_publisher.go.tmpl",
+			"internal/adapter/pubsub/user_publisher.go",
+			cfg.HasMessageQueue(),
+		},
+		// Repository — postgres
+		{
+			"templates/adapter/repository/postgres/qx.go.tmpl",
+			"internal/adapter/repository/postgres/qx.go",
+			cfg.HasSQL() && (cfg.Database == postgres),
+		},
+		{
+			"templates/adapter/repository/postgres/tx_manager.go.tmpl",
+			"internal/adapter/repository/postgres/tx_manager.go",
+			cfg.HasSQL() && (cfg.Database == postgres),
+		},
+		{
+			"templates/adapter/repository/postgres/mapper/user.go.tmpl",
+			"internal/adapter/repository/postgres/mapper/user.go",
+			cfg.HasSQL() && (cfg.Database == postgres),
+		},
+		{
+			"templates/adapter/repository/postgres/user_repository.go.tmpl",
+			"internal/adapter/repository/postgres/user_repository.go",
+			cfg.HasSQL() && (cfg.Database == postgres),
+		},
+		// Repository — mysql
+		{
+			"templates/adapter/repository/mysql/qx.go.tmpl",
+			"internal/adapter/repository/mysql/qx.go",
+			cfg.HasSQL() && (cfg.Database == mysql),
+		},
+		{
+			"templates/adapter/repository/mysql/tx_manager.go.tmpl",
+			"internal/adapter/repository/mysql/tx_manager.go",
+			cfg.HasSQL() && (cfg.Database == mysql),
+		},
+		{
+			"templates/adapter/repository/mysql/mapper/user.go.tmpl",
+			"internal/adapter/repository/mysql/mapper/user.go",
+			cfg.HasSQL() && (cfg.Database == mysql),
+		},
+		{
+			"templates/adapter/repository/mysql/user_repository.go.tmpl",
+			"internal/adapter/repository/mysql/user_repository.go",
+			cfg.HasSQL() && (cfg.Database == mysql),
+		},
+		// Repository — cache
+		{
+			"templates/adapter/repository/redis/user_cache.go.tmpl",
+			"internal/adapter/repository/redis/user_cache.go",
+			cfg.HasRedis(),
+		},
+	}
+}
 
-		// Adapter - HTTP handler
-		{"templates/adapter/handler/http/v1/user_handler.go.tmpl", "internal/adapter/handler/http/v1/user_handler.go", cfg.HasHTTP()},
-		{"templates/adapter/handler/http/v1/router.go.tmpl", "internal/adapter/handler/http/v1/router.go", cfg.HasHTTP()},
-		{"templates/adapter/handler/http/middleware/auth.go.tmpl", "internal/adapter/handler/http/middleware/auth.go", cfg.HasHTTP()},
-		{"templates/adapter/handler/http/middleware/logging.go.tmpl", "internal/adapter/handler/http/middleware/logging.go", cfg.HasHTTP()},
-		{"templates/adapter/handler/http/middleware/recovery.go.tmpl", "internal/adapter/handler/http/middleware/recovery.go", cfg.HasHTTP()},
-		{"templates/adapter/handler/http/middleware/requestid.go.tmpl", "internal/adapter/handler/http/middleware/requestid.go", cfg.HasHTTP()},
-		{"templates/adapter/handler/http/middleware/cors.go.tmpl", "internal/adapter/handler/http/middleware/cors.go", cfg.HasHTTP()},
+func (g *Generator) transportFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
+		// HTTP app — Registrar interface + NewApp (middleware, healthz, feature
+		// routes). Source is framework-prefixed so all variants live side-by-side;
+		// generated as transport/http/app.go.
+		{
+			fmt.Sprintf("templates/transport/http/%s_app.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/app.go",
+			cfg.HasHTTP(),
+		},
 
-		// Adapter - gRPC handler
-		{"templates/adapter/handler/grpc/user_handler.go.tmpl", "internal/adapter/handler/grpc/user_handler.go", cfg.HasGRPC()},
+		// HTTP v1/user — framework-agnostic DTO + assembler.
+		{
+			"templates/transport/http/v1/user/dto.go.tmpl",
+			"internal/transport/http/v1/user/dto.go",
+			cfg.HasHTTP(),
+		},
+		{
+			"templates/transport/http/v1/user/assembler.go.tmpl",
+			"internal/transport/http/v1/user/assembler.go",
+			cfg.HasHTTP(),
+		},
+		// HTTP v1/user — per-framework handler + router. Source templates are
+		// framework-prefixed (fiber_handler.go.tmpl, …) so all variants live
+		// side-by-side, but the generated output drops the prefix so the
+		// project sees clean names: handler.go, router.go.
+		{
+			fmt.Sprintf("templates/transport/http/v1/user/%s_handler.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/v1/user/handler.go",
+			cfg.HasHTTP(),
+		},
+		{
+			fmt.Sprintf("templates/transport/http/v1/user/%s_router.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/v1/user/router.go",
+			cfg.HasHTTP(),
+		},
+		// HTTP middleware — same pattern: framework-prefixed source, clean output.
+		{
+			fmt.Sprintf("templates/transport/http/middleware/%s_auth.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/auth.go",
+			cfg.HasHTTP(),
+		},
+		{
+			fmt.Sprintf("templates/transport/http/middleware/%s_cors.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/cors.go",
+			cfg.HasHTTP(),
+		},
+		{
+			fmt.Sprintf("templates/transport/http/middleware/%s_locale.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/locale.go",
+			cfg.HasHTTP(),
+		},
+		{
+			fmt.Sprintf("templates/transport/http/middleware/%s_logging.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/logging.go",
+			cfg.HasHTTP(),
+		},
+		{
+			fmt.Sprintf("templates/transport/http/middleware/%s_recovery.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/recovery.go",
+			cfg.HasHTTP(),
+		},
+		{
+			fmt.Sprintf("templates/transport/http/middleware/%s_requestid.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/requestid.go",
+			cfg.HasHTTP(),
+		},
+		// gRPC handler
+		{
+			"templates/transport/grpc/user_handler.go.tmpl",
+			"internal/transport/grpc/user.go",
+			cfg.HasGRPC(),
+		},
+		// Pubsub
+		{
+			"templates/adapter/pubsub/user_message.go.tmpl",
+			"internal/adapter/pubsub/user_message.go",
+			cfg.HasMessageQueue(),
+		},
+		{"templates/adapter/pubsub/publisher.go.tmpl", "internal/adapter/pubsub/publisher.go", cfg.HasMessageQueue()},
+		{
+			"templates/adapter/pubsub/user_publisher.go.tmpl",
+			"internal/adapter/pubsub/user_publisher.go",
+			cfg.HasMessageQueue(),
+		},
+	}
+}
 
-		// Adapter - presenter
-		{"templates/adapter/presenter/json_presenter.go.tmpl", "internal/adapter/presenter/json_presenter.go", cfg.HasHTTP()},
-
-		// Infrastructure
+func (g *Generator) infrastructureFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
 		{"templates/infrastructure/config/config.go.tmpl", "internal/infrastructure/config/config.go", true},
-		{"templates/infrastructure/config/config.yaml.tmpl", "config/config.yaml", cfg.ConfigFormat == "yaml"},
-		{"templates/infrastructure/config/config.example.yaml.tmpl", "config/config.example.yaml", cfg.ConfigFormat == "yaml"},
-		{"templates/infrastructure/database/postgres.go.tmpl", "internal/infrastructure/database/postgres.go", cfg.Database == "postgres"},
-		{"templates/infrastructure/database/mysql.go.tmpl", "internal/infrastructure/database/mysql.go", cfg.Database == "mysql"},
+		{"templates/infrastructure/config/constant.go.tmpl", "internal/infrastructure/config/constant.go", true},
+		{
+			"templates/infrastructure/config/base.yaml.tmpl",
+			"internal/infrastructure/config/base.yaml",
+			cfg.ConfigFormat == yaml,
+		},
+		{
+			"templates/infrastructure/config/development.yaml.tmpl",
+			"internal/infrastructure/config/development.yaml",
+			cfg.ConfigFormat == yaml,
+		},
+		{
+			"templates/infrastructure/config/production.yaml.tmpl",
+			"internal/infrastructure/config/production.yaml",
+			cfg.ConfigFormat == yaml,
+		},
+		{
+			"templates/infrastructure/jwt/claims.go.tmpl",
+			"internal/infrastructure/jwt/claims.go",
+			true,
+		},
+		{
+			"templates/infrastructure/jwt/verifier.go.tmpl",
+			"internal/infrastructure/jwt/verifier.go",
+			true,
+		},
+		{
+			"templates/infrastructure/database/postgres.go.tmpl",
+			"internal/infrastructure/database/postgres.go",
+			cfg.Database == postgres,
+		},
+		{
+			"templates/infrastructure/database/mysql.go.tmpl",
+			"internal/infrastructure/database/mysql.go",
+			cfg.Database == mysql,
+		},
 		{"templates/infrastructure/cache/redis.go.tmpl", "internal/infrastructure/cache/redis.go", cfg.HasRedis()},
-		{"templates/infrastructure/server/http.go.tmpl", "internal/infrastructure/server/http.go", cfg.HasHTTP()},
+		{
+			"templates/infrastructure/pubsub/kafka.go.tmpl",
+			"internal/infrastructure/pubsub/kafka.go",
+			cfg.MessageQueue == kafka,
+		},
+		{
+			"templates/infrastructure/pubsub/rabbitmq.go.tmpl",
+			"internal/infrastructure/pubsub/rabbitmq.go",
+			cfg.MessageQueue == rabbitmq,
+		},
+		{
+			fmt.Sprintf("templates/infrastructure/server/%s_http.go.tmpl", cfg.HTTPFramework),
+			"internal/infrastructure/server/http.go",
+			cfg.HasHTTP(),
+		},
 		{"templates/infrastructure/server/grpc.go.tmpl", "internal/infrastructure/server/grpc.go", cfg.HasGRPC()},
-		{"templates/infrastructure/logger/logger.go.tmpl", "internal/infrastructure/logger/logger.go", true},
+		{"templates/infrastructure/logger/zerolog.go.tmpl", "internal/infrastructure/logger/zerolog.go", true},
+		{"templates/infrastructure/tracing/otel.go.tmpl", "internal/infrastructure/tracing/otel.go", true},
 		{"templates/infrastructure/di/container.go.tmpl", "internal/infrastructure/di/container.go", cfg.UseManualDI()},
 		{"templates/infrastructure/di/wire.go.tmpl", "internal/infrastructure/di/wire.go", cfg.UseWire()},
+		{"templates/infrastructure/di/provider.go.tmpl", "internal/infrastructure/di/provider.go", cfg.HasHTTP()},
+		{
+			"templates/infrastructure/di/app.go.tmpl",
+			"internal/infrastructure/di/app.go",
+			cfg.HasHTTP() || cfg.HasGRPC(),
+		},
+	}
+}
 
-		// Entry points
-		{"templates/cmd/api/main.go.tmpl", "cmd/api/main.go", cfg.HasHTTP()},
-		{"templates/cmd/grpc/main.go.tmpl", "cmd/grpc/main.go", cfg.HasGRPC()},
-		{"templates/cmd/migrate/main.go.tmpl", "cmd/migrate/main.go", cfg.HasDatabase()},
+func (g *Generator) entryPointFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
+		{"templates/cmd/root.go.tmpl", "cmd/root.go", cfg.HasHTTP()},
+		{"templates/cmd/api.go.tmpl", "cmd/api.go", cfg.HasHTTP()},
+		{"templates/cmd/grpc.go.tmpl", "cmd/grpc.go", cfg.HasGRPC()},
+		{"templates/app/api.go.tmpl", "internal/app/api.go", cfg.HasHTTP()},
+		{"templates/app/grpc.go.tmpl", "internal/app/grpc.go", cfg.HasGRPC()},
+	}
+}
 
-		// Public packages
+func (g *Generator) pkgFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
 		{"templates/pkg/errors/errors.go.tmpl", "pkg/errors/errors.go", true},
-		{"templates/pkg/validator/validator.go.tmpl", "pkg/validator/validator.go", true},
 		{"templates/pkg/httputil/response.go.tmpl", "pkg/httputil/response.go", cfg.HasHTTP()},
+		{
+			fmt.Sprintf("templates/pkg/httputil/%s_writer.go.tmpl", cfg.HTTPFramework),
+			"pkg/httputil/writer.go",
+			cfg.HasHTTP(),
+		},
+		{"templates/pkg/locale/locale.go.tmpl", "pkg/locale/locale.go", true},
+		{"templates/pkg/locale/locale_en.go.tmpl", "pkg/locale/locale_en.go", true},
+		{"templates/pkg/locale/locale_vi.go.tmpl", "pkg/locale/locale_vi.go", true},
+		{"templates/pkg/observability/observability.go.tmpl", "pkg/observability/observability.go", true},
+		{"templates/pkg/logctx/logctx.go.tmpl", "pkg/logctx/logctx.go", true},
+	}
+}
 
-		// Migrations
-		{"templates/migrations/000001_create_users_table.up.sql.tmpl", "migrations/000001_create_users_table.up.sql", cfg.HasSQL()},
-		{"templates/migrations/000001_create_users_table.down.sql.tmpl", "migrations/000001_create_users_table.down.sql", cfg.HasSQL()},
+func (g *Generator) migrationFiles() []templateFile {
+	cfg := g.cfg
 
-		// Docker
-		{"templates/Dockerfile.tmpl", "Dockerfile", cfg.IncludeDocker},
-		{"templates/docker-compose.yaml.tmpl", "docker-compose.yaml", cfg.IncludeDocker},
-
-		// Makefile
-		{"templates/Makefile.tmpl", "Makefile", cfg.IncludeMake},
-
-		// CI & GitHub
-		{"templates/ci/github-ci.yaml.tmpl", ".github/workflows/ci.yaml", cfg.IncludeCI},
-		{"templates/github/pull_request_template.md.tmpl", ".github/pull_request_template.md", cfg.IncludeCI},
-
-		// API
-		{"templates/api/openapi/openapi.yaml.tmpl", "api/openapi/openapi.yaml", cfg.HasHTTP()},
+	now := time.Now().Format("20060102150405")
+	dir := "migrations"
+	if cfg.QueryGen == "sqlc" {
+		dir = "sqlc/migrations"
 	}
 
-	return files
+	filename := fmt.Sprintf("%s_create_users_table", now)
+	return []templateFile{
+		{
+			"templates/migrations/create_users_table.up.sql.tmpl",
+			fmt.Sprintf("%s/%s.up.sql", dir, filename),
+			cfg.HasSQL(),
+		},
+		{
+			"templates/migrations/create_users_table.down.sql.tmpl",
+			fmt.Sprintf("%s/%s.down.sql", dir, filename),
+			cfg.HasSQL(),
+		},
+	}
+}
+
+func (g *Generator) toolingFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
+		{"templates/Dockerfile.tmpl", "Dockerfile", cfg.IncludeDocker},
+		{"templates/Makefile.tmpl", "Makefile", cfg.IncludeMake},
+		{"templates/golangci.yaml.tmpl", ".golangci.yaml", true},
+		{"templates/ci/github-ci.yaml.tmpl", ".github/workflows/ci.yaml", cfg.IncludeCI},
+		{"templates/github/pull_request_template.md.tmpl", ".github/pull_request_template.md", cfg.IncludeCI},
+		{"templates/api/openapi/openapi.yaml.tmpl", "api/openapi/openapi.yaml", cfg.HasHTTP()},
+		{"templates/sqlfluff.tmpl", ".sqlfluff", true},
+	}
 }
 
 func (g *Generator) renderFile(tmplPath, outPath string) error {
@@ -168,21 +470,21 @@ func (g *Generator) renderFile(tmplPath, outPath string) error {
 
 	// Render
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, g.cfg); err != nil {
-		return fmt.Errorf("failed to execute template %s: %w", tmplPath, err)
+	if exeErr := tmpl.Execute(&buf, g.cfg); exeErr != nil {
+		return fmt.Errorf("failed to execute template %s: %w", tmplPath, exeErr)
 	}
 
 	// Create directory
 	dir := filepath.Dir(outPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	if mkdirErr := os.MkdirAll(dir, 0o750); mkdirErr != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, mkdirErr)
 	}
 
 	// Write file
-	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", outPath, err)
+	if writeErr := os.WriteFile(outPath, buf.Bytes(), 0o600); writeErr != nil {
+		return fmt.Errorf("failed to write file %s: %w", outPath, writeErr)
 	}
 
-	fmt.Printf("   📄 %s\n", outPath)
+	fmt.Fprintf(os.Stdout, "   📄 %s\n", outPath)
 	return nil
 }

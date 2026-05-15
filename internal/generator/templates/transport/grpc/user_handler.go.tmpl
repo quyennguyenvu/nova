@@ -1,0 +1,26 @@
+package grpc
+
+// TODO: Implement gRPC handlers.
+// This file is a placeholder. To use gRPC:
+// 1. Define your .proto files in api/proto/
+// 2. Generate Go code with protoc
+// 3. Implement the generated service interfaces here
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+)
+
+type UserHandler struct {
+	logger *logger.Logger
+}
+
+func NewUserHandler(log *logger.Logger) *UserHandler {
+	return &UserHandler{logger: log}
+}
+
+// Placeholder — implement the generated gRPC service interface.
+func (h *UserHandler) Ping(_ context.Context) string {
+	return "pong"
+}

@@ -1,0 +1,29 @@
+package postgres
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/adapter/repository/postgres/dbgen"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type qx struct {
+	pool *pgxpool.Pool
+	base *dbgen.Queries // bound to pool (non-tx)
+}
+
+func newQX(pool *pgxpool.Pool) *qx {
+	return &qx{
+		pool: pool,
+		base: dbgen.New(pool),
+	}
+}
+
+// Q returns a *dbgen.Queries bound to the current tx if present; otherwise to the pool.
+func (q *qx) Q(ctx context.Context) *dbgen.Queries {
+	if tx, ok := txFromCtx(ctx); ok {
+		return dbgen.New(tx)
+	}
+	return q.base
+}

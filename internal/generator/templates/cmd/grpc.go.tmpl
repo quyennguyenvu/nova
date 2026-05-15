@@ -1,0 +1,19 @@
+package cmd
+
+import (
+	"github.com/spf13/cobra"
+
+	"{{.ModuleName}}/internal/app"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+func grpcCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "grpc",
+		Short: "Start the gRPC server",
+		Run: func(*cobra.Command, []string) {
+			locale.NewMapping()
+			app.RunGRPCServer()
+		},
+	}
+}

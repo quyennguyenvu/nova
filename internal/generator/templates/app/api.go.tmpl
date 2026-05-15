@@ -1,0 +1,45 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"{{.ModuleName}}/internal/infrastructure/di"
+)
+
+func RunHTTPServer() {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Pre-DI failure has no logger yet — stderr + exit is the right tool here.
+	app, cleanup, err := di.InitializeHTTPServer(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize http server: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+
+	log := app.Logger
+	server := app.Server
+
+	errChan := make(chan error, 1)
+	go func() {
+		if startErr := server.Start(); startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
+			errChan <- startErr
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Info("shutdown signal received")
+	case startErr := <-errChan:
+		log.Error("server stopped with error", "error", startErr)
+	}
+
+	log.Info("shutting down server")
+}

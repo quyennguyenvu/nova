@@ -1,0 +1,20 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "/query"
+    schema:
+      - "/migrations"
+    database:
+      uri: ${MIGRATE_DATABASE_URL}
+    gen:
+      go:
+        package: "dbgen"
+        out: "../internal/adapter/repository/postgres/dbgen"
+        sql_package: "pgx/v5"
+        emit_prepared_queries: true
+        overrides:
+          - db_type: jsonb
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+            nullable: true

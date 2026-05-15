@@ -1,51 +1,81 @@
+// Package httputil holds the HTTP response envelope and per-framework writers.
+//
+// All success and error responses share a single shape:
+//
+//	{
+//	  "success": true|false,
+//	  "data":    <payload>,           // present on success
+//	  "error":   { "code": int, "message": string }, // present on error
+//	  "meta":    { "page": int, "per_page": int, "total": int } // optional pagination
+//	}
 package httputil
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 )
 
-// Response represents a standard API response.
+// Response is the single envelope for every HTTP response.
 type Response struct {
-	Success bool        `json:"success"`
-	Data    interface{} `json:"data,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	Meta    *Meta       `json:"meta,omitempty"`
+	Success bool       `json:"success"`
+	Data    any        `json:"data,omitempty"`
+	Error   *ErrorBody `json:"error,omitempty"`
+	Meta    *Meta      `json:"meta,omitempty"`
+}
+
+// ErrorBody is the machine-readable error payload.
+//
+// Code is the stable application error identifier (HTTP status when sourced from
+// *errors.AppError; locale code when sourced from *locale.LocaleError).
+type ErrorBody struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
 // Meta holds pagination metadata.
 type Meta struct {
 	Page    int `json:"page,omitempty"`
-	PerPage int `json:"per_page,omitempty"`
+	PerPage int `json:"perPage,omitempty"`
 	Total   int `json:"total,omitempty"`
 }
 
-// SuccessResponse creates a success response.
-func SuccessResponse(data interface{}) Response {
-	return Response{
-		Success: true,
-		Data:    data,
-	}
+// SuccessResponse builds a success envelope around data.
+func SuccessResponse(data any) Response {
+	return Response{Success: true, Data: data}
 }
 
-// ErrorResponse creates an error response.
-func ErrorResponse(msg string) Response {
+// ErrorResponseFromApp builds an error envelope from an *errors.AppError,
+// translating the message into lang when the AppError carries a Locale code.
+//
+// When app.Locale is non-zero the response uses the locale code as the
+// machine-readable identifier (more specific than the HTTP status) and the
+// message is the translated template with Args substituted. Otherwise the
+// envelope falls back to app.Code + app.Message as-is.
+//
+// A nil app is treated as a generic 500 in the requested language.
+func ErrorResponseFromApp(app *errors.AppError, lang locale.Language) Response {
+	if app == nil {
+		return Response{
+			Success: false,
+			Error: &ErrorBody{
+				Code:    http.StatusInternalServerError,
+				Message: locale.Translate(lang, locale.InternalError),
+			},
+		}
+	}
+	if app.Locale != 0 {
+		return Response{
+			Success: false,
+			Error: &ErrorBody{
+				Code:    int(app.Locale),
+				Message: locale.Translate(lang, app.Locale, app.Args...),
+			},
+		}
+	}
 	return Response{
 		Success: false,
-		Error:   msg,
+		Error:   &ErrorBody{Code: app.Code, Message: app.Message},
 	}
-}
-
-// WriteJSON writes a JSON response (for Chi / net/http handlers).
-func WriteJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(SuccessResponse(data))
-}
-
-// WriteError writes a JSON error response.
-func WriteError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(ErrorResponse(msg))
 }

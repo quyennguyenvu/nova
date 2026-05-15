@@ -1,50 +1,69 @@
 package server
 
 import (
-	"log/slog"
+	"context"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
-// GRPCServer wraps the gRPC server.
+// GRPCServer wraps the gRPC server with graceful shutdown.
 type GRPCServer struct {
 	server *grpc.Server
+	addr   string
 	cfg    *config.Config
-	logger *slog.Logger
+	logger *logger.Logger
 }
 
-// NewGRPCServer creates a new gRPC server.
-func NewGRPCServer(cfg *config.Config, logger *slog.Logger) *GRPCServer {
-	server := grpc.NewServer()
+// NewGRPCServer constructs the gRPC server and wires graceful shutdown.
+// Service registration is done by the caller via Server().
+func NewGRPCServer(ctx context.Context, cfg *config.Config, log *logger.Logger) (*GRPCServer, func(), error) {
+	addr := ":" + cfg.GRPC.Port
 
-	return &GRPCServer{
-		server: server,
+	s := &GRPCServer{
+		server: grpc.NewServer(),
+		addr:   addr,
 		cfg:    cfg,
-		logger: logger,
+		logger: log,
 	}
+
+	cleanup := func() {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		log.Info("shutting down gRPC server", "addr", addr)
+
+		done := make(chan struct{})
+		go func() {
+			s.server.GracefulStop()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			log.Info("gRPC server stopped cleanly")
+		case <-cleanupCtx.Done():
+			log.Warn("graceful shutdown timed out, forcing stop")
+			s.server.Stop()
+		}
+	}
+
+	return s, cleanup, nil
 }
 
 // Server returns the underlying gRPC server for service registration.
-func (s *GRPCServer) Server() *grpc.Server {
-	return s.server
-}
+func (s *GRPCServer) Server() *grpc.Server { return s.server }
 
-// Start starts the gRPC server.
-func (s *GRPCServer) Start(port string) error {
-	lis, err := net.Listen("tcp", ":"+port)
+// Start binds the listener and serves until the server is stopped.
+func (s *GRPCServer) Start() error {
+	lis, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return err
 	}
-
-	s.logger.Info("starting gRPC server", "port", port)
+	s.logger.Info("starting gRPC server", "addr", s.addr)
 	return s.server.Serve(lis)
-}
-
-// Stop gracefully stops the gRPC server.
-func (s *GRPCServer) Stop() {
-	s.logger.Info("stopping gRPC server...")
-	s.server.GracefulStop()
 }

@@ -1,0 +1,33 @@
+package middleware
+
+import (
+	"strings"
+
+	"github.com/gofiber/fiber/v2"
+
+	"{{.ModuleName}}/pkg/locale"
+)
+
+func parseLanguage(header string) locale.Language {
+	if header == "" {
+		return locale.LangEn
+	}
+	primary := strings.SplitN(header, ",", 2)[0]
+	lang := strings.SplitN(strings.TrimSpace(primary), "-", 2)[0]
+	switch locale.Language(lang) {
+	case locale.LangVi:
+		return locale.LangVi
+	default:
+		return locale.LangEn
+	}
+}
+
+// Locale extracts language from Accept-Language and stores it in request
+// context via pkg/locale so the response writer can read it back.
+func Locale() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		lang := parseLanguage(c.Get("Accept-Language"))
+		c.SetUserContext(locale.WithLanguage(c.UserContext(), lang))
+		return c.Next()
+	}
+}

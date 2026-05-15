@@ -4,7 +4,7 @@ A Go REST API built with Clean Architecture.
 
 ## Architecture
 
-```
+```bash
 internal/
 ├── domain/           # Layer 1: Enterprise Business Rules (innermost)
 │   ├── entity/       # Business entities - pure Go structs
@@ -34,18 +34,18 @@ internal/
 ### Prerequisites
 
 - Go 1.23+
-{{- if eq .Database "postgres"}}
+  {{- if eq .Database "postgres"}}
 - PostgreSQL 16+
-{{- end}}
-{{- if eq .Database "mysql"}}
+  {{- end}}
+  {{- if eq .Database "mysql"}}
 - MySQL 8+
-{{- end}}
-{{- if .HasRedis}}
+  {{- end}}
+  {{- if .HasRedis}}
 - Redis 7+
-{{- end}}
-{{- if .IncludeDocker}}
+  {{- end}}
+  {{- if .IncludeDocker}}
 - Docker & Docker Compose
-{{- end}}
+  {{- end}}
 
 ### Setup
 
@@ -84,15 +84,16 @@ go run ./cmd/api
 
 ### API Endpoints
 
-| Method | Endpoint           | Description      |
-|--------|-------------------|------------------|
-| POST   | /api/v1/users     | Create a user    |
-| GET    | /api/v1/users/:id | Get user by ID   |
-| PUT    | /api/v1/users/:id | Update a user    |
-| DELETE | /api/v1/users/:id | Delete a user    |
-| GET    | /api/v1/users     | List users       |
-| GET    | /health           | Health check     |
-| GET    | /ready            | Readiness check  |
+| Method | Endpoint          | Description     |
+| ------ | ----------------- | --------------- |
+| POST   | /api/v1/users     | Create a user   |
+| GET    | /api/v1/users/:id | Get user by ID  |
+| PUT    | /api/v1/users/:id | Update a user   |
+| DELETE | /api/v1/users/:id | Delete a user   |
+| GET    | /api/v1/users     | List users      |
+| GET    | /health           | Health check    |
+| GET    | /ready            | Readiness check |
+
 {{- end}}
 
 {{- if .IncludeMake}}
@@ -116,6 +117,7 @@ make docker-up      # Start Docker containers
 make docker-down    # Stop Docker containers
 {{- end}}
 ```
+
 {{- end}}
 
 ## Project Structure

@@ -1,0 +1,150 @@
+// Package locale is the source of truth for application error codes and their
+// per-language translations. A Locale is an int identifier; translations are
+// registered at startup via NewMapping() and resolved at the transport
+// boundary via Translate().
+//
+// Locale codes also carry an HTTP-status mapping (Locale.HTTPStatus) so the
+// errors package can build *AppError values directly from a *LocaleError —
+// keeping the originating layer (usecase) free of HTTP knowledge while still
+// classifying the error correctly at the boundary.
+package locale
+
+import (
+	"context"
+	stderrors "errors"
+	"fmt"
+	"net/http"
+)
+
+// Language represents a supported language.
+type Language string
+
+const (
+	LangEn Language = "en"
+	LangVi Language = "vi"
+)
+
+// Locale is an error code constant. Each code maps to translations per language.
+type Locale int
+
+// Error code ranges — organize by feature:
+//
+//	General:  -1000 to -1099
+//	User:     -1100 to -1199
+const (
+	// General errors
+	InternalError  Locale = -1000
+	InvalidRequest Locale = -1001
+	Unauthorized   Locale = -1002
+	RecordNotFound Locale = -1003
+
+	// User errors
+	UserNotFound    Locale = -1100
+	UserEmailExists Locale = -1101
+)
+
+// HTTPStatus returns the HTTP status that this locale code maps to. Add cases
+// here as new locale codes are introduced.
+func (l Locale) HTTPStatus() int {
+	switch l {
+	case RecordNotFound, UserNotFound:
+		return http.StatusNotFound
+	case Unauthorized:
+		return http.StatusUnauthorized
+	case InvalidRequest:
+		return http.StatusBadRequest
+	case UserEmailExists:
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// LocaleError carries a Locale code and the format arguments to be substituted
+// into the translated message at the transport boundary. Args are stored raw —
+// translation happens in Translate, not at error-creation time.
+type LocaleError struct {
+	Code Locale
+	Args []any
+}
+
+func (e *LocaleError) Error() string {
+	return fmt.Sprintf("error code: %d", e.Code)
+}
+
+// Err creates a LocaleError from this code.
+func (l Locale) Err() error {
+	return &LocaleError{Code: l}
+}
+
+// ErrFormat creates a LocaleError carrying args for later substitution into
+// the translated message.
+func (l Locale) ErrFormat(args ...any) error {
+	return &LocaleError{Code: l, Args: args}
+}
+
+// AsLocaleError tries to unwrap err as a *LocaleError.
+func AsLocaleError(err error) (*LocaleError, bool) {
+	var le *LocaleError
+	if ok := stderrors.As(err, &le); ok {
+		return le, true
+	}
+	return nil, false
+}
+
+// Mapping maps a Locale code → translated string.
+type Mapping map[Locale]string
+
+// translations is populated by NewMapping() — no init() side effects.
+var translations = map[Language]Mapping{}
+
+// NewMapping registers all language translations.
+// Call this ONCE at app startup (e.g. in main.go or DI provider).
+func NewMapping() {
+	enMapping()
+	viMapping()
+}
+
+// Translate resolves a Locale code to the user's language.
+// Falls back to English if language or code is not found.
+func Translate(lang Language, code Locale, args ...any) string {
+	mapping, ok := translations[lang]
+	if !ok {
+		mapping = translations[LangEn] // fallback
+	}
+	msg, ok := mapping[code]
+	if !ok {
+		if fallback, ok := translations[LangEn][code]; ok {
+			msg = fallback
+		} else {
+			return fmt.Sprintf("unknown error: %d", code)
+		}
+	}
+	if len(args) > 0 {
+		return fmt.Sprintf(msg, args...)
+	}
+	return msg
+}
+
+// --- Context plumbing ---------------------------------------------------------
+//
+// The chosen language travels from transport middleware to the response writer
+// through request context. Keeping the key + accessors here (rather than in a
+// per-framework middleware package) means any layer that wants the language —
+// including pkg/httputil and pkg/errors — can read it without importing
+// transport-specific code.
+
+type langCtxKey struct{}
+
+// WithLanguage returns a copy of ctx carrying lang.
+func WithLanguage(ctx context.Context, lang Language) context.Context {
+	return context.WithValue(ctx, langCtxKey{}, lang)
+}
+
+// LanguageFromContext retrieves the language from ctx, defaulting to English.
+func LanguageFromContext(ctx context.Context) Language {
+	if lang, ok := ctx.Value(langCtxKey{}).(Language); ok {
+		return lang
+	}
+	return LangEn
+}

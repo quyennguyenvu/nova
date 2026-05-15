@@ -1,0 +1,27 @@
+package middleware
+
+import (
+	"runtime/debug"
+
+	"github.com/gofiber/fiber/v2"
+
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// Recovery logs panics through the request-scoped logger and returns 500.
+func Recovery() fiber.Handler {
+	return func(c *fiber.Ctx) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				logctx.From(c.UserContext()).Error("panic recovered",
+					"panic", r,
+					"stack", string(debug.Stack()),
+				)
+				err = c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error": "internal server error",
+				})
+			}
+		}()
+		return c.Next()
+	}
+}

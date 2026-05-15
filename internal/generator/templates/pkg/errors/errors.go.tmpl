@@ -1,15 +1,93 @@
+// Package errors provides HTTP-focused application errors with a lightweight
+// caller-info trace, designed for one-line logging at the transport boundary.
+//
+// Each Wrap captures the call site (file:line, func, optional context message).
+// Frames accumulate innermost-first as the error travels up the layers, so the
+// outermost layer can log a single line that points to where the error came
+// from and the path it took to get out — without dumping a full stack.
+//
+// For i18n, the usecase layer can attach a locale.Locale (+ args) to the
+// AppError using the *L constructors (NotFoundL, ConflictL, …). The transport
+// boundary resolves the language from request context and substitutes args
+// into the translated template — so business code never names a language.
+//
+//	// repository
+//	if err := db.Exec(...); err != nil {
+//	    return errors.Wrap(err, "insert user")
+//	}
+//
+//	// usecase — locale-aware
+//	if existing != nil {
+//	    return errors.ConflictL(locale.UserEmailExists, input.Email)
+//	}
+//
+//	// transport — log ONCE; translate at write time
+//	appErr := errors.ToAppError(err)
+//	logger.Error("request failed",
+//	    "code",  appErr.Code,
+//	    "err",   appErr.Error(),
+//	    "trace", appErr.Trace())
+//	writeJSON(w, appErr.Code, appErr) // body is translated using ctx language
 package errors
 
 import (
+	stderrors "errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"{{.ModuleName}}/pkg/locale"
 )
 
-// AppError represents a structured application error.
+// Sentinel errors. Use errors.Is to detect kind across wrapped chains.
+var (
+	ErrNotFound      = stderrors.New("not found")
+	ErrAlreadyExists = stderrors.New("already exists")
+	ErrInvalid       = stderrors.New("invalid")
+	ErrUnauthorized  = stderrors.New("unauthorized")
+	ErrForbidden     = stderrors.New("forbidden")
+	ErrConflict      = stderrors.New("conflict")
+	ErrInternal      = stderrors.New("internal")
+)
+
+// Re-export std helpers so callers only import this package.
+var (
+	Is     = stderrors.Is
+	As     = stderrors.As
+	Unwrap = stderrors.Unwrap
+	Join   = stderrors.Join
+)
+
+// Frame is a single caller-info entry captured at wrap time.
+type Frame struct {
+	File string
+	Line int
+	Func string
+	Msg  string
+}
+
+func (f Frame) String() string {
+	if f.Msg != "" {
+		return fmt.Sprintf("%s:%d(%s)", f.File, f.Line, f.Msg)
+	}
+	return fmt.Sprintf("%s:%d", f.File, f.Line)
+}
+
+// AppError is the HTTP-mappable error returned to clients at the transport
+// boundary. It carries the inner cause and a trail of caller frames captured
+// each time the error was wrapped (innermost first).
+//
+// When Locale is non-zero, the transport boundary translates it into Message
+// using the request language and Args; otherwise Message is used as-is.
 type AppError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Err     error  `json:"-"`
+	Code    int           `json:"code"`
+	Message string        `json:"message"`
+	Locale  locale.Locale `json:"locale,omitempty"`
+	Args    []any         `json:"-"`
+	Err     error         `json:"-"`
+	frames  []Frame
 }
 
 func (e *AppError) Error() string {
@@ -19,41 +97,194 @@ func (e *AppError) Error() string {
 	return e.Message
 }
 
-func (e *AppError) Unwrap() error {
-	return e.Err
+func (e *AppError) Unwrap() error { return e.Err }
+
+// Frames returns the caller-info trail, innermost first.
+func (e *AppError) Frames() []Frame { return e.frames }
+
+// Origin returns the innermost frame — where the error first originated.
+func (e *AppError) Origin() Frame {
+	if len(e.frames) == 0 {
+		return Frame{}
+	}
+	return e.frames[0]
 }
 
-// New creates a new AppError.
+// Trace returns a compact one-line trail "file:line(msg) → file:line(msg)"
+// suitable for a single structured log field at the transport boundary.
+func (e *AppError) Trace() string {
+	if len(e.frames) == 0 {
+		return ""
+	}
+	parts := make([]string, len(e.frames))
+	for i, f := range e.frames {
+		parts[i] = f.String()
+	}
+	return strings.Join(parts, " → ")
+}
+
+func captureFrame(skip int, msg string) Frame {
+	pc, file, line, ok := runtime.Caller(skip + 1)
+	if !ok {
+		return Frame{File: "?", Msg: msg}
+	}
+	fn := ""
+	if f := runtime.FuncForPC(pc); f != nil {
+		fn = f.Name()
+		if i := strings.LastIndex(fn, "/"); i >= 0 {
+			fn = fn[i+1:]
+		}
+	}
+	return Frame{File: filepath.Base(file), Line: line, Func: fn, Msg: msg}
+}
+
+// New creates a new AppError and captures the call site as the first frame.
 func New(code int, message string) *AppError {
-	return &AppError{Code: code, Message: message}
+	return &AppError{
+		Code:    code,
+		Message: message,
+		frames:  []Frame{captureFrame(1, "")},
+	}
 }
 
-// Wrap wraps an existing error with an AppError.
-func Wrap(err error, code int, message string) *AppError {
-	return &AppError{Code: code, Message: message, Err: err}
+// Wrap attaches a caller frame (with an optional context message) to err.
+// If err is already an *AppError, the frame is appended and Code/Message/
+// Locale/Args are preserved so the originating layer's classification stays
+// authoritative.
+// If err is a plain or sentinel error, it is classified into HTTP terms.
+// Returns nil if err is nil — safe to use as `return errors.Wrap(err, "...")`.
+func Wrap(err error, message string) *AppError {
+	if err == nil {
+		return nil
+	}
+	return wrapAt(err, message, 1)
 }
 
-// Common error constructors
-func BadRequest(msg string) *AppError {
-	return New(http.StatusBadRequest, msg)
+// Wrapf is Wrap with fmt.Sprintf-style formatting for the context message.
+func Wrapf(err error, format string, args ...any) *AppError {
+	if err == nil {
+		return nil
+	}
+	return wrapAt(err, fmt.Sprintf(format, args...), 1)
 }
 
-func NotFound(msg string) *AppError {
-	return New(http.StatusNotFound, msg)
+func wrapAt(err error, message string, skip int) *AppError {
+	f := captureFrame(skip+1, message)
+	var app *AppError
+	if As(err, &app) {
+		frames := make([]Frame, len(app.frames), len(app.frames)+1)
+		copy(frames, app.frames)
+		frames = append(frames, f)
+		return &AppError{
+			Code:    app.Code,
+			Message: app.Message,
+			Locale:  app.Locale,
+			Args:    app.Args,
+			Err:     err,
+			frames:  frames,
+		}
+	}
+	base := classify(err)
+	base.Err = err
+	base.frames = []Frame{f}
+	return base
 }
 
-func Unauthorized(msg string) *AppError {
-	return New(http.StatusUnauthorized, msg)
+// classify maps a non-AppError into an *AppError. Recognises:
+//   - *locale.LocaleError → inherits HTTP status from Locale.HTTPStatus() and
+//     carries the Locale + Args through to the transport boundary.
+//   - the package sentinel errors → mapped to their HTTP equivalents.
+//   - anything else → 500.
+func classify(err error) *AppError {
+	var le *locale.LocaleError
+	if As(err, &le) {
+		return &AppError{
+			Code:   le.Code.HTTPStatus(),
+			Locale: le.Code,
+			Args:   le.Args,
+		}
+	}
+	switch {
+	case Is(err, ErrNotFound):
+		return &AppError{Code: http.StatusNotFound, Message: err.Error()}
+	case Is(err, ErrAlreadyExists), Is(err, ErrConflict):
+		return &AppError{Code: http.StatusConflict, Message: err.Error()}
+	case Is(err, ErrInvalid):
+		return &AppError{Code: http.StatusBadRequest, Message: err.Error()}
+	case Is(err, ErrUnauthorized):
+		return &AppError{Code: http.StatusUnauthorized, Message: err.Error()}
+	case Is(err, ErrForbidden):
+		return &AppError{Code: http.StatusForbidden, Message: err.Error()}
+	default:
+		return &AppError{Code: http.StatusInternalServerError, Message: "internal server error"}
+	}
 }
 
-func Forbidden(msg string) *AppError {
-	return New(http.StatusForbidden, msg)
+// ToAppError normalises any error into an *AppError suitable for HTTP responses.
+// If err is already an *AppError, it is returned as-is so its frames are preserved.
+func ToAppError(err error) *AppError {
+	if err == nil {
+		return nil
+	}
+	var app *AppError
+	if As(err, &app) {
+		return app
+	}
+	base := classify(err)
+	base.Err = err
+	return base
 }
 
-func InternalServer(msg string) *AppError {
-	return New(http.StatusInternalServerError, msg)
+// Convenience constructors (string-message). Each captures a frame at its call
+// site. Use these when the message is plain English (debug, internal, fixed).
+func BadRequest(msg string) *AppError     { return newAt(http.StatusBadRequest, msg) }
+func NotFound(msg string) *AppError       { return newAt(http.StatusNotFound, msg) }
+func Unauthorized(msg string) *AppError   { return newAt(http.StatusUnauthorized, msg) }
+func Forbidden(msg string) *AppError      { return newAt(http.StatusForbidden, msg) }
+func InternalServer(msg string) *AppError { return newAt(http.StatusInternalServerError, msg) }
+func Conflict(msg string) *AppError       { return newAt(http.StatusConflict, msg) }
+
+func newAt(code int, msg string) *AppError {
+	return &AppError{
+		Code:    code,
+		Message: msg,
+		frames:  []Frame{captureFrame(2, "")},
+	}
 }
 
-func Conflict(msg string) *AppError {
-	return New(http.StatusConflict, msg)
+// Locale-coded constructors. Use these when the message should be translated
+// at the transport boundary using the request's Accept-Language. Args are
+// substituted into the translated template via fmt.Sprintf.
+//
+// The HTTP status is derived from code.HTTPStatus() — no need to pass one
+// unless you want to override it (use NewL for that).
+func NewL(httpCode int, code locale.Locale, args ...any) *AppError {
+	return newAtL(httpCode, code, args)
+}
+func BadRequestL(code locale.Locale, args ...any) *AppError {
+	return newAtL(http.StatusBadRequest, code, args)
+}
+func NotFoundL(code locale.Locale, args ...any) *AppError {
+	return newAtL(http.StatusNotFound, code, args)
+}
+func UnauthorizedL(code locale.Locale, args ...any) *AppError {
+	return newAtL(http.StatusUnauthorized, code, args)
+}
+func ForbiddenL(code locale.Locale, args ...any) *AppError {
+	return newAtL(http.StatusForbidden, code, args)
+}
+func ConflictL(code locale.Locale, args ...any) *AppError {
+	return newAtL(http.StatusConflict, code, args)
+}
+func InternalServerL(code locale.Locale, args ...any) *AppError {
+	return newAtL(http.StatusInternalServerError, code, args)
+}
+
+func newAtL(httpCode int, code locale.Locale, args []any) *AppError {
+	return &AppError{
+		Code:   httpCode,
+		Locale: code,
+		Args:   args,
+		frames: []Frame{captureFrame(2, "")},
+	}
 }

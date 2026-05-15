@@ -1,0 +1,49 @@
+package user
+
+import (
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/internal/domain/entity"
+	useruc "{{.ModuleName}}/internal/usecase/user"
+)
+
+// Request → UseCase Input
+func toCreateInput(req CreateUserRequest) useruc.CreateUserInput {
+	return useruc.CreateUserInput{
+		Email:    req.Email,
+		Name:     req.Name,
+		Password: req.Password,
+	}
+}
+
+func toListFilter(limit, offset int) domain.UserFilter {
+	return domain.UserFilter{Limit: limit, Offset: offset}
+}
+
+// ToUserResponse converts a user entity to an API response.
+func ToUserResponse(user *entity.User) *UserResponse {
+	return &UserResponse{
+		ID:        user.ID,
+		Email:     user.Email,
+		Name:      user.Name,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+	}
+}
+
+// ToUserListResponse converts a list of user entities to API responses.
+func ToUserListResponse(users []*entity.User) []*UserResponse {
+	responses := make([]*UserResponse, len(users))
+	for i, user := range users {
+		responses[i] = ToUserResponse(user)
+	}
+	return responses
+}
+
+// ToUserOutput converts a user entity to a use case output DTO.
+func ToUserOutput(user *entity.User) *useruc.UserOutput {
+	return &useruc.UserOutput{
+		ID:    user.ID,
+		Email: user.Email,
+		Name:  user.Name,
+	}
+}

@@ -13,6 +13,8 @@
 *.so
 *.dylib
 bin/
+nova
+!nova/
 
 # Test binary, built with `go test -c`
 *.test

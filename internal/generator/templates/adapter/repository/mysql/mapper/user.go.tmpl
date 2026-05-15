@@ -1,0 +1,48 @@
+// Package mapper converts between domain entities and sqlc-generated DB rows.
+// One file per entity. All functions are pure — no DB handles, no context.
+package mapper
+
+import (
+	"{{.ModuleName}}/internal/adapter/repository/mysql/dbgen"
+	"{{.ModuleName}}/internal/domain/entity"
+)
+
+// UserToEntity maps a sqlc-generated row into the domain entity.
+func UserToEntity(row dbgen.User) *entity.User {
+	return &entity.User{
+		ID:        row.ID,
+		Email:     row.Email,
+		Name:      row.Name,
+		Password:  row.Password,
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
+	}
+}
+
+// UsersToEntities maps a batch of rows.
+func UsersToEntities(rows []dbgen.User) []*entity.User {
+	out := make([]*entity.User, len(rows))
+	for i, r := range rows {
+		out[i] = UserToEntity(r)
+	}
+	return out
+}
+
+// UserToCreateParams builds the sqlc insert params from the entity.
+func UserToCreateParams(u *entity.User) dbgen.CreateUserParams {
+	return dbgen.CreateUserParams{
+		Email:     u.Email,
+		Name:      u.Name,
+		Password:  u.Password,
+		CreatedAt: u.CreatedAt,
+		UpdatedAt: u.UpdatedAt,
+	}
+}
+
+// UserToUpdateParams builds the sqlc update params from the entity.
+func UserToUpdateParams(u *entity.User) dbgen.UpdateUserParams {
+	return dbgen.UpdateUserParams{
+		ID:   u.ID,
+		Name: u.Name,
+	}
+}

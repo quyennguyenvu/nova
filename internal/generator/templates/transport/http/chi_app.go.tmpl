@@ -1,0 +1,47 @@
+// Package http builds the framework instance: it installs middleware in the
+// correct order, exposes /healthz, and lets each feature attach its own routes
+// via the Registrar interface. Lifecycle (port binding, graceful shutdown) is
+// the job of infrastructure/server.
+package http
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/http/middleware"
+)
+
+// Registrar attaches a feature's routes to a router subtree. Each feature
+// (transport/http/v1/<feature>) provides a *Routes implementing this.
+type Registrar interface {
+	Register(chi.Router)
+}
+
+// NewApp builds the chi router: middleware → /healthz → registrars at their prefixes.
+// Order of middleware matters: RequestID first (so every later layer sees the
+// ID), Logging second (wraps everything to compute duration & emit one line),
+// Recovery inside Logging so panics still produce an access log.
+func NewApp(cfg *config.Config, log *logger.Logger, registrars map[string]Registrar) chi.Router {
+	_ = cfg
+	router := chi.NewRouter()
+
+	router.Use(middleware.RequestID)
+	router.Use(middleware.Logging(log))
+	router.Use(middleware.Recovery)
+	router.Use(middleware.CORS)
+	router.Use(middleware.Locale)
+
+	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	for prefix, r := range registrars {
+		router.Route(prefix, r.Register)
+	}
+
+	return router
+}

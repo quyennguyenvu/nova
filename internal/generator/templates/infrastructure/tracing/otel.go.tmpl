@@ -1,0 +1,90 @@
+// Package tracing initialises the OpenTelemetry SDK and returns a tracer
+// plus a shutdown hook. Use otelhttp / otelgrpc instrumentation at the
+// transport layer, and open spans inside usecases/repositories:
+//
+//	ctx, span := tracer.Start(ctx, "UserUsecase.Register")
+//	defer span.End()
+//	if err != nil { span.RecordError(err); span.SetStatus(codes.Error, err.Error()); return err }
+//
+// The Logging middleware copies the trace_id onto every log line, so a single
+// click in Jaeger/Tempo jumps from log → trace without extra plumbing.
+package tracing
+
+import (
+	"context"
+	"fmt"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
+)
+
+// Config controls tracer construction.
+type Config struct {
+	ServiceName    string  // e.g. "{{.ProjectName}}"
+	ServiceVersion string  // e.g. "0.1.0"
+	Environment    string  // e.g. "prod"
+	Endpoint       string  // OTLP collector endpoint, e.g. "otel-collector:4317". Empty disables export.
+	Insecure       bool    // true for plaintext gRPC (dev/test only).
+	SampleRatio    float64 // 0.0-1.0. 0 disables, 1 samples everything.
+}
+
+// Shutdown flushes any pending spans and releases resources. Call on graceful shutdown.
+type Shutdown func(context.Context) error
+
+// New initialises the global OTel tracer provider + propagator and returns a tracer
+// scoped to the service and a shutdown hook.
+//
+// If cfg.Endpoint is empty, a no-op tracer is returned so the app keeps working
+// without a collector (e.g. local dev without the otel stack running).
+func New(ctx context.Context, cfg Config) (trace.Tracer, Shutdown, error) {
+	if cfg.Endpoint == "" {
+		otel.SetTextMapPropagator(newPropagator())
+		return otel.Tracer(cfg.ServiceName), func(context.Context) error { return nil }, nil
+	}
+
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName(cfg.ServiceName),
+			semconv.ServiceVersion(cfg.ServiceVersion),
+			semconv.DeploymentEnvironment(cfg.Environment),
+		),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tracing: resource: %w", err)
+	}
+
+	opts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(cfg.Endpoint)}
+	if cfg.Insecure {
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	}
+	exp, err := otlptrace.New(ctx, otlptracegrpc.NewClient(opts...))
+	if err != nil {
+		return nil, nil, fmt.Errorf("tracing: otlp exporter: %w", err)
+	}
+
+	sampler := sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRatio))
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(res),
+		sdktrace.WithSampler(sampler),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(newPropagator())
+
+	return tp.Tracer(cfg.ServiceName), tp.Shutdown, nil
+}
+
+// newPropagator returns the standard W3C TraceContext + Baggage propagator so
+// trace IDs survive HTTP / gRPC hops to downstream services.
+func newPropagator() propagation.TextMapPropagator {
+	return propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	)
+}

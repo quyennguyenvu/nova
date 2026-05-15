@@ -1,0 +1,35 @@
+package pubsub
+
+import (
+	"fmt"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+
+	"github.com/IBM/sarama"
+)
+
+// NewKafkaProducer creates a Sarama sync producer.
+// This is infrastructure — connection setup only, no business logic.
+func NewKafkaProducer(cfg *config.KafkaConfig, log *logger.Logger) (sarama.SyncProducer, func(), error) {
+	saramaCfg := sarama.NewConfig()
+	saramaCfg.Producer.Return.Successes = true
+	saramaCfg.Producer.RequiredAcks = sarama.WaitForAll
+	saramaCfg.Producer.Retry.Max = 3
+
+	producer, err := sarama.NewSyncProducer(cfg.Brokers, saramaCfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create kafka producer: %w", err)
+	}
+
+	cleanup := func() {
+		log.Info("[kafka] shutting down producer ...")
+		if err := producer.Close(); err != nil {
+			log.Error("[kafka] failed to close producer", "error", err)
+		} else {
+			log.Info("[kafka] producer shutdown complete")
+		}
+	}
+
+	return producer, cleanup, nil
+}

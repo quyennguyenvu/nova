@@ -1,0 +1,62 @@
+package middleware
+
+import (
+	"net/http"
+	"time"
+
+	"go.opentelemetry.io/otel/trace"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+func traceIDOr(sc trace.SpanContext) string {
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// Logging builds a request-scoped logger (request_id + trace_id), attaches it
+// to ctx, and emits ONE access log per request with severity by status.
+func Logging(base *logger.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ctx := r.Context()
+			reqID := RequestIDFrom(ctx)
+			sc := trace.SpanContextFromContext(ctx)
+
+			scoped := base.
+				With("request_id", reqID).
+				With("trace_id", traceIDOr(sc)).
+				With("method", r.Method).
+				With("path", r.URL.Path)
+			r = r.WithContext(logctx.Into(ctx, scoped))
+
+			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(rec, r)
+
+			ev := scoped.Info
+			if rec.status >= 500 {
+				ev = scoped.Error
+			} else if rec.status >= 400 {
+				ev = scoped.Warn
+			}
+			ev("request",
+				"status", rec.status,
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+		})
+	}
+}

@@ -1,0 +1,51 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+)
+
+// HTTPServer is the lifecycle wrapper around a pre-built fiber app. The app
+// itself (middleware, routes, healthz) is constructed in transport/http.NewApp.
+type HTTPServer struct {
+	app    *fiber.App
+	addr   string
+	cfg    *config.Config
+	logger *logger.Logger
+}
+
+// NewHTTPServer wraps app for graceful shutdown. Caller (DI) builds app via transport/http.NewApp.
+func NewHTTPServer(
+	ctx context.Context,
+	cfg *config.Config,
+	log *logger.Logger,
+	app *fiber.App,
+) (*HTTPServer, func(), error) {
+	addr := fmt.Sprintf(":%s", cfg.HTTP.Port)
+	s := &HTTPServer{app: app, addr: addr, cfg: cfg, logger: log}
+
+	cleanup := func() {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		log.Info("shutting down HTTP server", "addr", addr)
+		if err := s.app.ShutdownWithContext(cleanupCtx); err != nil {
+			log.Error("graceful shutdown failed", "err", err.Error())
+			return
+		}
+		log.Info("server stopped cleanly")
+	}
+
+	return s, cleanup, nil
+}
+
+func (s *HTTPServer) Start() error {
+	s.logger.Info("starting HTTP server", "addr", s.addr)
+	return s.app.Listen(s.addr)
+}

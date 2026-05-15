@@ -1,0 +1,42 @@
+server:
+  port: "8080"
+  read_timeout: 10
+  write_timeout: 10
+
+{{- if .HasDatabase}}
+database:
+{{- if eq .Database "postgres"}}
+  host: "localhost"
+  port: 5432
+  name: "{{.ProjectName}}"
+  ssl_mode: "disable"
+{{- end}}
+{{- if eq .Database "mysql"}}
+  host: "localhost"
+  port: 3306
+  name: "{{.ProjectName}}"
+{{- end}}
+{{- end}}
+
+{{- if .HasRedis}}
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+{{- end}}
+
+{{- if .HasMessageQueue}}
+{{- if eq .MessageQueue "kafka"}}
+kafka:
+  brokers:
+    - "localhost:9092"
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+rabbitmq:
+  url: "amqp://guest:guest@localhost:5672/"
+{{- end}}
+{{- end}}
+
+log:
+  level: "info" # debug | info | warn | error | fatal
+  format: "json" # json | console

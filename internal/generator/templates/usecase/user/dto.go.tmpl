@@ -1,20 +1,25 @@
 package user
 
-// CreateUserInput represents the input for creating a user.
+import "time"
+
+// Input DTOs - what the use case needs (no json/validate tags!)
+// The transport layer owns serialization. The assembler maps between them.
+
 type CreateUserInput struct {
-	Email    string `json:"email" validate:"required,email"`
-	Name     string `json:"name" validate:"required,min=2,max=100"`
-	Password string `json:"password" validate:"required,min=8"`
+	Email    string
+	Name     string
+	Password string
 }
 
-// UpdateUserInput represents the input for updating a user.
 type UpdateUserInput struct {
-	Name string `json:"name" validate:"omitempty,min=2,max=100"`
+	Name string
 }
 
-// UserOutput represents the output of a user operation.
+// Output DTOs - what the use case returns
 type UserOutput struct {
-	ID    int64  `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
+	ID        int64
+	Email     string
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

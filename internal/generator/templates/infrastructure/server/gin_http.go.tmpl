@@ -1,0 +1,61 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+)
+
+// HTTPServer is the lifecycle wrapper around a pre-built gin engine. The
+// engine itself (middleware, routes, healthz) is built in transport/http.NewApp.
+type HTTPServer struct {
+	server *http.Server
+	cfg    *config.Config
+	logger *logger.Logger
+}
+
+// NewHTTPServer wraps engine in net/http.Server for graceful shutdown.
+func NewHTTPServer(
+	ctx context.Context,
+	cfg *config.Config,
+	log *logger.Logger,
+	engine *gin.Engine,
+) (*HTTPServer, func(), error) {
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%s", cfg.HTTP.Port),
+		Handler:      engine,
+		ReadTimeout:  time.Duration(cfg.HTTP.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.HTTP.WriteTimeout) * time.Second,
+	}
+
+	s := &HTTPServer{server: srv, cfg: cfg, logger: log}
+
+	cleanup := func() {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		log.Info("shutting down HTTP server", "addr", srv.Addr)
+		if err := s.server.Shutdown(cleanupCtx); err != nil {
+			log.Error("graceful shutdown failed", "err", err.Error())
+			return
+		}
+		log.Info("server stopped cleanly")
+	}
+
+	return s, cleanup, nil
+}
+
+func (s *HTTPServer) Start() error {
+	s.logger.Info("starting HTTP server", "addr", s.server.Addr)
+	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}

@@ -1,0 +1,51 @@
+package middleware
+
+import (
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/trace"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+func traceIDOr(sc trace.SpanContext) string {
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
+}
+
+// Logging builds a request-scoped logger (request_id + trace_id), attaches it
+// to ctx, and emits ONE access log per request with severity by status.
+func Logging(base *logger.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		ctx := c.Request.Context()
+		reqID := RequestIDFrom(ctx)
+		sc := trace.SpanContextFromContext(ctx)
+
+		scoped := base.
+			With("request_id", reqID).
+			With("trace_id", traceIDOr(sc)).
+			With("method", c.Request.Method).
+			With("path", c.Request.URL.Path)
+		c.Request = c.Request.WithContext(logctx.Into(ctx, scoped))
+
+		c.Next()
+
+		status := c.Writer.Status()
+		ev := scoped.Info
+		if status >= 500 {
+			ev = scoped.Error
+		} else if status >= 400 {
+			ev = scoped.Warn
+		}
+		ev("request",
+			"status", status,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"err", c.Errors.String(),
+		)
+	}
+}

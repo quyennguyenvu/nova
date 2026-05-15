@@ -3,86 +3,79 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	stderrors "errors"
 
+	"{{.ModuleName}}/internal/adapter/repository/mysql/dbgen"
+	"{{.ModuleName}}/internal/adapter/repository/mysql/mapper"
+	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/pkg/errors"
 )
 
-// UserRepository implements domain.UserRepository using MySQL.
+var _ domain.UserRepository = (*UserRepository)(nil)
+
+// UserRepository implements domain.UserRepository using sqlc-generated queries.
+// It never calls row.Scan directly — all hydration goes through the mapper package.
 type UserRepository struct {
-	db *sql.DB
+	qx *qx
 }
 
-// NewUserRepository creates a new MySQL user repository.
 func NewUserRepository(db *sql.DB) *UserRepository {
-	return &UserRepository{db: db}
+	return &UserRepository{qx: newQX(db)}
 }
 
 func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
-	query := `INSERT INTO users (email, name, password, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
-	result, err := r.db.ExecContext(ctx, query, user.Email, user.Name, user.Password, user.CreatedAt, user.UpdatedAt)
+	id, err := r.qx.Q(ctx).CreateUser(ctx, mapper.UserToCreateParams(user))
 	if err != nil {
-		return err
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return err
+		return errors.Wrapf(err, "user repo: insert email=%s", user.Email)
 	}
 	user.ID = id
 	return nil
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (*entity.User, error) {
-	query := `SELECT id, email, name, password, created_at, updated_at FROM users WHERE id = ?`
-	user := &entity.User{}
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&user.ID, &user.Email, &user.Name, &user.Password, &user.CreatedAt, &user.UpdatedAt,
-	)
+	row, err := r.qx.Q(ctx).GetUserByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("user not found: %w", err)
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return nil, errors.Wrapf(errors.ErrNotFound, "user repo: select id=%d", id)
+		}
+		return nil, errors.Wrapf(err, "user repo: select id=%d", id)
 	}
-	return user, nil
+	return mapper.UserToEntity(row), nil
 }
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
-	query := `SELECT id, email, name, password, created_at, updated_at FROM users WHERE email = ?`
-	user := &entity.User{}
-	err := r.db.QueryRowContext(ctx, query, email).Scan(
-		&user.ID, &user.Email, &user.Name, &user.Password, &user.CreatedAt, &user.UpdatedAt,
-	)
+	row, err := r.qx.Q(ctx).GetUserByEmail(ctx, email)
 	if err != nil {
-		return nil, fmt.Errorf("user not found: %w", err)
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return nil, errors.Wrapf(errors.ErrNotFound, "user repo: select email=%s", email)
+		}
+		return nil, errors.Wrapf(err, "user repo: select email=%s", email)
 	}
-	return user, nil
+	return mapper.UserToEntity(row), nil
 }
 
 func (r *UserRepository) Update(ctx context.Context, user *entity.User) error {
-	query := `UPDATE users SET name = ?, updated_at = NOW() WHERE id = ?`
-	_, err := r.db.ExecContext(ctx, query, user.Name, user.ID)
-	return err
+	if err := r.qx.Q(ctx).UpdateUser(ctx, mapper.UserToUpdateParams(user)); err != nil {
+		return errors.Wrapf(err, "user repo: update id=%d", user.ID)
+	}
+	return nil
 }
 
 func (r *UserRepository) Delete(ctx context.Context, id int64) error {
-	query := `DELETE FROM users WHERE id = ?`
-	_, err := r.db.ExecContext(ctx, query, id)
-	return err
+	if err := r.qx.Q(ctx).DeleteUser(ctx, id); err != nil {
+		return errors.Wrapf(err, "user repo: delete id=%d", id)
+	}
+	return nil
 }
 
-func (r *UserRepository) List(ctx context.Context, limit, offset int) ([]*entity.User, error) {
-	query := `SELECT id, email, name, password, created_at, updated_at FROM users ORDER BY id LIMIT ? OFFSET ?`
-	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+func (r *UserRepository) List(ctx context.Context, filter domain.UserFilter) ([]*entity.User, error) {
+	rows, err := r.qx.Q(ctx).ListUsers(ctx, dbgen.ListUsersParams{
+		Limit:  int32(filter.Limit),
+		Offset: int32(filter.Offset),
+	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "user repo: list")
 	}
-	defer rows.Close()
-
-	var users []*entity.User
-	for rows.Next() {
-		user := &entity.User{}
-		if err := rows.Scan(&user.ID, &user.Email, &user.Name, &user.Password, &user.CreatedAt, &user.UpdatedAt); err != nil {
-			return nil, err
-		}
-		users = append(users, user)
-	}
-	return users, nil
+	return mapper.UsersToEntities(rows), nil
 }

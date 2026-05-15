@@ -1,0 +1,47 @@
+// Package http builds the framework instance: it installs middleware in the
+// correct order, exposes /healthz, and lets each feature attach its own routes
+// via the Registrar interface. Lifecycle (port binding, graceful shutdown) is
+// the job of infrastructure/server.
+package http
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/http/middleware"
+)
+
+// Registrar attaches a feature's routes to a router subtree. Each feature
+// (transport/http/v1/<feature>) provides a *Routes implementing this.
+type Registrar interface {
+	Register(gin.IRouter)
+}
+
+// NewApp builds the gin engine: middleware → /healthz → registrars at their prefixes.
+// Order of middleware matters: RequestID first (so every later layer sees the
+// ID), Logging second (wraps everything to compute duration & emit one line),
+// Recovery inside Logging so panics still produce an access log.
+func NewApp(cfg *config.Config, log *logger.Logger, registrars map[string]Registrar) *gin.Engine {
+	_ = cfg
+	gin.SetMode(gin.ReleaseMode)
+	engine := gin.New()
+
+	engine.Use(middleware.RequestID())
+	engine.Use(middleware.Logging(log))
+	engine.Use(middleware.Recovery())
+	engine.Use(middleware.CORS())
+	engine.Use(middleware.Locale())
+
+	engine.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	for prefix, r := range registrars {
+		r.Register(engine.Group(prefix))
+	}
+
+	return engine
+}

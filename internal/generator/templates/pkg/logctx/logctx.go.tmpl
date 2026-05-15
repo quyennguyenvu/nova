@@ -1,0 +1,46 @@
+// Package logctx carries a request-scoped structured logger through context.Context.
+//
+// The transport layer builds a logger enriched with request_id / trace_id and stores
+// it in ctx. Inner layers (usecase, repository) pull it out via From(ctx) and emit
+// fields without needing to know the concrete logger implementation. Never call
+// Into outside a boundary (middleware, worker loop).
+package logctx
+
+import (
+	"context"
+
+	"{{.ModuleName}}/pkg/observability"
+)
+
+// Logger aliases observability.Logger so the two cannot drift. Child loggers
+// (via With) are built at the boundary by middleware — inner layers only emit
+// events, they do not fork loggers.
+type Logger = observability.Logger
+
+type ctxKey struct{}
+
+// Into returns a child context carrying l.
+func Into(ctx context.Context, l Logger) context.Context {
+	if l == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKey{}, l)
+}
+
+// From returns the logger attached to ctx, or a no-op logger if none is present.
+// Never returns nil — callers can use the result unconditionally.
+func From(ctx context.Context) Logger {
+	if l, ok := ctx.Value(ctxKey{}).(Logger); ok {
+		return l
+	}
+	return nop{}
+}
+
+// nop is a Logger that discards everything. Used when ctx has no logger
+// (e.g. tests, or code called before middleware has run).
+type nop struct{}
+
+func (nop) Debug(string, ...any) {}
+func (nop) Info(string, ...any)  {}
+func (nop) Warn(string, ...any)  {}
+func (nop) Error(string, ...any) {}

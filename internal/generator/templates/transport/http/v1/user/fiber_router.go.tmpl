@@ -1,0 +1,22 @@
+package user
+
+import "github.com/gofiber/fiber/v2"
+
+// Routes is the user feature's HTTP route registrar. It implements the
+// transport/http.Registrar interface — wired into the app at /api/v1.
+type Routes struct {
+	handler *UserHandler
+}
+
+func NewRoutes(h *UserHandler) *Routes { return &Routes{handler: h} }
+
+// Register attaches /users routes to the given router subtree. The caller
+// (transport/http.NewApp) supplies the /api/v1 prefix.
+func (r *Routes) Register(router fiber.Router) {
+	users := router.Group("/users")
+	users.Post("/", r.handler.Create)
+	users.Get("/", r.handler.List)
+	users.Get("/:id", r.handler.GetByID)
+	users.Put("/:id", r.handler.Update)
+	users.Delete("/:id", r.handler.Delete)
+}

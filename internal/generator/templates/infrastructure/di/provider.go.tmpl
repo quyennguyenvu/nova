@@ -1,0 +1,19 @@
+package di
+
+import (
+	transporthttp "{{.ModuleName}}/internal/transport/http"
+	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
+)
+
+// provideRegistrars assembles every feature's Routes into a path-keyed map that
+// transport/http.NewApp consumes. Add new features here as they appear.
+//
+// The transporthttp.Registrar interface is framework-specific — its Register
+// signature is set by whichever app file was generated (fiber/gin/chi/echo).
+// As long as each *Routes type's Register method matches the chosen framework's
+// router type, this provider compiles unchanged.
+func provideRegistrars(userRoutes *userv1.Routes) map[string]transporthttp.Registrar {
+	return map[string]transporthttp.Registrar{
+		"/api/v1": userRoutes,
+	}
+}

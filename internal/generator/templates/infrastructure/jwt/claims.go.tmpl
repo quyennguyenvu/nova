@@ -1,0 +1,25 @@
+package jwtsec
+
+import "github.com/golang-jwt/jwt/v4"
+
+type AdminTokenClaims struct {
+	jwt.RegisteredClaims
+
+	UserID      int32    `json:"userId"`
+	Permissions []string `json:"permissions,omitempty"`
+	GroupIDs    []int32  `json:"groupIds,omitempty"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email"`
+}
+
+type AccessTokenClaims struct {
+	jwt.RegisteredClaims
+
+	DeviceID  string `json:"deviceId"`
+	UserID    int32  `json:"userId"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Phone     string `json:"phone"`
+	Platform  string `json:"platform"`
+	SessionID string `json:"sessionId"`
+}
