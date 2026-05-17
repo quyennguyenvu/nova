@@ -35,29 +35,30 @@ vet: ## Run go vet
 	go vet ./...
 
 {{- if .HasDatabase}}
+{{- $migrationsDir := "migrations" }}{{- if eq .QueryGen "sqlc"}}{{- $migrationsDir = "sqlc/migrations" }}{{- end}}
 # Database
 .PHONY: migrate-create migrate-up migrate-down
 migrate-create:
-	migrate create -ext sql -dir {{- if eq .QueryGen "sqlc"}} sqlc/migrations {{- else }} migrations {{- end}} $(name) 
+	migrate create -ext sql -dir {{$migrationsDir}} $(name)
 
 migrate-up:
-	migrate -path migrations -database '${MIGRATE_DATABASE_URL}' up
+	migrate -path {{$migrationsDir}} -database '${MIGRATE_DATABASE_URL}' up
 
 migrate-down:
-	migrate -path migrations -database '${MIGRATE_DATABASE_URL}' down
+	migrate -path {{$migrationsDir}} -database '${MIGRATE_DATABASE_URL}' down
 {{- end}}
 
 # Code generation
 {{- if .UseWire}}
 .PHONY: wire-gen
 wire-gen:
-	rm $(PWD)/internal/infrastructure/di/wire_gen.go 2> /dev/null; $(WIRE_PATH) $(PWD)/internal/infrastructure/di/*
+	rm -f $(PWD)/internal/infrastructure/di/wire_gen.go; $(WIRE_PATH) ./internal/infrastructure/di
 {{- end}}
 
 {{- if eq .QueryGen "sqlc"}}
 .PHONY: sqlc-gen
 sqlc-gen:
-	rm -rf $(PWD)/internal/adapter/repository/dbgen 2> /dev/null; cd sqlc && sqlc generate
+	rm -rf $(PWD)/internal/adapter/repository/{{.Database}}/dbgen; cd sqlc && sqlc generate
 {{- end}}
 
 {{- if .HasGRPC}}

@@ -6,12 +6,35 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# This pipeline assumes the repository contains the committed code generated
+# by `make gen` ({{if .UseWire}}wire_gen.go{{end}}{{if and .UseWire (eq .QueryGen "sqlc")}}, {{end}}{{if eq .QueryGen "sqlc"}}internal/adapter/repository/{{.Database}}/dbgen/{{end}}).
+# Run `make gen` locally after `nova new` and commit the output before pushing.
+
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '{{.GoVersion}}'
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
   test:
     name: Test
     runs-on: ubuntu-latest
-
 {{- if .HasDatabase}}
+
     services:
 {{- if eq .Database "postgres"}}
       postgres:
@@ -27,6 +50,20 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+{{- end}}
+{{- if eq .Database "mysql"}}
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: {{.ProjectName}}_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 {{- end}}
 {{- if .HasRedis}}
       redis:
@@ -47,9 +84,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '{{.GoVersion}}'
-
-      - name: Download dependencies
-        run: go mod download
+          cache: true
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
@@ -63,9 +98,16 @@ jobs:
           DB_NAME: {{.ProjectName}}_test
           DB_SSL_MODE: disable
 {{- end}}
+{{- if eq .Database "mysql"}}
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: root
+          DB_NAME: {{.ProjectName}}_test
+{{- end}}
 {{- if .HasRedis}}
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
+          REDIS_MODE: single
+          REDIS_ADDRS: localhost:6379
 {{- end}}
 {{- end}}
 
@@ -74,32 +116,19 @@ jobs:
         with:
           name: coverage
           path: coverage.out
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '{{.GoVersion}}'
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
+          if-no-files-found: ignore
 
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version: '{{.GoVersion}}'
+          cache: true
 
       - name: Build
-        run: go build -o bin/api ./cmd/api
+        run: go build -ldflags="-w -s" -o bin/api .

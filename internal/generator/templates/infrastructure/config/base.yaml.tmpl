@@ -1,42 +1,81 @@
-server:
+log:
+  level: "info" # debug | info | warn | error | fatal
+  format: "json" # json | console
+
+{{- if .HasHTTP}}
+
+http:
   port: "8080"
-  read_timeout: 10
-  write_timeout: 10
+  read_timeout: 30s
+  write_timeout: 30s
+  read_buffer_size: 8192
+  body_limit: 10485760 # 10 MB
+  shutdown_timeout: 10s
+{{- end}}
+
+{{- if .HasGRPC}}
+
+grpc:
+  port: "9090"
+  shutdown_timeout: 10s
+{{- end}}
+
+{{- if .HasCron}}
+
+cron:
+  spec: "0 * * * *" # every hour
+{{- end}}
 
 {{- if .HasDatabase}}
+
 database:
 {{- if eq .Database "postgres"}}
   host: "localhost"
   port: 5432
   name: "{{.ProjectName}}"
-  ssl_mode: "disable"
+  max_conns: 25
+  min_conns: 5
+  max_conn_lifetime: 5m
+  max_conn_idle_time: 1m
+  connect_timeout: 10s
 {{- end}}
 {{- if eq .Database "mysql"}}
   host: "localhost"
   port: 3306
   name: "{{.ProjectName}}"
+  max_open_conns: 25
+  max_idle_conns: 5
 {{- end}}
 {{- end}}
 
 {{- if .HasRedis}}
+
 redis:
-  host: "localhost"
-  port: 6379
+  mode: "single" # single | sentinel | cluster
+  addrs:
+    - "localhost:6379"
   db: 0
+  pool_size: 10
+  min_idle_conns: 2
+  max_idle_conns: 5
+  conn_max_lifetime: 30s
+  conn_max_idle_time: 5s
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+  ping_timeout: 5s
 {{- end}}
 
-{{- if .HasMessageQueue}}
 {{- if eq .MessageQueue "kafka"}}
+
 kafka:
   brokers:
     - "localhost:9092"
-{{- end}}
-{{- if eq .MessageQueue "rabbitmq"}}
-rabbitmq:
-  url: "amqp://guest:guest@localhost:5672/"
-{{- end}}
+  producer_retry_max: 3
 {{- end}}
 
-log:
-  level: "info" # debug | info | warn | error | fatal
-  format: "json" # json | console
+{{- if eq .MessageQueue "rabbitmq"}}
+
+rabbitmq:
+  url: "amqp://guest:guest@localhost:5672/" # override via RABBITMQ_URL in production
+{{- end}}

@@ -2,7 +2,7 @@ package config
 
 import (
 	"os"
-{{- if .HasRedis}}
+{{- if or .HasHTTP .HasGRPC .HasDatabase .HasRedis .HasMessageQueue}}
 	"time"
 {{- end}}
 
@@ -12,8 +12,15 @@ import (
 )
 
 // Config holds all application configuration.
+//
+// Defaults live outside this struct:
+//   - internal/infrastructure/config/base.yaml — operational tuning
+//     (<APP_ENV>.yaml is layered on top when APP_ENV is "development" or "production")
+//   - .env.example — secrets and per-deployment endpoints
+//
+// At runtime every field can be overridden by its env var.
 type Config struct {
-	AppEnv      string            `{{.ConfigFormat}}:"app_env"      env:"APP_ENV" env-default:"development"`
+	AppEnv      string            `{{.ConfigFormat}}:"app_env"      env:"APP_ENV"`
 	Log         LogConfig         `{{.ConfigFormat}}:"log"`
 	JWTVerifier JWTVerifierConfig `{{.ConfigFormat}}:"jwt_verifier"`
 {{- if .HasHTTP}}
@@ -41,8 +48,8 @@ type Config struct {
 
 // LogConfig holds logging configuration.
 type LogConfig struct {
-	Level  string `{{.ConfigFormat}}:"level"  env:"LOG_LEVEL"  env-default:"info"`
-	Format string `{{.ConfigFormat}}:"format" env:"LOG_FORMAT" env-default:"json"`
+	Level  string `{{.ConfigFormat}}:"level"  env:"LOG_LEVEL"`
+	Format string `{{.ConfigFormat}}:"format" env:"LOG_FORMAT"`
 }
 
 // JWTVerifierConfig holds JWT verifier configuration.
@@ -57,24 +64,27 @@ type JWTVerifierConfig struct {
 
 // HTTPConfig holds HTTP server configuration.
 type HTTPConfig struct {
-	Port           string `{{.ConfigFormat}}:"port"             env:"SERVER_PORT"             env-default:"8080"`
-	ReadTimeout    int    `{{.ConfigFormat}}:"read_timeout"     env:"SERVER_READ_TIMEOUT"     env-default:"10"`
-	WriteTimeout   int    `{{.ConfigFormat}}:"write_timeout"    env:"SERVER_WRITE_TIMEOUT"    env-default:"10"`
-	ReadBufferSize int    `{{.ConfigFormat}}:"read_buffer_size" env:"SERVER_READ_BUFFER_SIZE" env-default:"4096"`
+	Port            string        `{{.ConfigFormat}}:"port"             env:"SERVER_PORT"`
+	ReadTimeout     time.Duration `{{.ConfigFormat}}:"read_timeout"     env:"SERVER_READ_TIMEOUT"`
+	WriteTimeout    time.Duration `{{.ConfigFormat}}:"write_timeout"    env:"SERVER_WRITE_TIMEOUT"`
+	ReadBufferSize  int           `{{.ConfigFormat}}:"read_buffer_size" env:"SERVER_READ_BUFFER_SIZE"`
+	BodyLimit       int           `{{.ConfigFormat}}:"body_limit"       env:"SERVER_BODY_LIMIT"`
+	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"SERVER_SHUTDOWN_TIMEOUT"`
 }
 {{- end}}
 {{- if .HasGRPC}}
 
 // GRPCConfig holds gRPC server configuration.
 type GRPCConfig struct {
-	Port string `{{.ConfigFormat}}:"port" env:"GRPC_PORT" env-default:"9090"`
+	Port            string        `{{.ConfigFormat}}:"port"             env:"GRPC_PORT"`
+	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"GRPC_SHUTDOWN_TIMEOUT"`
 }
 {{- end}}
 {{- if .HasCron}}
 
 // CronConfig holds cron job configuration.
 type CronConfig struct {
-	Spec string `{{.ConfigFormat}}:"spec" env:"CRON_SPEC" env-default:"0 * * * *"` // every hour
+	Spec string `{{.ConfigFormat}}:"spec" env:"CRON_SPEC"`
 }
 {{- end}}
 {{- if .HasDatabase}}
@@ -82,19 +92,30 @@ type CronConfig struct {
 // DatabaseConfig holds database connection configuration.
 type DatabaseConfig struct {
 {{- if eq .Database "postgres"}}
-	Host     string `{{.ConfigFormat}}:"host" env:"DB_HOST"     env-default:"localhost"`
-	Port     int    `{{.ConfigFormat}}:"port" env:"DB_PORT"     env-default:"5432"`
-	Name     string `{{.ConfigFormat}}:"name" env:"DB_NAME"     env-default:"app"`
-	User     string `            env:"DB_USER"     env-default:"postgres"`
-	Password string `            env:"DB_PASSWORD"`
-	SSLMode  string `            env:"DB_SSL_MODE" env-default:"disable"`
+	Host     string `{{.ConfigFormat}}:"host" env:"DB_HOST"`
+	Port     int    `{{.ConfigFormat}}:"port" env:"DB_PORT"`
+	Name     string `{{.ConfigFormat}}:"name" env:"DB_NAME"`
+	User     string `env:"DB_USER"`
+	Password string `env:"DB_PASSWORD"`
+	SSLMode  string `env:"DB_SSL_MODE"`
+
+	// Pool / connection tuning.
+	MaxConns        int32         `{{.ConfigFormat}}:"max_conns"          env:"DB_MAX_CONNS"`
+	MinConns        int32         `{{.ConfigFormat}}:"min_conns"          env:"DB_MIN_CONNS"`
+	MaxConnLifetime time.Duration `{{.ConfigFormat}}:"max_conn_lifetime"  env:"DB_MAX_CONN_LIFETIME"`
+	MaxConnIdleTime time.Duration `{{.ConfigFormat}}:"max_conn_idle_time" env:"DB_MAX_CONN_IDLE_TIME"`
+	ConnectTimeout  time.Duration `{{.ConfigFormat}}:"connect_timeout"    env:"DB_CONNECT_TIMEOUT"`
 {{- end}}
 {{- if eq .Database "mysql"}}
-	Host     string `{{.ConfigFormat}}:"host" env:"DB_HOST"     env-default:"localhost"`
-	Port     int    `{{.ConfigFormat}}:"port" env:"DB_PORT"     env-default:"3306"`
-	Name     string `{{.ConfigFormat}}:"name" env:"DB_NAME"     env-default:"app"`
-	User     string `            env:"DB_USER"     env-default:"root"`
-	Password string `            env:"DB_PASSWORD"`
+	Host     string `{{.ConfigFormat}}:"host" env:"DB_HOST"`
+	Port     int    `{{.ConfigFormat}}:"port" env:"DB_PORT"`
+	Name     string `{{.ConfigFormat}}:"name" env:"DB_NAME"`
+	User     string `env:"DB_USER"`
+	Password string `env:"DB_PASSWORD"`
+
+	// Pool / connection tuning.
+	MaxOpenConns int `{{.ConfigFormat}}:"max_open_conns" env:"DB_MAX_OPEN_CONNS"`
+	MaxIdleConns int `{{.ConfigFormat}}:"max_idle_conns" env:"DB_MAX_IDLE_CONNS"`
 {{- end}}
 }
 {{- end}}
@@ -102,32 +123,34 @@ type DatabaseConfig struct {
 
 // RedisConfig holds Redis cache configuration.
 type RedisConfig struct {
-	Mode     string   `{{.ConfigFormat}}:"mode"  env:"REDIS_MODE"     env-default:"single"`
-	Addrs    []string `{{.ConfigFormat}}:"addrs" env:"REDIS_ADDRS"                         env-separator:","`
-	DB       int      `{{.ConfigFormat}}:"db"    env:"REDIS_DB"       env-default:"0"` // ignored in cluster mode
-	Password string   `             env:"REDIS_PASSWORD"`
+	Mode     string   `{{.ConfigFormat}}:"mode"  env:"REDIS_MODE"`
+	Addrs    []string `{{.ConfigFormat}}:"addrs" env:"REDIS_ADDRS" env-separator:","`
+	DB       int      `{{.ConfigFormat}}:"db"    env:"REDIS_DB"` // ignored in cluster mode
+	Password string   `env:"REDIS_PASSWORD"`
 
 	// Sentinel-specific.
 	MasterName string `{{.ConfigFormat}}:"master_name" env:"REDIS_MASTER_NAME"`
 
 	// Pool / connection tuning.
-	PoolSize        int           `{{.ConfigFormat}}:"pool_size"          env:"REDIS_POOL_SIZE"          env-default:"10"`
-	MinIdleConns    int           `{{.ConfigFormat}}:"min_idle_conns"     env:"REDIS_MIN_IDLE_CONNS"     env-default:"2"`
-	MaxIdleConns    int           `{{.ConfigFormat}}:"max_idle_conns"     env:"REDIS_MAX_IDLE_CONNS"     env-default:"5"`
-	ConnMaxLifetime time.Duration `{{.ConfigFormat}}:"conn_max_lifetime"  env:"REDIS_CONN_MAX_LIFETIME"  env-default:"30s"`
-	ConnMaxIdleTime time.Duration `{{.ConfigFormat}}:"conn_max_idle_time" env:"REDIS_CONN_MAX_IDLE_TIME" env-default:"5s"`
+	PoolSize        int           `{{.ConfigFormat}}:"pool_size"          env:"REDIS_POOL_SIZE"`
+	MinIdleConns    int           `{{.ConfigFormat}}:"min_idle_conns"     env:"REDIS_MIN_IDLE_CONNS"`
+	MaxIdleConns    int           `{{.ConfigFormat}}:"max_idle_conns"     env:"REDIS_MAX_IDLE_CONNS"`
+	ConnMaxLifetime time.Duration `{{.ConfigFormat}}:"conn_max_lifetime"  env:"REDIS_CONN_MAX_LIFETIME"`
+	ConnMaxIdleTime time.Duration `{{.ConfigFormat}}:"conn_max_idle_time" env:"REDIS_CONN_MAX_IDLE_TIME"`
 
 	// Timeouts.
-	DialTimeout  time.Duration `{{.ConfigFormat}}:"dial_timeout"  env:"REDIS_DIAL_TIMEOUT"  env-default:"5s"`
-	ReadTimeout  time.Duration `{{.ConfigFormat}}:"read_timeout"  env:"REDIS_READ_TIMEOUT"  env-default:"3s"`
-	WriteTimeout time.Duration `{{.ConfigFormat}}:"write_timeout" env:"REDIS_WRITE_TIMEOUT" env-default:"3s"`
+	DialTimeout  time.Duration `{{.ConfigFormat}}:"dial_timeout"  env:"REDIS_DIAL_TIMEOUT"`
+	ReadTimeout  time.Duration `{{.ConfigFormat}}:"read_timeout"  env:"REDIS_READ_TIMEOUT"`
+	WriteTimeout time.Duration `{{.ConfigFormat}}:"write_timeout" env:"REDIS_WRITE_TIMEOUT"`
+	PingTimeout  time.Duration `{{.ConfigFormat}}:"ping_timeout"  env:"REDIS_PING_TIMEOUT"`
 }
 {{- end}}
 {{- if eq .MessageQueue "kafka"}}
 
 // KafkaConfig holds Kafka configuration.
 type KafkaConfig struct {
-	Brokers []string `{{.ConfigFormat}}:"brokers" env:"KAFKA_BROKERS" env-separator:","`
+	Brokers          []string `{{.ConfigFormat}}:"brokers"            env:"KAFKA_BROKERS" env-separator:","`
+	ProducerRetryMax int      `{{.ConfigFormat}}:"producer_retry_max" env:"KAFKA_PRODUCER_RETRY_MAX"`
 }
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}

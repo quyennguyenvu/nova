@@ -102,6 +102,7 @@ func runNew(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stdout, "  cp env.example .env  # if using env config")
 	fmt.Fprintln(os.Stdout, "  go mod tidy")
 	fmt.Fprintln(os.Stdout, "  make gen")
+	fmt.Fprintln(os.Stdout, "  go run main.go api")
 	if cfg.IncludeDocker {
 		fmt.Fprintln(os.Stdout, "  # or: docker-compose up")
 	}

@@ -55,15 +55,15 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*entit
 {{- if .HasMessageQueue}}
 	// best-effort publish — user is already persisted; broker outage shouldn't fail the request.
 	// Failure is logged so it can drive an alert; the API still returns success.
-	if err := s.publisher.PublishUserCreated(ctx, domain.UserCreated{
+	if pubErr := s.publisher.PublishUserCreated(ctx, domain.UserCreated{
 		UserID:    user.ID,
 		Email:     user.Email,
 		Name:      user.Name,
 		CreatedAt: user.CreatedAt,
-	}); err != nil {
+	}); pubErr != nil {
 		logctx.From(ctx).Error("publish user.created failed",
 			"user_id", user.ID,
-			"error", err,
+			"error", pubErr,
 		)
 	}
 
@@ -90,8 +90,8 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInpu
 		user.Name = input.Name
 	}
 
-	if err := s.userRepo.Update(ctx, user); err != nil {
-		return nil, errors.Wrapf(err, "update user id=%d: persist", id)
+	if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
+		return nil, errors.Wrapf(updateErr, "update user id=%d: persist", id)
 	}
 	return user, nil
 }

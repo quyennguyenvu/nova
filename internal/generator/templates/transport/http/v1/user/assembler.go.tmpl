@@ -4,19 +4,15 @@ import (
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
 	useruc "{{.ModuleName}}/internal/usecase/user"
+
+	"github.com/spf13/cast"
 )
 
-// Request → UseCase Input
-func toCreateInput(req CreateUserRequest) useruc.CreateUserInput {
-	return useruc.CreateUserInput{
-		Email:    req.Email,
-		Name:     req.Name,
-		Password: req.Password,
-	}
-}
-
 func toListFilter(limit, offset int) domain.UserFilter {
-	return domain.UserFilter{Limit: limit, Offset: offset}
+	return domain.UserFilter{
+		Limit:  cast.ToInt32(limit),
+		Offset: cast.ToInt32(offset),
+	}
 }
 
 // ToUserResponse converts a user entity to an API response.

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"net"
-	"time"
 
 	"google.golang.org/grpc"
 
@@ -32,7 +31,7 @@ func NewGRPCServer(ctx context.Context, cfg *config.Config, log *logger.Logger) 
 	}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(ctx, cfg.GRPC.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down gRPC server", "addr", addr)

@@ -6,19 +6,12 @@ package http
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/internal/transport/http/middleware"
-)
-
-const (
-	readBufferSize = 8 * 1024
-	readTimeout    = 30 * time.Second
-	bodyLimit      = 10 * 1024 * 1024 // 10 MB
 )
 
 // Registrar attaches a feature's routes to a router subtree. Each feature
@@ -33,11 +26,12 @@ type Registrar interface {
 // Recovery inside Logging so panics still produce an access log.
 func NewApp(cfg *config.Config, log *logger.Logger, registrars map[string]Registrar) *fiber.App {
 	app := fiber.New(fiber.Config{
-		BodyLimit:         bodyLimit,
-		ReadBufferSize:    readBufferSize,
+		BodyLimit:         cfg.HTTP.BodyLimit,
+		ReadBufferSize:    cfg.HTTP.ReadBufferSize,
 		JSONEncoder:       json.Marshal,
 		JSONDecoder:       json.Unmarshal,
-		ReadTimeout:       readTimeout,
+		ReadTimeout:       cfg.HTTP.ReadTimeout,
+		WriteTimeout:      cfg.HTTP.WriteTimeout,
 		ProxyHeader:       fiber.HeaderXForwardedFor,
 		EnablePrintRoutes: cfg.AppEnv == config.EnvLocal, // Only print routes in local environment for easier debugging
 	})

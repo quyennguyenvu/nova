@@ -39,7 +39,7 @@ func New(cfg *config.Config, log *logger.Logger) (*Client, func(), error) {
 		return nil, nil, fmt.Errorf("redis: unknown mode %q", rdbCfg.Mode)
 	}
 
-	if err := ping(uc); err != nil {
+	if err := ping(uc, rdbCfg.PingTimeout); err != nil {
 		return nil, nil, fmt.Errorf("redis: ping failed (%s): %w", rdbCfg.Mode, err)
 	}
 
@@ -98,8 +98,8 @@ func newCluster(cfg *config.RedisConfig) redis.UniversalClient {
 	})
 }
 
-func ping(uc redis.UniversalClient) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func ping(uc redis.UniversalClient, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return uc.Ping(ctx).Err()
 }

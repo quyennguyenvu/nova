@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -31,14 +30,14 @@ func NewHTTPServer(
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.HTTP.Port),
 		Handler:      engine,
-		ReadTimeout:  time.Duration(cfg.HTTP.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.HTTP.WriteTimeout) * time.Second,
+		ReadTimeout:  cfg.HTTP.ReadTimeout,
+		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
 
 	s := &HTTPServer{server: srv, cfg: cfg, logger: log}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(ctx, cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down HTTP server", "addr", srv.Addr)

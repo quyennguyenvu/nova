@@ -140,6 +140,7 @@ func (g *Generator) rootFiles() []templateFile {
 		{"templates/gomod.tmpl", "go.mod", true},
 		{"templates/gitignore.tmpl", ".gitignore", true},
 		{"templates/main.go.tmpl", "main.go", true},
+		{"templates/env.example.tmpl", ".env", true},
 		{"templates/env.example.tmpl", ".env.example", true},
 		{"templates/README.md.tmpl", "README.md", true},
 	}
@@ -225,6 +226,11 @@ func (g *Generator) adapterFiles() []templateFile {
 		{
 			"templates/adapter/repository/redis/user_cache.go.tmpl",
 			"internal/adapter/repository/redis/user_cache.go",
+			cfg.HasRedis(),
+		},
+		{
+			"templates/adapter/repository/redis/mapper/user.go.tmpl",
+			"internal/adapter/repository/redis/mapper/user.go",
 			cfg.HasRedis(),
 		},
 	}
@@ -446,7 +452,7 @@ func (g *Generator) toolingFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{
 		{"templates/Dockerfile.tmpl", "Dockerfile", cfg.IncludeDocker},
-		{"templates/Makefile.tmpl", "Makefile", cfg.IncludeMake},
+		{"templates/Makefile.tmpl", "Makefile", true},
 		{"templates/golangci.yaml.tmpl", ".golangci.yaml", true},
 		{"templates/ci/github-ci.yaml.tmpl", ".github/workflows/ci.yaml", cfg.IncludeCI},
 		{"templates/github/pull_request_template.md.tmpl", ".github/pull_request_template.md", cfg.IncludeCI},

@@ -15,7 +15,7 @@ type UpdateUserInput struct {
 	Name string
 }
 
-// Output DTOs - what the use case returns
+// UserOutput is the use-case's return shape — handed back to the transport layer for projection.
 type UserOutput struct {
 	ID        int64
 	Email     string

@@ -3,7 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
-	"time"
+	"net"
+	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
@@ -14,12 +15,12 @@ import (
 
 // NewPostgresDB creates a new PostgreSQL connection pool.
 func NewPostgresDB(cfg *config.Config, log *logger.Logger) (*pgxpool.Pool, func(), error) {
+	hostPort := net.JoinHostPort(cfg.Database.Host, strconv.Itoa(cfg.Database.Port))
 	dsn := fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		"postgres://%s:%s@%s/%s?sslmode=%s",
 		cfg.Database.User,
 		cfg.Database.Password,
-		cfg.Database.Host,
-		cfg.Database.Port,
+		hostPort,
 		cfg.Database.Name,
 		cfg.Database.SSLMode,
 	)
@@ -29,12 +30,12 @@ func NewPostgresDB(cfg *config.Config, log *logger.Logger) (*pgxpool.Pool, func(
 		return nil, nil, errors.Wrap(err, "failed to parse database config")
 	}
 
-	poolCfg.MaxConns = 25
-	poolCfg.MinConns = 5
-	poolCfg.MaxConnLifetime = 5 * time.Minute
-	poolCfg.MaxConnIdleTime = 1 * time.Minute
+	poolCfg.MaxConns = cfg.Database.MaxConns
+	poolCfg.MinConns = cfg.Database.MinConns
+	poolCfg.MaxConnLifetime = cfg.Database.MaxConnLifetime
+	poolCfg.MaxConnIdleTime = cfg.Database.MaxConnIdleTime
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Database.ConnectTimeout)
 	defer cancel()
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
@@ -42,8 +43,8 @@ func NewPostgresDB(cfg *config.Config, log *logger.Logger) (*pgxpool.Pool, func(
 		return nil, nil, errors.Wrap(err, "failed to connect to database")
 	}
 
-	if err := pool.Ping(ctx); err != nil {
-		return nil, nil, errors.Wrap(err, "failed to ping database")
+	if pingErr := pool.Ping(ctx); pingErr != nil {
+		return nil, nil, errors.Wrap(pingErr, "failed to ping database")
 	}
 
 	cleanup := func() {

@@ -41,7 +41,8 @@ type Histogram interface {
 	Observe(ctx context.Context, v float64, kv ...any)
 }
 
-// The bundle use cases take:
+// Observer bundles the three telemetry handles inner layers may need — the
+// canonical structured logger plus optional tracing and metrics surfaces.
 type Observer struct {
 	Log    Logger
 	Tracer Tracer

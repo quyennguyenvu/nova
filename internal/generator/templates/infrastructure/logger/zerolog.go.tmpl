@@ -30,7 +30,7 @@ func New(cfg *config.Config) *Logger {
 func NewWithWriter(cfg *config.LogConfig, w io.Writer) *Logger {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
-	var writer io.Writer = w
+	writer := w
 	if strings.EqualFold(cfg.Format, "console") {
 		writer = zerolog.ConsoleWriter{Out: w}
 	}

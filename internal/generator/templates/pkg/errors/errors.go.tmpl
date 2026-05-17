@@ -235,8 +235,10 @@ func ToAppError(err error) *AppError {
 	return base
 }
 
-// Convenience constructors (string-message). Each captures a frame at its call
-// site. Use these when the message is plain English (debug, internal, fixed).
+// BadRequest and the sibling constructors below build AppErrors with a plain
+// string message — each captures a stack frame at its call site. Use these
+// when the message is a fixed internal/debug string; for user-facing messages
+// that need translation use the locale-coded constructors further down.
 func BadRequest(msg string) *AppError     { return newAt(http.StatusBadRequest, msg) }
 func NotFound(msg string) *AppError       { return newAt(http.StatusNotFound, msg) }
 func Unauthorized(msg string) *AppError   { return newAt(http.StatusUnauthorized, msg) }
@@ -252,12 +254,11 @@ func newAt(code int, msg string) *AppError {
 	}
 }
 
-// Locale-coded constructors. Use these when the message should be translated
-// at the transport boundary using the request's Accept-Language. Args are
-// substituted into the translated template via fmt.Sprintf.
-//
-// The HTTP status is derived from code.HTTPStatus() — no need to pass one
-// unless you want to override it (use NewL for that).
+// NewL and the sibling locale-coded constructors below build AppErrors whose
+// message is translated at the transport boundary via the request's
+// Accept-Language. Args are substituted into the translated template via
+// fmt.Sprintf. The HTTP status is derived from code.HTTPStatus() — pass an
+// explicit status to NewL only when you want to override that mapping.
 func NewL(httpCode int, code locale.Locale, args ...any) *AppError {
 	return newAtL(httpCode, code, args)
 }

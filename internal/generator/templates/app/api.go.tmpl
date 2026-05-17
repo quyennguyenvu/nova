@@ -5,22 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 
 	"{{.ModuleName}}/internal/infrastructure/di"
 )
 
-func RunHTTPServer() {
+// RunHTTPServer boots the HTTP server, blocks until the OS signals shutdown or
+// the server stops with an error, and returns any startup/runtime failure so
+// the caller (typically a cobra RunE) can set a non-zero exit code without
+// having to call os.Exit and skip pending defers.
+func RunHTTPServer() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Pre-DI failure has no logger yet — stderr + exit is the right tool here.
 	app, cleanup, err := di.InitializeHTTPServer(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize http server: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize http server: %w", err)
 	}
 	defer cleanup()
 
@@ -39,7 +40,9 @@ func RunHTTPServer() {
 		log.Info("shutdown signal received")
 	case startErr := <-errChan:
 		log.Error("server stopped with error", "error", startErr)
+		return startErr
 	}
 
 	log.Info("shutting down server")
+	return nil
 }

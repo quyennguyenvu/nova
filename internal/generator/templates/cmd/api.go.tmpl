@@ -11,9 +11,9 @@ func apiCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "api",
 		Short: "Start the HTTP server",
-		Run: func(*cobra.Command, []string) {
+		RunE: func(*cobra.Command, []string) error {
 			locale.NewMapping()
-			app.RunHTTPServer()
+			return app.RunHTTPServer()
 		},
 	}
 }

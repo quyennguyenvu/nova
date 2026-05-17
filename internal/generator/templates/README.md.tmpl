@@ -59,6 +59,7 @@ cp .env.example .env
 
 # Install dependencies
 go mod tidy
+make gen
 {{- if .IncludeDocker}}
 
 # Start infrastructure (database, cache, etc.)
@@ -69,15 +70,8 @@ docker-compose up -d
 # Run migrations
 make migrate-up
 {{- end}}
-{{- if .IncludeMake}}
-
 # Run the server
-make run
-{{- else}}
-
-# Run the server
-go run ./cmd/api
-{{- end}}
+go run main.go api
 ```
 
 {{- if .HasHTTP}}
@@ -95,8 +89,6 @@ go run ./cmd/api
 | GET    | /ready            | Readiness check |
 
 {{- end}}
-
-{{- if .IncludeMake}}
 
 ## Available Commands
 
@@ -117,8 +109,6 @@ make docker-up      # Start Docker containers
 make docker-down    # Stop Docker containers
 {{- end}}
 ```
-
-{{- end}}
 
 ## Project Structure
 

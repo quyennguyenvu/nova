@@ -12,7 +12,7 @@ type UpdateUserRequest struct {
 	Name string `json:"name" validate:"omitempty,min=2,max=100"`
 }
 
-// HTTP response bodies — these own json tags.
+// UserResponse is the HTTP response body for user reads — this layer owns the json tags.
 type UserResponse struct {
 	ID        int64     `json:"id"`
 	Email     string    `json:"email"`

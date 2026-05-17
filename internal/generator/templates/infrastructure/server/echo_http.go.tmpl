@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -33,7 +32,7 @@ func NewHTTPServer(
 	s := &HTTPServer{echo: e, addr: addr, cfg: cfg, logger: log}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(ctx, cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down HTTP server", "addr", addr)

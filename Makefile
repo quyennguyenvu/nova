@@ -39,7 +39,6 @@ generate-all: build ## Generate a sample project to test templates (Fiber/Postgr
 		--config=yaml \
 		--di=wire \
 		--docker \
-		--makefile \
 		--ci=github
 	mv testproject $(TEST_DIR)
 	@echo ""

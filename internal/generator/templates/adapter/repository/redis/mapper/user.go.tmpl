@@ -1,0 +1,49 @@
+// Package mapper converts between domain entities and the wire format used by
+// the redis cache adapter. Mirror of postgres/mapper — one file per entity,
+// pure functions, no redis handles. The DTO struct is unexported so the wire
+// shape stays an implementation detail of this package; callers in
+// adapter/repository/redis only see Marshal/Unmarshal.
+package mapper
+
+import (
+	"encoding/json"
+	"time"
+
+	"{{.ModuleName}}/internal/domain/entity"
+)
+
+// userCacheDTO is the on-the-wire projection of entity.User. Password is
+// deliberately omitted so credentials can never be serialized into Redis.
+type userCacheDTO struct {
+	ID        int64     `json:"id"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// MarshalUser encodes a user entity into the cache wire format.
+func MarshalUser(u *entity.User) ([]byte, error) {
+	return json.Marshal(userCacheDTO{
+		ID:        u.ID,
+		Email:     u.Email,
+		Name:      u.Name,
+		CreatedAt: u.CreatedAt,
+		UpdatedAt: u.UpdatedAt,
+	})
+}
+
+// UnmarshalUser decodes cache bytes back into a user entity.
+func UnmarshalUser(data []byte) (*entity.User, error) {
+	var d userCacheDTO
+	if err := json.Unmarshal(data, &d); err != nil {
+		return nil, err
+	}
+	return &entity.User{
+		ID:        d.ID,
+		Email:     d.Email,
+		Name:      d.Name,
+		CreatedAt: d.CreatedAt,
+		UpdatedAt: d.UpdatedAt,
+	}, nil
+}

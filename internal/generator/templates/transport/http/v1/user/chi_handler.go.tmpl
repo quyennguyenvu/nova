@@ -72,8 +72,8 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input useruc.UpdateUserInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeErr(w, r, errors.BadRequest(err.Error()))
+	if bindErr := json.NewDecoder(r.Body).Decode(&input); bindErr != nil {
+		writeErr(w, r, errors.BadRequest(bindErr.Error()))
 		return
 	}
 	user, err := h.userService.UpdateUser(r.Context(), id, input)
@@ -91,8 +91,8 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, errors.BadRequest("invalid id"))
 		return
 	}
-	if err := h.userService.DeleteUser(r.Context(), id); err != nil {
-		writeErr(w, r, mapAndLog(r.Context(), err))
+	if delErr := h.userService.DeleteUser(r.Context(), id); delErr != nil {
+		writeErr(w, r, mapAndLog(r.Context(), delErr))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

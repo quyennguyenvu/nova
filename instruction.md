@@ -34,7 +34,7 @@ Ask the user for:
 
 ### 2. Project Structure to Generate
 
-The tree below is the **maximum output** when every option is enabled (`--transport=http --http-framework=fiber --database=postgres --db-driver=pgx --query=sqlc --cache=redis --di=wire --docker --makefile --ci=github`). Lines marked `[flag]` are conditional — they appear only when that flag/option is selected. See [internal/generator/generator.go](internal/generator/generator.go) (`buildFileList`) for the authoritative selection logic.
+The tree below is the **maximum output** when every option is enabled (`--transport=http --http-framework=fiber --database=postgres --db-driver=pgx --query=sqlc --cache=redis --di=wire --docker --ci=github`). Lines marked `[flag]` are conditional — they appear only when that flag/option is selected. See [internal/generator/generator.go](internal/generator/generator.go) (`buildFileList`) for the authoritative selection logic.
 
 ```bash
 {project}/
@@ -45,7 +45,7 @@ The tree below is the **maximum output** when every option is enabled (`--transp
 ├── .golangci.yaml                          # Lint config (mirrors nova's own)
 ├── .sqlfluff                               # [SQL] SQL formatter config
 ├── Dockerfile                              # [--docker]
-├── Makefile                                # [--makefile]
+├── Makefile
 ├── README.md
 │
 ├── cmd/                                    # Cobra subcommands (one per transport)

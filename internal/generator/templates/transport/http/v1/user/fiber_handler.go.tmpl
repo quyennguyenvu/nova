@@ -66,8 +66,8 @@ func (h *UserHandler) Update(c *fiber.Ctx) error {
 		return writeErr(c, errors.BadRequest("invalid id"))
 	}
 	var input useruc.UpdateUserInput
-	if err := c.BodyParser(&input); err != nil {
-		return writeErr(c, errors.BadRequest(err.Error()))
+	if bindErr := c.BodyParser(&input); bindErr != nil {
+		return writeErr(c, errors.BadRequest(bindErr.Error()))
 	}
 	user, err := h.userService.UpdateUser(c.UserContext(), id, input)
 	if err != nil {
@@ -82,8 +82,8 @@ func (h *UserHandler) Delete(c *fiber.Ctx) error {
 	if err != nil {
 		return writeErr(c, errors.BadRequest("invalid id"))
 	}
-	if err := h.userService.DeleteUser(c.UserContext(), id); err != nil {
-		return writeErr(c, mapAndLog(c.UserContext(), err))
+	if delErr := h.userService.DeleteUser(c.UserContext(), id); delErr != nil {
+		return writeErr(c, mapAndLog(c.UserContext(), delErr))
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

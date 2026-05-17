@@ -1,9 +1,11 @@
 version: "2"
 sql:
   - engine: "mysql"
-    queries: "./query"
+    queries: "query"
     schema:
-      - "./migrations"
+      - "migrations"
+		database:
+			uri: ${MIGRATE_DATABASE_URL}
     gen:
       go:
         package: "dbgen"

@@ -1,3 +1,33 @@
 log:
-  level: "error"
+  level: "warn"
   format: "json"
+
+{{- if .HasHTTP}}
+
+http:
+  read_timeout: 15s
+  write_timeout: 15s
+{{- end}}
+
+{{- if .HasDatabase}}
+
+database:
+{{- if eq .Database "postgres"}}
+  max_conns: 50
+  min_conns: 10
+  max_conn_lifetime: 30m
+  max_conn_idle_time: 5m
+{{- end}}
+{{- if eq .Database "mysql"}}
+  max_open_conns: 50
+  max_idle_conns: 10
+{{- end}}
+{{- end}}
+
+{{- if .HasRedis}}
+
+redis:
+  pool_size: 30
+  min_idle_conns: 5
+  conn_max_lifetime: 5m
+{{- end}}

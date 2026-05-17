@@ -2,12 +2,12 @@ package redis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
+	"{{.ModuleName}}/internal/adapter/repository/redis/mapper"
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
 )
@@ -42,24 +42,19 @@ func (r *UserCacheRepository) Create(ctx context.Context, user *entity.User) err
 
 func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.User, error) {
 {{- if .HasRedis}}
-	// Try cache first
 	key := fmt.Sprintf("%s%d", userCachePrefix, id)
-	cached, err := r.cache.Get(ctx, key).Result()
-	if err == nil {
-		var user entity.User
-		if err := json.Unmarshal([]byte(cached), &user); err == nil {
-			return &user, nil
+	if cached, err := r.cache.Get(ctx, key).Result(); err == nil {
+		if u, decodeErr := mapper.UnmarshalUser([]byte(cached)); decodeErr == nil {
+			return u, nil
 		}
 	}
 
-	// Fallback to database
 	user, err := r.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Cache the result
-	if data, err := json.Marshal(user); err == nil {
+	if data, marshalErr := mapper.MarshalUser(user); marshalErr == nil {
 		r.cache.Set(ctx, key, data, userCacheTTL)
 	}
 
@@ -75,7 +70,6 @@ func (r *UserCacheRepository) GetByEmail(ctx context.Context, email string) (*en
 
 func (r *UserCacheRepository) Update(ctx context.Context, user *entity.User) error {
 {{- if .HasRedis}}
-	// Invalidate cache
 	key := fmt.Sprintf("%s%d", userCachePrefix, user.ID)
 	r.cache.Del(ctx, key)
 {{- end}}

@@ -114,11 +114,11 @@ func Translate(lang Language, code Locale, args ...any) string {
 	}
 	msg, ok := mapping[code]
 	if !ok {
-		if fallback, ok := translations[LangEn][code]; ok {
-			msg = fallback
-		} else {
+		fallback, fallbackOK := translations[LangEn][code]
+		if !fallbackOK {
 			return fmt.Sprintf("unknown error: %d", code)
 		}
+		msg = fallback
 	}
 	if len(args) > 0 {
 		return fmt.Sprintf(msg, args...)
