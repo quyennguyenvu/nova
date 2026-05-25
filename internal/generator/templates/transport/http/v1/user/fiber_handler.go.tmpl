@@ -6,7 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	useruc "{{.ModuleName}}/internal/usecase/user"
+	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/logctx"
@@ -14,10 +14,10 @@ import (
 
 // UserHandler is the HTTP boundary for user operations.
 type UserHandler struct {
-	userService *useruc.Service
+	userService *usersvc.Service
 }
 
-func NewUserHandler(userService *useruc.Service) *UserHandler {
+func NewUserHandler(userService *usersvc.Service) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
@@ -34,11 +34,11 @@ func mapAndLog(ctx context.Context, err error) *errors.AppError {
 }
 
 func (h *UserHandler) Create(c *fiber.Ctx) error {
-	var input useruc.CreateUserInput
+	var input usersvc.RegisterInput
 	if err := c.BodyParser(&input); err != nil {
 		return writeErr(c, errors.BadRequest(err.Error()))
 	}
-	user, err := h.userService.CreateUser(c.UserContext(), input)
+	user, err := h.userService.Register(c.UserContext(), input)
 	if err != nil {
 		return writeErr(c, mapAndLog(c.UserContext(), err))
 	}
@@ -52,7 +52,7 @@ func (h *UserHandler) GetByID(c *fiber.Ctx) error {
 	if err != nil {
 		return writeErr(c, errors.BadRequest("invalid id"))
 	}
-	user, err := h.userService.GetUser(c.UserContext(), id)
+	user, err := h.userService.Get(c.UserContext(), id)
 	if err != nil {
 		return writeErr(c, mapAndLog(c.UserContext(), err))
 	}
@@ -65,11 +65,11 @@ func (h *UserHandler) Update(c *fiber.Ctx) error {
 	if err != nil {
 		return writeErr(c, errors.BadRequest("invalid id"))
 	}
-	var input useruc.UpdateUserInput
+	var input usersvc.UpdateInput
 	if bindErr := c.BodyParser(&input); bindErr != nil {
 		return writeErr(c, errors.BadRequest(bindErr.Error()))
 	}
-	user, err := h.userService.UpdateUser(c.UserContext(), id, input)
+	user, err := h.userService.Update(c.UserContext(), id, input)
 	if err != nil {
 		return writeErr(c, mapAndLog(c.UserContext(), err))
 	}
@@ -82,7 +82,7 @@ func (h *UserHandler) Delete(c *fiber.Ctx) error {
 	if err != nil {
 		return writeErr(c, errors.BadRequest("invalid id"))
 	}
-	if delErr := h.userService.DeleteUser(c.UserContext(), id); delErr != nil {
+	if delErr := h.userService.Delete(c.UserContext(), id); delErr != nil {
 		return writeErr(c, mapAndLog(c.UserContext(), delErr))
 	}
 	return c.SendStatus(fiber.StatusNoContent)
@@ -91,7 +91,7 @@ func (h *UserHandler) Delete(c *fiber.Ctx) error {
 func (h *UserHandler) List(c *fiber.Ctx) error {
 	limit := c.QueryInt("limit", 10)
 	offset := c.QueryInt("offset", 0)
-	users, err := h.userService.ListUsers(c.UserContext(), toListFilter(limit, offset))
+	users, err := h.userService.List(c.UserContext(), toListFilter(limit, offset))
 	if err != nil {
 		return writeErr(c, mapAndLog(c.UserContext(), err))
 	}

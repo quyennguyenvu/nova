@@ -32,7 +32,7 @@ import (
 	transporthttp "{{.ModuleName}}/internal/transport/http"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 {{- end}}
-	userusecase "{{.ModuleName}}/internal/usecase/user"
+	usersvc "{{.ModuleName}}/internal/usecase/user"
 
 	"github.com/google/wire"
 )
@@ -80,7 +80,7 @@ var adapterSet = wire.NewSet(
 )
 
 var usecaseSet = wire.NewSet(
-	userusecase.NewService,
+	usersvc.NewService,
 )
 
 {{- if .HasHTTP}}

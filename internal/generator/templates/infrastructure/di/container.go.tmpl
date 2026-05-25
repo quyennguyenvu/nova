@@ -33,7 +33,7 @@ import (
 	transporthttp "{{.ModuleName}}/internal/transport/http"
 {{- if .HasDatabase}}
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
-	userusecase "{{.ModuleName}}/internal/usecase/user"
+	usersvc "{{.ModuleName}}/internal/usecase/user"
 {{- end}}
 {{- end}}
 )
@@ -124,9 +124,9 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- else}}
 	cachedUserRepo := cacherepo.NewUserCacheRepository(userRepo)
 {{- end}}
-	userService := userusecase.NewService(cachedUserRepo{{- if .HasMessageQueue}}, publisher{{- end}})
+	userService := usersvc.NewService(cachedUserRepo{{- if .HasMessageQueue}}, publisher{{- end}})
 {{- else}}
-	userService := userusecase.NewService(userRepo{{- if .HasMessageQueue}}, publisher{{- end}})
+	userService := usersvc.NewService(userRepo{{- if .HasMessageQueue}}, publisher{{- end}})
 {{- end}}
 
 	userHandler := userv1.NewUserHandler(userService)

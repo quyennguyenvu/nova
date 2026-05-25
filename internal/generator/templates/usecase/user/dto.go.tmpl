@@ -2,21 +2,22 @@ package user
 
 import "time"
 
-// Input DTOs - what the use case needs (no json/validate tags!)
-// The transport layer owns serialization. The assembler maps between them.
+// Input/output DTOs — what the use case consumes and returns.
+// The transport layer owns json/validate tags; the assembler maps to/from these.
 
-type CreateUserInput struct {
+type RegisterInput struct {
 	Email    string
 	Name     string
 	Password string
 }
 
-type UpdateUserInput struct {
+type UpdateInput struct {
 	Name string
 }
 
-// UserOutput is the use-case's return shape — handed back to the transport layer for projection.
-type UserOutput struct {
+// Output is the use-case's return shape — the transport layer projects it
+// into the wire format. Entities never cross this boundary.
+type Output struct {
 	ID        int64
 	Email     string
 	Name      string

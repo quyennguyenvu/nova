@@ -39,7 +39,7 @@ func NewService(
 	}
 }
 
-func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*entity.User, error) {
+func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, error) {
 	existing, _ := s.userRepo.GetByEmail(ctx, input.Email)
 	if existing != nil {
 		// Locale-coded error: transport translates UserEmailExists with input.Email
@@ -69,18 +69,18 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*entit
 
 {{- end}}
 
-	return user, nil
+	return toOutput(user), nil
 }
 
-func (s *Service) GetUser(ctx context.Context, id int64) (*entity.User, error) {
+func (s *Service) Get(ctx context.Context, id int64) (*Output, error) {
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, errors.Wrapf(err, "get user id=%d", id)
 	}
-	return user, nil
+	return toOutput(user), nil
 }
 
-func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInput) (*entity.User, error) {
+func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*Output, error) {
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, errors.Wrapf(err, "update user id=%d: load", id)
@@ -93,20 +93,34 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInpu
 	if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
 		return nil, errors.Wrapf(updateErr, "update user id=%d: persist", id)
 	}
-	return user, nil
+	return toOutput(user), nil
 }
 
-func (s *Service) DeleteUser(ctx context.Context, id int64) error {
+func (s *Service) Delete(ctx context.Context, id int64) error {
 	if err := s.userRepo.Delete(ctx, id); err != nil {
 		return errors.Wrapf(err, "delete user id=%d", id)
 	}
 	return nil
 }
 
-func (s *Service) ListUsers(ctx context.Context, filter domain.UserFilter) ([]*entity.User, error) {
+func (s *Service) List(ctx context.Context, filter domain.UserFilter) ([]*Output, error) {
 	users, err := s.userRepo.List(ctx, filter)
 	if err != nil {
 		return nil, errors.Wrapf(err, "list users limit=%d offset=%d", filter.Limit, filter.Offset)
 	}
-	return users, nil
+	outs := make([]*Output, len(users))
+	for i, u := range users {
+		outs[i] = toOutput(u)
+	}
+	return outs, nil
+}
+
+func toOutput(u *entity.User) *Output {
+	return &Output{
+		ID:        u.ID,
+		Email:     u.Email,
+		Name:      u.Name,
+		CreatedAt: u.CreatedAt,
+		UpdatedAt: u.UpdatedAt,
+	}
 }
