@@ -2,23 +2,28 @@ package entity
 
 import "time"
 
-// User is a domain entity. NO framework tags — serialization is a transport concern.
+// User is a domain entity. NO framework tags — serialization is a transport
+// concern. The stored credential is PasswordHash (bcrypt output); plaintext
+// passwords never live on the entity.
 type User struct {
-	ID        int64
-	Email     string
-	Name      string
-	Password  string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID           int64
+	Email        string
+	Name         string
+	PasswordHash string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
-func NewUser(email, name, password string) *User {
+// NewUser builds a User from an already-hashed credential. Hashing is the
+// usecase's job (it injects security.PasswordHasher) — this constructor
+// stays free of crypto so the domain has no security deps.
+func NewUser(email, name, passwordHash string) *User {
 	now := time.Now()
 	return &User{
-		Email:     email,
-		Name:      name,
-		Password:  password,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Email:        email,
+		Name:         name,
+		PasswordHash: passwordHash,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 }

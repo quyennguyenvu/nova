@@ -15,8 +15,11 @@ import (
 )
 
 // Registrar attaches a feature's routes to a router subtree. Each feature
-// (transport/http/v1/<feature>) provides a *Routes implementing this.
+// (transport/http/v1/<feature>) provides a *Routes implementing this. Prefix
+// is mounted as a subgroup before Register is called. Multiple Registrars may
+// share a Prefix; the slice order in NewApp determines mount order.
 type Registrar interface {
+	Prefix() string
 	Register(*echo.Group)
 }
 
@@ -24,23 +27,24 @@ type Registrar interface {
 // Order of middleware matters: RequestID first (so every later layer sees the
 // ID), Logging second (wraps everything to compute duration & emit one line),
 // Recovery inside Logging so panics still produce an access log.
-func NewApp(cfg *config.Config, log *logger.Logger, registrars map[string]Registrar) *echo.Echo {
-	_ = cfg
+//
+// registrars is a slice (not a map) so mount order is deterministic.
+func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 
 	e.Use(middleware.RequestID())
 	e.Use(middleware.Logging(log))
 	e.Use(middleware.Recovery())
-	e.Use(middleware.CORS())
+	e.Use(middleware.CORS(cfg.HTTP.CORS))
 	e.Use(middleware.Locale())
 
 	e.GET("/healthz", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	for prefix, r := range registrars {
-		r.Register(e.Group(prefix))
+	for _, r := range registrars {
+		r.Register(e.Group(r.Prefix()))
 	}
 
 	return e

@@ -1,7 +1,17 @@
+// Package redis is the cache-aside decorator over UserRepository.
+//
+// Cache hits return an entity.User WITHOUT the Password/PasswordHash fields —
+// credentials are never serialized into Redis. Callers MUST NOT re-persist
+// the returned entity into the underlying store; pull a fresh row via
+// GetByEmail (which bypasses cache) when credentials are required.
+//
+// Invalidation: Update and Delete return wrapped errors on Del failure so the
+// caller can retry. A failed Del would otherwise leave stale data in cache.
 package redis
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -10,6 +20,8 @@ import (
 	"{{.ModuleName}}/internal/adapter/repository/redis/mapper"
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
 )
 
 const (
@@ -17,36 +29,29 @@ const (
 	userCacheTTL    = 15 * time.Minute
 )
 
-// UserCacheRepository is a caching decorator for UserRepository.
+// UserCacheRepository is a cache-aside decorator for domain.UserRepository.
 type UserCacheRepository struct {
 	repo  domain.UserRepository
-{{- if .HasRedis}}
 	cache *redis.Client
-{{- end}}
 }
 
-// NewUserCacheRepository creates a new cache-aware user domain.
-{{- if .HasRedis}}
 func NewUserCacheRepository(repo domain.UserRepository, cache *redis.Client) *UserCacheRepository {
 	return &UserCacheRepository{repo: repo, cache: cache}
 }
-{{- else}}
-func NewUserCacheRepository(repo domain.UserRepository) *UserCacheRepository {
-	return &UserCacheRepository{repo: repo}
-}
-{{- end}}
 
 func (r *UserCacheRepository) Create(ctx context.Context, user *entity.User) error {
 	return r.repo.Create(ctx, user)
 }
 
 func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.User, error) {
-{{- if .HasRedis}}
-	key := fmt.Sprintf("%s%d", userCachePrefix, id)
+	key := userKey(id)
 	if cached, err := r.cache.Get(ctx, key).Result(); err == nil {
 		if u, decodeErr := mapper.UnmarshalUser([]byte(cached)); decodeErr == nil {
 			return u, nil
 		}
+		logctx.From(ctx).Warn("user cache: decode failed, refilling", "key", key)
+	} else if !stderrors.Is(err, redis.Nil) {
+		logctx.From(ctx).Warn("user cache: read failed, falling through", "key", key, "err", err)
 	}
 
 	user, err := r.repo.GetByID(ctx, id)
@@ -54,14 +59,13 @@ func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.Us
 		return nil, err
 	}
 
+	// Best-effort write — log the miss but don't fail the read.
 	if data, marshalErr := mapper.MarshalUser(user); marshalErr == nil {
-		r.cache.Set(ctx, key, data, userCacheTTL)
+		if setErr := r.cache.Set(ctx, key, data, userCacheTTL).Err(); setErr != nil {
+			logctx.From(ctx).Warn("user cache: refill failed", "key", key, "err", setErr)
+		}
 	}
-
 	return user, nil
-{{- else}}
-	return r.repo.GetByID(ctx, id)
-{{- end}}
 }
 
 func (r *UserCacheRepository) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
@@ -69,21 +73,29 @@ func (r *UserCacheRepository) GetByEmail(ctx context.Context, email string) (*en
 }
 
 func (r *UserCacheRepository) Update(ctx context.Context, user *entity.User) error {
-{{- if .HasRedis}}
-	key := fmt.Sprintf("%s%d", userCachePrefix, user.ID)
-	r.cache.Del(ctx, key)
-{{- end}}
-	return r.repo.Update(ctx, user)
+	if err := r.repo.Update(ctx, user); err != nil {
+		return err
+	}
+	if delErr := r.cache.Del(ctx, userKey(user.ID)).Err(); delErr != nil {
+		return errors.Wrapf(delErr, "user cache: invalidate after update id=%d", user.ID)
+	}
+	return nil
 }
 
 func (r *UserCacheRepository) Delete(ctx context.Context, id int64) error {
-{{- if .HasRedis}}
-	key := fmt.Sprintf("%s%d", userCachePrefix, id)
-	r.cache.Del(ctx, key)
-{{- end}}
-	return r.repo.Delete(ctx, id)
+	if err := r.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+	if delErr := r.cache.Del(ctx, userKey(id)).Err(); delErr != nil {
+		return errors.Wrapf(delErr, "user cache: invalidate after delete id=%d", id)
+	}
+	return nil
 }
 
 func (r *UserCacheRepository) List(ctx context.Context, params domain.UserFilter) ([]*entity.User, error) {
 	return r.repo.List(ctx, params)
+}
+
+func userKey(id int64) string {
+	return fmt.Sprintf("%s%d", userCachePrefix, id)
 }

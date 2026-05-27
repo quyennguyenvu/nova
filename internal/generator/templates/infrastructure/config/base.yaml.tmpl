@@ -1,6 +1,16 @@
+app_name: "{{.ProjectName}}"
+app_version: "0.1.0"
+
 log:
   level: "info" # debug | info | warn | error | fatal
   format: "json" # json | console
+
+tracing:
+  # Set OTEL_EXPORTER_OTLP_ENDPOINT to a collector address (e.g. "otel-collector:4317")
+  # to enable export; empty disables tracing without breaking the app.
+  endpoint: ""
+  insecure: false
+  sample_ratio: 0.1
 
 {{- if .HasHTTP}}
 
@@ -11,6 +21,12 @@ http:
   read_buffer_size: 8192
   body_limit: 10485760 # 10 MB
   shutdown_timeout: 10s
+  cors:
+    # Override per environment via CORS_ALLOW_ORIGINS env var (comma-separated).
+    # Empty in base — each deployment must opt in explicitly; never "*" in prod.
+    allow_origins: []
+    allow_methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+    allow_headers: ["Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"]
 {{- end}}
 
 {{- if .HasGRPC}}

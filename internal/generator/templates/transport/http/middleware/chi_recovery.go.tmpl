@@ -4,21 +4,51 @@ import (
 	"net/http"
 	"runtime/debug"
 
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
-// Recovery logs panics through the request-scoped logger and returns 500.
+// recoveryWriter tracks whether the wrapped handler already flushed response
+// headers. If it has, the deferred panic handler cannot send a new envelope
+// (net/http would emit "superfluous response.WriteHeader" and the partial
+// body is already on the wire) — we log and bail in that case.
+type recoveryWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (rw *recoveryWriter) WriteHeader(code int) {
+	rw.wroteHeader = true
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *recoveryWriter) Write(b []byte) (int, error) {
+	rw.wroteHeader = true
+	return rw.ResponseWriter.Write(b)
+}
+
+// Recovery logs panics through the request-scoped logger and returns 500 in
+// the standard response envelope. If the panicking handler already started
+// the response body, the envelope is skipped (panic is still logged).
 func Recovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rw := &recoveryWriter{ResponseWriter: w}
 		defer func() {
-			if rec := recover(); rec != nil {
-				logctx.From(r.Context()).Error("panic recovered",
-					"panic", rec,
-					"stack", string(debug.Stack()),
-				)
-				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			rec := recover()
+			if rec == nil {
+				return
 			}
+			logctx.From(r.Context()).Error("panic recovered",
+				"panic", rec,
+				"stack", string(debug.Stack()),
+				"wrote_header", rw.wroteHeader,
+			)
+			if rw.wroteHeader {
+				return
+			}
+			httpwriter.WriteError(rw, r, errors.InternalServer("internal server error"))
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(rw, r)
 	})
 }

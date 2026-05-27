@@ -1,14 +1,12 @@
 package logger
 
 import (
-	"context"
 	"io"
 	"os"
 	"strings"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/pkgerrors"
-	"go.opentelemetry.io/otel/trace"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/pkg/observability"
@@ -50,29 +48,11 @@ func Nop() *Logger {
 }
 
 // With returns a child logger with the key/value attached to every event.
-func (l *Logger) With(key string, value any) *Logger {
+// Returns observability.Logger (not *Logger) so the type satisfies the
+// interface — inner layers fork via logctx.From(ctx).With(...) without
+// importing this package.
+func (l *Logger) With(key string, value any) observability.Logger {
 	return &Logger{zl: l.zl.With().Interface(key, value).Logger()}
-}
-
-// WithFields returns a child logger with multiple fields attached.
-func (l *Logger) WithFields(fields map[string]any) *Logger {
-	ctx := l.zl.With()
-	for k, v := range fields {
-		ctx = ctx.Interface(k, v)
-	}
-	return &Logger{zl: ctx.Logger()}
-}
-
-// WithTrace attaches trace_id and span_id from the OTel span in ctx (if any).
-func (l *Logger) WithTrace(ctx context.Context) *Logger {
-	sc := trace.SpanContextFromContext(ctx)
-	if !sc.IsValid() {
-		return l
-	}
-	return &Logger{zl: l.zl.With().
-		Str("trace_id", sc.TraceID().String()).
-		Str("span_id", sc.SpanID().String()).
-		Logger()}
 }
 
 func (l *Logger) Debug(msg string, kv ...any) { emit(l.zl.Debug(), msg, kv) }

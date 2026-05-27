@@ -1,18 +1,8 @@
 package user
 
 import (
-	"{{.ModuleName}}/internal/domain"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
-
-	"github.com/spf13/cast"
 )
-
-func toListFilter(limit, offset int) domain.UserFilter {
-	return domain.UserFilter{
-		Limit:  cast.ToInt32(limit),
-		Offset: cast.ToInt32(offset),
-	}
-}
 
 // ToUserResponse projects a use-case Output into the HTTP response shape.
 func ToUserResponse(out *usersvc.Output) *UserResponse {

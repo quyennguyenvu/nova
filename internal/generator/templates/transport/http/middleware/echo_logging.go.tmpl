@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
@@ -25,21 +26,25 @@ func errMsg(err error) string {
 }
 
 // Logging builds a request-scoped logger (request_id + trace_id), attaches it
-// to ctx, and emits ONE access log per request with severity by status.
+// to ctx, installs an AppError stash slot (httpwriter.WriteError fills it on
+// 4xx/5xx), and emits ONE access log per request with severity by status.
 func Logging(base *logger.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			start := time.Now()
-			ctx := c.Request().Context()
+			req := c.Request()
+			ctx := req.Context()
 			reqID := RequestIDFrom(ctx)
 			sc := trace.SpanContextFromContext(ctx)
 
 			scoped := base.
 				With("request_id", reqID).
 				With("trace_id", traceIDOr(sc)).
-				With("method", c.Request().Method).
+				With("method", req.Method).
 				With("path", c.Path())
-			c.SetRequest(c.Request().WithContext(logctx.Into(ctx, scoped)))
+			ctx = logctx.Into(ctx, scoped)
+			ctx = errors.PrepareAppErrorContext(ctx)
+			c.SetRequest(req.WithContext(ctx))
 
 			err := next(c)
 
@@ -50,11 +55,21 @@ func Logging(base *logger.Logger) echo.MiddlewareFunc {
 			} else if status >= 400 {
 				ev = scoped.Warn
 			}
-			ev("request",
+			fields := []any{
 				"status", status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"err", errMsg(err),
-			)
+			}
+			if app := errors.AppErrorFromContext(ctx); app != nil {
+				fields = append(fields, "app_code", app.Code)
+				if app.Locale != 0 {
+					fields = append(fields, "app_locale", int(app.Locale))
+				}
+				if status >= 500 {
+					fields = append(fields, "app_trace", app.Trace())
+				}
+			}
+			ev("request", fields...)
 			return err
 		}
 	}

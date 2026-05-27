@@ -12,12 +12,12 @@ import (
 // UserToEntity maps a sqlc-generated row into the domain entity.
 func UserToEntity(row dbgen.User) *entity.User {
 	return &entity.User{
-		ID:        row.ID,
-		Email:     row.Email,
-		Name:      row.Name,
-		Password:  row.Password,
-		CreatedAt: row.CreatedAt.Time,
-		UpdatedAt: row.UpdatedAt.Time,
+		ID:           row.ID,
+		Email:        row.Email,
+		Name:         row.Name,
+		PasswordHash: row.Password,
+		CreatedAt:    row.CreatedAt.Time,
+		UpdatedAt:    row.UpdatedAt.Time,
 	}
 }
 
@@ -35,7 +35,7 @@ func UserToCreateParams(u *entity.User) dbgen.CreateUserParams {
 	return dbgen.CreateUserParams{
 		Email:     u.Email,
 		Name:      u.Name,
-		Password:  u.Password,
+		Password:  u.PasswordHash,
 		CreatedAt: pgtype.Timestamptz{Time: u.CreatedAt, Valid: true},
 		UpdatedAt: pgtype.Timestamptz{Time: u.UpdatedAt, Valid: true},
 	}

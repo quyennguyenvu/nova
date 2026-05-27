@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
@@ -18,7 +19,8 @@ func traceIDOr(sc trace.SpanContext) string {
 }
 
 // Logging builds a request-scoped logger (request_id + trace_id), attaches it
-// to ctx, and emits ONE access log per request with severity by status.
+// to ctx, installs an AppError stash slot (httpwriter.WriteError fills it on
+// 4xx/5xx), and emits ONE access log per request with severity by status.
 func Logging(base *logger.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -31,7 +33,9 @@ func Logging(base *logger.Logger) gin.HandlerFunc {
 			With("trace_id", traceIDOr(sc)).
 			With("method", c.Request.Method).
 			With("path", c.Request.URL.Path)
-		c.Request = c.Request.WithContext(logctx.Into(ctx, scoped))
+		ctx = logctx.Into(ctx, scoped)
+		ctx = errors.PrepareAppErrorContext(ctx)
+		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
 
@@ -42,10 +46,20 @@ func Logging(base *logger.Logger) gin.HandlerFunc {
 		} else if status >= 400 {
 			ev = scoped.Warn
 		}
-		ev("request",
+		fields := []any{
 			"status", status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"err", c.Errors.String(),
-		)
+		}
+		if app := errors.AppErrorFromContext(ctx); app != nil {
+			fields = append(fields, "app_code", app.Code)
+			if app.Locale != 0 {
+				fields = append(fields, "app_locale", int(app.Locale))
+			}
+			if status >= 500 {
+				fields = append(fields, "app_trace", app.Trace())
+			}
+		}
+		ev("request", fields...)
 	}
 }

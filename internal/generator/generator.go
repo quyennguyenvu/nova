@@ -140,7 +140,6 @@ func (g *Generator) rootFiles() []templateFile {
 		{"templates/gomod.tmpl", "go.mod", true},
 		{"templates/gitignore.tmpl", ".gitignore", true},
 		{"templates/main.go.tmpl", "main.go", true},
-		{"templates/env.example.tmpl", ".env", true},
 		{"templates/env.example.tmpl", ".env.example", true},
 		{"templates/README.md.tmpl", "README.md", true},
 	}
@@ -153,7 +152,8 @@ func (g *Generator) domainFiles() []templateFile {
 		{"templates/domain/user.go.tmpl", "internal/domain/user.go", true},
 		{"templates/domain/tx_manager.go.tmpl", "internal/domain/tx_manager.go", true},
 		{"templates/domain/identity/principal.go.tmpl", "internal/domain/identity/principal.go", true},
-		{"templates/domain/valueobject/email.go.tmpl", "internal/domain/valueobject/email.go", true},
+		{"templates/domain/identity/context.go.tmpl", "internal/domain/identity/context.go", true},
+		{"templates/domain/security/hasher.go.tmpl", "internal/domain/security/hasher.go", true},
 		{"templates/domain/user_publisher.go.tmpl", "internal/domain/user_publisher.go", cfg.HasMessageQueue()},
 	}
 }
@@ -245,6 +245,14 @@ func (g *Generator) transportFiles() []templateFile {
 		{
 			fmt.Sprintf("templates/transport/http/%s_app.go.tmpl", cfg.HTTPFramework),
 			"internal/transport/http/app.go",
+			cfg.HasHTTP(),
+		},
+
+		// HTTP response writer — framework-specific WriteJSON/WriteError.
+		// Lives under transport/http (not pkg/) because it binds to one framework.
+		{
+			fmt.Sprintf("templates/transport/http/httpwriter/%s_writer.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/httpwriter/writer.go",
 			cfg.HasHTTP(),
 		},
 
@@ -383,6 +391,7 @@ func (g *Generator) infrastructureFiles() []templateFile {
 		},
 		{"templates/infrastructure/server/grpc.go.tmpl", "internal/infrastructure/server/grpc.go", cfg.HasGRPC()},
 		{"templates/infrastructure/logger/zerolog.go.tmpl", "internal/infrastructure/logger/zerolog.go", true},
+		{"templates/infrastructure/security/bcrypt.go.tmpl", "internal/infrastructure/security/bcrypt.go", true},
 		{"templates/infrastructure/tracing/otel.go.tmpl", "internal/infrastructure/tracing/otel.go", true},
 		{"templates/infrastructure/di/container.go.tmpl", "internal/infrastructure/di/container.go", cfg.UseManualDI()},
 		{"templates/infrastructure/di/wire.go.tmpl", "internal/infrastructure/di/wire.go", cfg.UseWire()},
@@ -411,11 +420,6 @@ func (g *Generator) pkgFiles() []templateFile {
 	return []templateFile{
 		{"templates/pkg/errors/errors.go.tmpl", "pkg/errors/errors.go", true},
 		{"templates/pkg/httputil/response.go.tmpl", "pkg/httputil/response.go", cfg.HasHTTP()},
-		{
-			fmt.Sprintf("templates/pkg/httputil/%s_writer.go.tmpl", cfg.HTTPFramework),
-			"pkg/httputil/writer.go",
-			cfg.HasHTTP(),
-		},
 		{"templates/pkg/locale/locale.go.tmpl", "pkg/locale/locale.go", true},
 		{"templates/pkg/locale/locale_en.go.tmpl", "pkg/locale/locale_en.go", true},
 		{"templates/pkg/locale/locale_vi.go.tmpl", "pkg/locale/locale_vi.go", true},

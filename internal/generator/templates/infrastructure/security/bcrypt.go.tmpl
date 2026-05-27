@@ -1,0 +1,50 @@
+// Package security holds concrete implementations of the domain/security
+// ports. Bcrypt is the default password hasher — swap implementations here
+// without touching domain or usecase code.
+package security
+
+import (
+	"golang.org/x/crypto/bcrypt"
+
+	"{{.ModuleName}}/internal/domain/security"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+var _ security.PasswordHasher = (*BcryptHasher)(nil)
+
+// BcryptHasher wraps the bcrypt cost parameter so deployments can dial work
+// factor without touching callsites.
+type BcryptHasher struct {
+	cost int
+}
+
+// NewBcryptHasher builds a hasher at the given cost. Pass bcrypt.DefaultCost
+// (10) for general use; raise per deployment as hardware allows.
+func NewBcryptHasher(cost int) *BcryptHasher {
+	if cost < bcrypt.MinCost || cost > bcrypt.MaxCost {
+		cost = bcrypt.DefaultCost
+	}
+	return &BcryptHasher{cost: cost}
+}
+
+// NewDefaultBcryptHasher is the DI-friendly constructor — picks bcrypt's
+// DefaultCost (10) so wiring doesn't need a config field for the work factor.
+// Replace this provider in your DI graph when you need a tunable cost.
+func NewDefaultBcryptHasher() *BcryptHasher {
+	return NewBcryptHasher(bcrypt.DefaultCost)
+}
+
+func (h *BcryptHasher) Hash(plain string) (string, error) {
+	out, err := bcrypt.GenerateFromPassword([]byte(plain), h.cost)
+	if err != nil {
+		return "", errors.Wrap(err, "bcrypt hash")
+	}
+	return string(out), nil
+}
+
+func (h *BcryptHasher) Verify(hash, plain string) error {
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)); err != nil {
+		return errors.Wrap(errors.ErrUnauthorized, "bcrypt verify")
+	}
+	return nil
+}

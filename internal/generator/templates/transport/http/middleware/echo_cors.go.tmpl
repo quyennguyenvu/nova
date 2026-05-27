@@ -3,13 +3,16 @@ package middleware
 import (
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
 )
 
-// CORS returns a CORS middleware with sensible defaults.
-func CORS() echo.MiddlewareFunc {
+// CORS reads allowed origins/methods/headers from config — never default to
+// "*" in scaffolded code; each deployment enumerates origins explicitly.
+func CORS(cfg config.CORSConfig) echo.MiddlewareFunc {
 	return echomw.CORSWithConfig(echomw.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
+		AllowOrigins: cfg.AllowOrigins,
+		AllowMethods: cfg.AllowMethods,
+		AllowHeaders: cfg.AllowHeaders,
 	})
 }

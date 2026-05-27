@@ -1,22 +1,35 @@
 package user
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/gin-gonic/gin"
+
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
+	"{{.ModuleName}}/internal/transport/http/middleware"
+)
 
 // Routes is the user feature's HTTP route registrar. It implements the
-// transport/http.Registrar interface — wired into the app at /api/v1.
+// transport/http.Registrar interface — mounted at /api/v1 by the app.
 type Routes struct {
-	handler *UserHandler
+	handler  *Handler
+	verifier *jwtsec.Verifier
 }
 
-func NewRoutes(h *UserHandler) *Routes { return &Routes{handler: h} }
+func NewRoutes(h *Handler, verifier *jwtsec.Verifier) *Routes {
+	return &Routes{handler: h, verifier: verifier}
+}
 
-// Register attaches /users routes to the given router subtree. The caller
-// (transport/http.NewApp) supplies the /api/v1 prefix.
+// Prefix is the API version subtree this feature mounts under.
+func (*Routes) Prefix() string { return "/api/v1" }
+
+// Register mounts /users twice: an unauthenticated POST for registration and
+// an authenticated subgroup for reads + writes.
 func (r *Routes) Register(router gin.IRouter) {
-	users := router.Group("/users")
-	users.POST("/", r.handler.Create)
-	users.GET("/", r.handler.List)
-	users.GET("/:id", r.handler.GetByID)
-	users.PUT("/:id", r.handler.Update)
-	users.DELETE("/:id", r.handler.Delete)
+	public := router.Group("/users")
+	public.POST("/", r.handler.Create)
+
+	protected := router.Group("/users", middleware.Auth(r.verifier))
+	protected.GET("/", r.handler.List)
+	protected.GET("/:id", r.handler.GetByID)
+	protected.PUT("/:id", r.handler.Update)
+	protected.DELETE("/:id", r.handler.Delete)
 }

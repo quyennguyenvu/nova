@@ -1,0 +1,18 @@
+package identity
+
+import "context"
+
+type userPrincipalKey struct{}
+
+// WithUserPrincipal attaches p to ctx — called by the Auth middleware after a
+// successful token verification.
+func WithUserPrincipal(ctx context.Context, p *UserPrincipal) context.Context {
+	return context.WithValue(ctx, userPrincipalKey{}, p)
+}
+
+// UserPrincipalFromContext returns the authenticated user principal, or
+// (nil, false) when the request is unauthenticated.
+func UserPrincipalFromContext(ctx context.Context) (*UserPrincipal, bool) {
+	p, ok := ctx.Value(userPrincipalKey{}).(*UserPrincipal)
+	return p, ok && p != nil
+}

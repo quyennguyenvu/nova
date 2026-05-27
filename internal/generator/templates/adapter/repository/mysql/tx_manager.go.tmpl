@@ -28,9 +28,12 @@ func (t *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 	defer func() { _ = tx.Rollback() }()
 
 	if err = fn(withTx(ctx, tx)); err != nil {
-		return errors.Wrapf(err, "execute within tx")
+		return errors.Wrap(err, "tx body")
 	}
-	return tx.Commit()
+	if commitErr := tx.Commit(); commitErr != nil {
+		return errors.Wrap(commitErr, "commit tx")
+	}
+	return nil
 }
 
 func withTx(ctx context.Context, tx *sql.Tx) context.Context {

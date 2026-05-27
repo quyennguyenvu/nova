@@ -5,6 +5,7 @@ import (
 
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/internal/domain/security"
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/locale"
 {{- if .HasMessageQueue}}
@@ -15,41 +16,51 @@ import (
 // Service implements the user use case. It never calls the logger directly —
 // it wraps errors with errors.Wrapf and lets the transport boundary log once.
 type Service struct {
-{{- if .HasMessageQueue}}
-	userRepo  domain.UserRepository
-	publisher domain.UserPublisher
-{{- else}}
 	userRepo domain.UserRepository
+	hasher   security.PasswordHasher
+{{- if .HasMessageQueue}}
+	publisher domain.UserPublisher
 {{- end}}
 }
 
 func NewService(
 	userRepo domain.UserRepository,
+	hasher security.PasswordHasher,
 {{- if .HasMessageQueue}}
 	publisher domain.UserPublisher,
 {{- end}}
 ) *Service {
 	return &Service{
-{{- if .HasMessageQueue}}
-		userRepo:  userRepo,
-		publisher: publisher,
-{{- else}}
 		userRepo: userRepo,
+		hasher:   hasher,
+{{- if .HasMessageQueue}}
+		publisher: publisher,
 {{- end}}
 	}
 }
 
 func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, error) {
-	existing, _ := s.userRepo.GetByEmail(ctx, input.Email)
-	if existing != nil {
+	// Treat ErrNotFound as the only "ok, proceed" outcome; any other error
+	// from the lookup (DB outage, network) must propagate so we don't
+	// race-create a duplicate row when the uniqueness check itself failed.
+	existing, err := s.userRepo.GetByEmail(ctx, input.Email)
+	switch {
+	case err == nil && existing != nil:
 		// Locale-coded error: transport translates UserEmailExists with input.Email
 		// substituted into the user's language (e.g. "Email foo@bar already exists").
 		return nil, errors.ConflictL(locale.UserEmailExists, input.Email)
+	case err != nil && !errors.Is(err, errors.ErrNotFound):
+		return nil, errors.Wrapf(err, "register user email=%s: lookup", input.Email)
 	}
 
-	user := entity.NewUser(input.Email, input.Name, input.Password)
-	if err := s.userRepo.Create(ctx, user); err != nil {
-		return nil, errors.Wrapf(err, "register user email=%s", input.Email)
+	hash, err := s.hasher.Hash(input.Password)
+	if err != nil {
+		return nil, errors.Wrapf(err, "register user email=%s: hash", input.Email)
+	}
+
+	user := entity.NewUser(input.Email, input.Name, hash)
+	if createErr := s.userRepo.Create(ctx, user); createErr != nil {
+		return nil, errors.Wrapf(createErr, "register user email=%s", input.Email)
 	}
 
 {{- if .HasMessageQueue}}
@@ -103,7 +114,27 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *Service) List(ctx context.Context, filter domain.UserFilter) ([]*Output, error) {
+// List page-bounds: defaults + caps live here so every transport (HTTP, gRPC,
+// CLI) inherits the same policy. Transport hands raw ints in; we clamp before
+// they ever reach the repo.
+const (
+	listDefaultLimit = 10
+	listMaxLimit     = 500
+)
+
+func (s *Service) List(ctx context.Context, input ListInput) ([]*Output, error) {
+	limit := input.Limit
+	if limit <= 0 || limit > listMaxLimit {
+		limit = listDefaultLimit
+	}
+	offset := input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	filter := domain.UserFilter{
+		Limit:  int32(limit),
+		Offset: int32(offset),
+	}
 	users, err := s.userRepo.List(ctx, filter)
 	if err != nil {
 		return nil, errors.Wrapf(err, "list users limit=%d offset=%d", filter.Limit, filter.Offset)

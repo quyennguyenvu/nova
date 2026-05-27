@@ -22,6 +22,9 @@ import (
 {{- end}}
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	infrasec "{{.ModuleName}}/internal/infrastructure/security"
+	"{{.ModuleName}}/internal/infrastructure/tracing"
+	domainsec "{{.ModuleName}}/internal/domain/security"
 {{- if .HasMessageQueue}}
 	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
 {{- end}}
@@ -41,6 +44,10 @@ var infraSet = wire.NewSet(
 	config.Load,
 	logger.New,
 	jwtsec.NewVerifier,
+	infrasec.NewDefaultBcryptHasher,
+	wire.Bind(new(domainsec.PasswordHasher), new(*infrasec.BcryptHasher)),
+	provideTracingConfig,
+	tracing.Provider,
 {{- if eq .Database "postgres"}}
 	database.NewPostgresDB,
 {{- end}}
@@ -85,7 +92,7 @@ var usecaseSet = wire.NewSet(
 
 {{- if .HasHTTP}}
 var transportSet = wire.NewSet(
-	userv1.NewUserHandler,
+	userv1.NewHandler,
 	userv1.NewRoutes,
 	provideRegistrars,
 )

@@ -1,8 +1,20 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"os"
 
+	"github.com/spf13/cobra"
+
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// Execute is the cobra entrypoint. It registers translations once at startup
+// (so every subcommand inherits the same mapping) and exits with status 1 on
+// any command error — cobra has already printed the error message, so a
+// panic stack trace would be noise.
 func Execute() {
+	locale.NewMapping()
+
 	root := &cobra.Command{
 		Use:   "{{.ProjectName}}",
 		Short: "Project description",
@@ -16,13 +28,13 @@ func Execute() {
 	{{- if .HasGRPC }}
 		grpcCommand(),
 	{{- end }}
-	
+
 	{{- if .HasCron }}
 		cronCommand(),
 	{{- end }}
 	)
 
 	if err := root.Execute(); err != nil {
-		panic(err)
+		os.Exit(1)
 	}
 }

@@ -1,18 +1,36 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
 
-// CORS returns a CORS middleware with sensible defaults.
-func CORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Origin,Content-Type,Accept,Authorization,X-Request-ID")
+	"{{.ModuleName}}/internal/infrastructure/config"
+)
 
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// CORS reads allowed origins/methods/headers from config — never default to
+// "*" in scaffolded code; each deployment enumerates origins explicitly.
+// Returns a middleware factory so chi's router.Use can register it.
+func CORS(cfg config.CORSConfig) func(http.Handler) http.Handler {
+	allowedOrigins := make(map[string]struct{}, len(cfg.AllowOrigins))
+	for _, o := range cfg.AllowOrigins {
+		allowedOrigins[o] = struct{}{}
+	}
+	methods := strings.Join(cfg.AllowMethods, ",")
+	headers := strings.Join(cfg.AllowHeaders, ",")
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if _, ok := allowedOrigins[origin]; ok && origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", methods)
+				w.Header().Set("Access-Control-Allow-Headers", headers)
+			}
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

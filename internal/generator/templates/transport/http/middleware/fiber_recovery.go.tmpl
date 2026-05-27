@@ -5,10 +5,13 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
-// Recovery logs panics through the request-scoped logger and returns 500.
+// Recovery logs panics through the request-scoped logger and returns 500 in
+// the standard response envelope.
 func Recovery() fiber.Handler {
 	return func(c *fiber.Ctx) (err error) {
 		defer func() {
@@ -17,9 +20,7 @@ func Recovery() fiber.Handler {
 					"panic", r,
 					"stack", string(debug.Stack()),
 				)
-				err = c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-					"error": "internal server error",
-				})
+				err = httpwriter.WriteError(c, errors.InternalServer("internal server error"))
 			}
 		}()
 		return c.Next()

@@ -1,0 +1,11 @@
+// Package security defines the cryptographic ports the domain depends on.
+// Implementations live in internal/infrastructure/security.
+package security
+
+// PasswordHasher hashes user passwords for storage and verifies submitted
+// passwords against stored hashes. The hash format is the implementation's
+// concern — callers treat it as an opaque string.
+type PasswordHasher interface {
+	Hash(plain string) (string, error)
+	Verify(hash, plain string) error
+}

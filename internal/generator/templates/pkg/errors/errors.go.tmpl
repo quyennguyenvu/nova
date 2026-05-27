@@ -31,6 +31,7 @@
 package errors
 
 import (
+	"context"
 	stderrors "errors"
 	"fmt"
 	"net/http"
@@ -190,16 +191,33 @@ func wrapAt(err error, message string, skip int) *AppError {
 	return base
 }
 
+// httpStatusForLocale maps a locale code to its HTTP status. Add cases as new
+// locale codes are introduced; defaults to 500.
+func httpStatusForLocale(code locale.Locale) int {
+	switch code {
+	case locale.RecordNotFound, locale.UserNotFound:
+		return http.StatusNotFound
+	case locale.Unauthorized:
+		return http.StatusUnauthorized
+	case locale.InvalidRequest:
+		return http.StatusBadRequest
+	case locale.UserEmailExists:
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
 // classify maps a non-AppError into an *AppError. Recognises:
-//   - *locale.LocaleError → inherits HTTP status from Locale.HTTPStatus() and
-//     carries the Locale + Args through to the transport boundary.
+//   - *locale.LocaleError → HTTP status from httpStatusForLocale; Locale + Args
+//     travel to the transport boundary for translation.
 //   - the package sentinel errors → mapped to their HTTP equivalents.
 //   - anything else → 500.
 func classify(err error) *AppError {
 	var le *locale.LocaleError
 	if As(err, &le) {
 		return &AppError{
-			Code:   le.Code.HTTPStatus(),
+			Code:   httpStatusForLocale(le.Code),
 			Locale: le.Code,
 			Args:   le.Args,
 		}
@@ -288,4 +306,39 @@ func newAtL(httpCode int, code locale.Locale, args []any) *AppError {
 		Args:   args,
 		frames: []Frame{captureFrame(2, "")},
 	}
+}
+
+// --- AppError context stash --------------------------------------------------
+//
+// The Logging middleware needs to log the AppError that the handler emitted,
+// but the response writer is called after the middleware's outbound ctx has
+// already been observed — and contexts are immutable, so we can't replumb
+// ctx upward. PrepareAppErrorContext installs a mutable slot in ctx; the
+// writer (httpwriter.WriteError) calls StashAppError into that slot; the
+// middleware reads it via AppErrorFromContext once the handler returns.
+
+type appErrSlot struct{ err *AppError }
+type appErrSlotKey struct{}
+
+// PrepareAppErrorContext installs a mutable slot in ctx. Call once per request
+// from a transport middleware before invoking inner handlers.
+func PrepareAppErrorContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, appErrSlotKey{}, &appErrSlot{})
+}
+
+// StashAppError records app in the slot installed by PrepareAppErrorContext.
+// No-op if the slot is absent (e.g. background ctx or test ctx).
+func StashAppError(ctx context.Context, app *AppError) {
+	if s, ok := ctx.Value(appErrSlotKey{}).(*appErrSlot); ok {
+		s.err = app
+	}
+}
+
+// AppErrorFromContext returns the stashed AppError, or nil if none was stashed.
+func AppErrorFromContext(ctx context.Context) *AppError {
+	s, ok := ctx.Value(appErrSlotKey{}).(*appErrSlot)
+	if !ok {
+		return nil
+	}
+	return s.err
 }

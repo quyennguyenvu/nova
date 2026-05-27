@@ -7,10 +7,10 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pkg/errors"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/errors"
 )
 
 // NewPostgresDB creates a new PostgreSQL connection pool.

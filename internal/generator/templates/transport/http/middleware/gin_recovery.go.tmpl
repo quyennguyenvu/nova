@@ -1,27 +1,39 @@
 package middleware
 
 import (
-	"net/http"
 	"runtime/debug"
 
 	"github.com/gin-gonic/gin"
 
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
-// Recovery logs panics through the request-scoped logger and returns 500.
+// Recovery logs panics through the request-scoped logger and returns 500 in
+// the standard response envelope. If the panicking handler already started
+// the response body (c.Writer.Written()), the envelope is skipped — gin
+// would otherwise log "headers already written" and the partial body is
+// already on the wire.
 func Recovery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
-			if r := recover(); r != nil {
-				logctx.From(c.Request.Context()).Error("panic recovered",
-					"panic", r,
-					"stack", string(debug.Stack()),
-				)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-					"error": "internal server error",
-				})
+			r := recover()
+			if r == nil {
+				return
 			}
+			wrote := c.Writer.Written()
+			logctx.From(c.Request.Context()).Error("panic recovered",
+				"panic", r,
+				"stack", string(debug.Stack()),
+				"wrote_header", wrote,
+			)
+			if wrote {
+				c.Abort()
+				return
+			}
+			httpwriter.WriteError(c, errors.InternalServer("internal server error"))
+			c.Abort()
 		}()
 		c.Next()
 	}

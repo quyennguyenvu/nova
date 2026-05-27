@@ -2,17 +2,30 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
 )
 
-// CORS returns a CORS middleware with sensible defaults.
-func CORS() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin,Content-Type,Accept,Authorization,X-Request-ID")
+// CORS reads allowed origins/methods/headers from config — never default to
+// "*" in scaffolded code; each deployment enumerates origins explicitly.
+func CORS(cfg config.CORSConfig) gin.HandlerFunc {
+	allowedOrigins := make(map[string]struct{}, len(cfg.AllowOrigins))
+	for _, o := range cfg.AllowOrigins {
+		allowedOrigins[o] = struct{}{}
+	}
+	methods := strings.Join(cfg.AllowMethods, ",")
+	headers := strings.Join(cfg.AllowHeaders, ",")
 
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if _, ok := allowedOrigins[origin]; ok && origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Methods", methods)
+			c.Header("Access-Control-Allow-Headers", headers)
+		}
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return

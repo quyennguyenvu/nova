@@ -1,10 +1,14 @@
-package httputil
+// Package httpwriter is the framework-specific HTTP response writer. It lives
+// under internal/transport/http (not pkg/) because it is bound to a single
+// framework — the envelope it serializes is in pkg/httputil (framework-free).
+package httpwriter
 
 import (
 	"encoding/json"
 	"net/http"
 
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/locale"
 )
 
@@ -12,16 +16,20 @@ import (
 func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(SuccessResponse(data))
+	_ = json.NewEncoder(w).Encode(httputil.SuccessResponse(data))
 }
 
 // WriteError writes an error JSON response wrapped in the standard envelope.
 // The HTTP status is taken from app.Code. The message is translated using the
 // language carried in r's context (set by the Locale middleware) when app
 // carries a Locale code; otherwise app.Message is used as-is.
+// Also stashes app into r.Context() so the Logging middleware can include
+// app_code/app_locale fields in the access log without a second mapping pass.
 func WriteError(w http.ResponseWriter, r *http.Request, app *errors.AppError) {
-	lang := locale.LanguageFromContext(r.Context())
+	ctx := r.Context()
+	errors.StashAppError(ctx, app)
+	lang := locale.LanguageFromContext(ctx)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(app.Code)
-	_ = json.NewEncoder(w).Encode(ErrorResponseFromApp(app, lang))
+	_ = json.NewEncoder(w).Encode(httputil.ErrorResponseFromApp(app, lang))
 }

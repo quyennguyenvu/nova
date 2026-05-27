@@ -10,8 +10,8 @@ import (
 {{- if eq .Database "mysql"}}
 	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
 {{- end}}
-{{- if .HasCache}}
-	cacherepo "{{.ModuleName}}/internal/adapter/repository/cache"
+{{- if .HasRedis}}
+	cacherepo "{{.ModuleName}}/internal/adapter/repository/redis"
 {{- end}}
 {{- if .HasMessageQueue}}
 	"{{.ModuleName}}/internal/adapter/pubsub"
@@ -27,8 +27,11 @@ import (
 {{- if and .HasHTTP .HasMessageQueue}}
 	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
 {{- end}}
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	infrasec "{{.ModuleName}}/internal/infrastructure/security"
 	"{{.ModuleName}}/internal/infrastructure/server"
+	"{{.ModuleName}}/internal/infrastructure/tracing"
 {{- if .HasHTTP}}
 	transporthttp "{{.ModuleName}}/internal/transport/http"
 {{- if .HasDatabase}}
@@ -52,7 +55,13 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 
 	log := logger.New(cfg)
 
+	tracer, tracingCleanup, err := tracing.Provider(ctx, provideTracingConfig(cfg))
+	if err != nil {
+		return nil, nil, err
+	}
+
 	var cleanups []func()
+	cleanups = append(cleanups, tracingCleanup)
 	cleanup := func() {
 		for i := len(cleanups) - 1; i >= 0; i-- {
 			cleanups[i]()
@@ -118,19 +127,23 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- if eq .Database "mysql"}}
 	userRepo := mysqlrepo.NewUserRepository(db)
 {{- end}}
+	hasher := infrasec.NewDefaultBcryptHasher()
 {{- if .HasCache}}
 {{- if .HasRedis}}
 	cachedUserRepo := cacherepo.NewUserCacheRepository(userRepo, cacheClient)
-{{- else}}
-	cachedUserRepo := cacherepo.NewUserCacheRepository(userRepo)
 {{- end}}
-	userService := usersvc.NewService(cachedUserRepo{{- if .HasMessageQueue}}, publisher{{- end}})
+	userService := usersvc.NewService(cachedUserRepo, hasher{{- if .HasMessageQueue}}, publisher{{- end}})
 {{- else}}
-	userService := usersvc.NewService(userRepo{{- if .HasMessageQueue}}, publisher{{- end}})
+	userService := usersvc.NewService(userRepo, hasher{{- if .HasMessageQueue}}, publisher{{- end}})
 {{- end}}
 
-	userHandler := userv1.NewUserHandler(userService)
-	userRoutes := userv1.NewRoutes(userHandler)
+	verifier, err := jwtsec.NewVerifier(cfg)
+	if err != nil {
+		return fail(err)
+	}
+
+	userHandler := userv1.NewHandler(userService)
+	userRoutes := userv1.NewRoutes(userHandler, verifier)
 	app := transporthttp.NewApp(cfg, log, provideRegistrars(userRoutes))
 {{- else}}
 	app := transporthttp.NewApp(cfg, log, nil)
@@ -142,7 +155,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	}
 	cleanups = append(cleanups, httpCleanup)
 
-	return &HTTPApp{Logger: log, Server: httpServer}, cleanup, nil
+	return &HTTPApp{Logger: log, Server: httpServer, Tracer: tracer}, cleanup, nil
 }
 {{- end}}
 
@@ -159,11 +172,21 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 
 	log := logger.New(cfg)
 
-	grpcServer, cleanup, err := server.NewGRPCServer(ctx, cfg, log)
+	tracer, tracingCleanup, err := tracing.Provider(ctx, provideTracingConfig(cfg))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return &GRPCApp{Logger: log, Server: grpcServer}, cleanup, nil
+	grpcServer, grpcCleanup, err := server.NewGRPCServer(ctx, cfg, log)
+	if err != nil {
+		tracingCleanup()
+		return nil, nil, err
+	}
+
+	cleanup := func() {
+		grpcCleanup()
+		tracingCleanup()
+	}
+	return &GRPCApp{Logger: log, Server: grpcServer, Tracer: tracer}, cleanup, nil
 }
 {{- end}}

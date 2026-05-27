@@ -1,28 +1,37 @@
 package middleware
 
 import (
-	"net/http"
 	"runtime/debug"
 
 	"github.com/labstack/echo/v4"
 
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
-// Recovery logs panics through the request-scoped logger and returns 500.
+// Recovery logs panics through the request-scoped logger and returns 500 in
+// the standard response envelope. If the panicking handler already committed
+// the response (c.Response().Committed), the envelope is skipped — partial
+// body is already on the wire and double-write would error.
 func Recovery() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c echo.Context) (err error) {
 			defer func() {
-				if r := recover(); r != nil {
-					logctx.From(c.Request().Context()).Error("panic recovered",
-						"panic", r,
-						"stack", string(debug.Stack()),
-					)
-					_ = c.JSON(http.StatusInternalServerError, map[string]string{
-						"error": "internal server error",
-					})
+				r := recover()
+				if r == nil {
+					return
 				}
+				committed := c.Response().Committed
+				logctx.From(c.Request().Context()).Error("panic recovered",
+					"panic", r,
+					"stack", string(debug.Stack()),
+					"wrote_header", committed,
+				)
+				if committed {
+					return
+				}
+				err = httpwriter.WriteError(c, errors.InternalServer("internal server error"))
 			}()
 			return next(c)
 		}

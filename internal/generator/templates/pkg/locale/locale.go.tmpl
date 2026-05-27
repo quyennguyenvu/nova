@@ -1,19 +1,13 @@
 // Package locale is the source of truth for application error codes and their
 // per-language translations. A Locale is an int identifier; translations are
 // registered at startup via NewMapping() and resolved at the transport
-// boundary via Translate().
-//
-// Locale codes also carry an HTTP-status mapping (Locale.HTTPStatus) so the
-// errors package can build *AppError values directly from a *LocaleError —
-// keeping the originating layer (usecase) free of HTTP knowledge while still
-// classifying the error correctly at the boundary.
+// boundary via Translate(). HTTP-status mapping lives in pkg/errors.
 package locale
 
 import (
 	"context"
 	stderrors "errors"
 	"fmt"
-	"net/http"
 )
 
 // Language represents a supported language.
@@ -42,23 +36,6 @@ const (
 	UserNotFound    Locale = -1100
 	UserEmailExists Locale = -1101
 )
-
-// HTTPStatus returns the HTTP status that this locale code maps to. Add cases
-// here as new locale codes are introduced.
-func (l Locale) HTTPStatus() int {
-	switch l {
-	case RecordNotFound, UserNotFound:
-		return http.StatusNotFound
-	case Unauthorized:
-		return http.StatusUnauthorized
-	case InvalidRequest:
-		return http.StatusBadRequest
-	case UserEmailExists:
-		return http.StatusConflict
-	default:
-		return http.StatusInternalServerError
-	}
-}
 
 // LocaleError carries a Locale code and the format arguments to be substituted
 // into the translated message at the transport boundary. Args are stored raw —

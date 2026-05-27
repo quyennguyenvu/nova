@@ -1,0 +1,30 @@
+// Package httpwriter is the framework-specific HTTP response writer. It lives
+// under internal/transport/http (not pkg/) because it is bound to a single
+// framework — the envelope it serializes is in pkg/httputil (framework-free).
+package httpwriter
+
+import (
+	"github.com/labstack/echo/v4"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/httputil"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// WriteJSON writes a successful JSON response wrapped in the standard envelope.
+func WriteJSON(c echo.Context, status int, data any) error {
+	return c.JSON(status, httputil.SuccessResponse(data))
+}
+
+// WriteError writes an error JSON response wrapped in the standard envelope.
+// The HTTP status is taken from app.Code. The message is translated using the
+// language carried in the request context (set by the Locale middleware) when
+// app carries a Locale code; otherwise app.Message is used as-is.
+// Also stashes app into the request ctx so the Logging middleware can include
+// app_code/app_locale fields in the access log without a second mapping pass.
+func WriteError(c echo.Context, app *errors.AppError) error {
+	ctx := c.Request().Context()
+	errors.StashAppError(ctx, app)
+	lang := locale.LanguageFromContext(ctx)
+	return c.JSON(app.Code, httputil.ErrorResponseFromApp(app, lang))
+}

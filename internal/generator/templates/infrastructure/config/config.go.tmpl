@@ -1,6 +1,9 @@
 package config
 
 import (
+	"bytes"
+	"embed"
+	"fmt"
 	"os"
 {{- if or .HasHTTP .HasGRPC .HasDatabase .HasRedis .HasMessageQueue}}
 	"time"
@@ -11,6 +14,9 @@ import (
 	"{{.ModuleName}}/pkg/errors"
 )
 
+//go:embed *.{{.ConfigFormat}}
+var configFS embed.FS
+
 // Config holds all application configuration.
 //
 // Defaults live outside this struct:
@@ -20,8 +26,11 @@ import (
 //
 // At runtime every field can be overridden by its env var.
 type Config struct {
+	AppName     string            `{{.ConfigFormat}}:"app_name"     env:"APP_NAME"`
+	AppVersion  string            `{{.ConfigFormat}}:"app_version"  env:"APP_VERSION"`
 	AppEnv      string            `{{.ConfigFormat}}:"app_env"      env:"APP_ENV"`
 	Log         LogConfig         `{{.ConfigFormat}}:"log"`
+	Tracing     TracingConfig     `{{.ConfigFormat}}:"tracing"`
 	JWTVerifier JWTVerifierConfig `{{.ConfigFormat}}:"jwt_verifier"`
 {{- if .HasHTTP}}
 	HTTP        HTTPConfig        `{{.ConfigFormat}}:"http"`
@@ -52,10 +61,17 @@ type LogConfig struct {
 	Format string `{{.ConfigFormat}}:"format" env:"LOG_FORMAT"`
 }
 
-// JWTVerifierConfig holds JWT verifier configuration.
+// TracingConfig drives OpenTelemetry. Endpoint empty → no-op tracer.
+type TracingConfig struct {
+	Endpoint    string  `{{.ConfigFormat}}:"endpoint"     env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+	Insecure    bool    `{{.ConfigFormat}}:"insecure"     env:"OTEL_EXPORTER_OTLP_INSECURE"`
+	SampleRatio float64 `{{.ConfigFormat}}:"sample_ratio" env:"OTEL_SAMPLE_RATIO"`
+}
+
+// JWTVerifierConfig holds JWT verifier configuration. Add a second public key
+// field here (and the matching env var) when a distinct audience comes online.
 type JWTVerifierConfig struct {
-	IdentityPublicKeyBase64      string `env:"IDENTITY_PUBLIC_KEY_BASE64"`
-	IdentityAdminPublicKeyBase64 string `env:"IDENTITY_ADMIN_PUBLIC_KEY_BASE64"`
+	IdentityPublicKeyBase64 string `env:"IDENTITY_PUBLIC_KEY_BASE64"`
 
 	IdentityIssuer string `{{.ConfigFormat}}:"identity_issuer" env:"IDENTITY_ISSUER"`
 	Audience       string `{{.ConfigFormat}}:"audience"        env:"JWT_AUDIENCE"`
@@ -70,6 +86,15 @@ type HTTPConfig struct {
 	ReadBufferSize  int           `{{.ConfigFormat}}:"read_buffer_size" env:"SERVER_READ_BUFFER_SIZE"`
 	BodyLimit       int           `{{.ConfigFormat}}:"body_limit"       env:"SERVER_BODY_LIMIT"`
 	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"SERVER_SHUTDOWN_TIMEOUT"`
+	CORS            CORSConfig    `{{.ConfigFormat}}:"cors"`
+}
+
+// CORSConfig is driven entirely from configuration — scaffolded code must not
+// default to "*". Each deployment enumerates its allowed origins explicitly.
+type CORSConfig struct {
+	AllowOrigins []string `{{.ConfigFormat}}:"allow_origins" env:"CORS_ALLOW_ORIGINS" env-separator:","`
+	AllowMethods []string `{{.ConfigFormat}}:"allow_methods" env:"CORS_ALLOW_METHODS" env-separator:","`
+	AllowHeaders []string `{{.ConfigFormat}}:"allow_headers" env:"CORS_ALLOW_HEADERS" env-separator:","`
 }
 {{- end}}
 {{- if .HasGRPC}}
@@ -161,28 +186,34 @@ type RabbitMQConfig struct {
 }
 {{- end}}
 
-const configFilePath = "./internal/infrastructure/config"
-
-// Load reads configuration from the given file path.
+// Load resolves configuration from the embedded base.{{.ConfigFormat}}, overlays the
+// per-APP_ENV file (if present), and applies env-var overrides. Embedding
+// removes the runtime dependency on cwd — the binary is self-contained.
 func Load() (*Config, error) {
 	var cfg Config
 
-	configFile := configFilePath + "/base.{{.ConfigFormat}}"
-	if err := cleanenv.ReadConfig(configFile, &cfg); err != nil {
-		return nil, errors.Wrap(err, "config error")
+	if err := readEmbedded("base.{{.ConfigFormat}}", &cfg); err != nil {
+		return nil, errors.Wrap(err, "config base")
 	}
 
-	env := os.Getenv("APP_ENV")
-	if env == EnvDev || env == EnvProd {
-		configEnv := configFilePath + "/" + env + ".{{.ConfigFormat}}"
-		if err := cleanenv.ReadConfig(configEnv, &cfg); err != nil {
-			return nil, errors.Wrap(err, "config env error")
+	if env := os.Getenv("APP_ENV"); env == EnvDev || env == EnvProd {
+		envFile := env + ".{{.ConfigFormat}}"
+		if err := readEmbedded(envFile, &cfg); err != nil {
+			return nil, errors.Wrapf(err, "config env %s", envFile)
 		}
 	}
 
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
-		return nil, errors.Wrap(err, "config env error")
+		return nil, errors.Wrap(err, "config env vars")
 	}
 
 	return &cfg, nil
+}
+
+func readEmbedded(name string, cfg *Config) error {
+	data, err := configFS.ReadFile(name)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", name, err)
+	}
+	return cleanenv.ParseYAML(bytes.NewReader(data), cfg)
 }

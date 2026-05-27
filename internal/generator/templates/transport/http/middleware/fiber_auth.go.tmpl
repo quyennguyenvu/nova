@@ -1,17 +1,38 @@
 package middleware
 
-import "github.com/gofiber/fiber/v2"
+import (
+	"strings"
 
-// Auth returns an authentication middleware.
-// TODO: Implement authentication middleware based on your auth strategy.
-func Auth() fiber.Handler {
+	"github.com/gofiber/fiber/v2"
+
+	"{{.ModuleName}}/internal/domain/identity"
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+// Auth verifies the bearer token via the JWT verifier and attaches the
+// resolved *identity.UserPrincipal to the request context. Inner handlers
+// read it via identity.UserPrincipalFromContext.
+func Auth(verifier *jwtsec.Verifier) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		token := c.Get("Authorization")
+		token := bearerToken(c.Get("Authorization"))
 		if token == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "unauthorized",
-			})
+			return httpwriter.WriteError(c, errors.Unauthorized("missing bearer token"))
 		}
+		principal, err := verifier.ParseAndVerifyAccessToken(token)
+		if err != nil {
+			return httpwriter.WriteError(c, errors.ToAppError(err))
+		}
+		c.SetUserContext(identity.WithUserPrincipal(c.UserContext(), principal))
 		return c.Next()
 	}
+}
+
+func bearerToken(h string) string {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(h, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(h[len(prefix):])
 }

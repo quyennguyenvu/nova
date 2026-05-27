@@ -2,16 +2,10 @@ package jwtsec
 
 import "github.com/golang-jwt/jwt/v4"
 
-type AdminTokenClaims struct {
-	jwt.RegisteredClaims
-
-	UserID      int32    `json:"userId"`
-	Permissions []string `json:"permissions,omitempty"`
-	GroupIDs    []int32  `json:"groupIds,omitempty"`
-	Username    string   `json:"username"`
-	Email       string   `json:"email"`
-}
-
+// AccessTokenClaims is the canonical user access-token shape issued by the
+// identity provider. Add admin/service-token claim types here as new audiences
+// come online — keep them as separate structs so the verifier can dispatch
+// on aud without runtime conditionals.
 type AccessTokenClaims struct {
 	jwt.RegisteredClaims
 

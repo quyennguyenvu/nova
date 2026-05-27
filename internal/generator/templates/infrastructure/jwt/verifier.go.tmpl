@@ -4,18 +4,20 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 
+	"github.com/golang-jwt/jwt/v4"
+
 	"{{.ModuleName}}/internal/domain/identity"
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/pkg/errors"
-
-	"github.com/golang-jwt/jwt/v4"
 )
 
+// Verifier parses and verifies access tokens issued by the identity provider.
+// Add per-audience verifier methods (admin, service-to-service) by introducing
+// a second public key + claim type — don't overload this one with conditionals.
 type Verifier struct {
-	identityIssuer         string
-	identityPublicKey      any
-	identityAdminPublicKey any
-	Audience               string
+	identityIssuer    string
+	identityPublicKey any
+	Audience          string
 }
 
 func NewVerifier(cfg *config.Config) (*Verifier, error) {
@@ -26,16 +28,10 @@ func NewVerifier(cfg *config.Config) (*Verifier, error) {
 		return nil, errors.Wrap(err, "failed to parse identity public key")
 	}
 
-	identityAdminPublicKey, err := getPublicKey(jwtCfg.IdentityAdminPublicKeyBase64)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse identity admin public key")
-	}
-
 	return &Verifier{
-		identityPublicKey:      identityPublicKey,
-		identityAdminPublicKey: identityAdminPublicKey,
-		identityIssuer:         jwtCfg.IdentityIssuer,
-		Audience:               jwtCfg.Audience,
+		identityPublicKey: identityPublicKey,
+		identityIssuer:    jwtCfg.IdentityIssuer,
+		Audience:          jwtCfg.Audience,
 	}, nil
 }
 
@@ -60,7 +56,6 @@ func (v *Verifier) ParseAndVerifyAccessToken(tokenStr string) (*identity.UserPri
 			if _, isValid := t.Method.(*jwt.SigningMethodRSA); !isValid {
 				return nil, errors.Unauthorized("unexpected_signing_method")
 			}
-
 			return v.identityPublicKey, nil
 		},
 		jwt.WithValidMethods([]string{"RS256"}),
@@ -88,44 +83,5 @@ func (v *Verifier) ParseAndVerifyAccessToken(tokenStr string) (*identity.UserPri
 		DeviceID:  claims.DeviceID,
 		Platform:  claims.Platform,
 		SessionID: claims.SessionID,
-	}, nil
-}
-
-func (v *Verifier) ParseAndVerifyAdminToken(tokenStr string) (*identity.AdminPrincipal, error) {
-	var claims AdminTokenClaims
-	tkn, err := jwt.ParseWithClaims(
-		tokenStr,
-		&claims,
-		func(t *jwt.Token) (any, error) {
-			if _, isValid := t.Method.(*jwt.SigningMethodRSA); !isValid {
-				return nil, errors.Unauthorized("unexpected_signing_method")
-			}
-
-			return v.identityAdminPublicKey, nil
-		},
-		jwt.WithValidMethods([]string{"RS256"}),
-	)
-	if err != nil {
-		return nil, errors.Wrap(err, "invalid_admin_token")
-	}
-	if !tkn.Valid {
-		return nil, errors.Unauthorized("invalid_admin_token")
-	}
-
-	if !claims.VerifyIssuer(v.identityIssuer, true) {
-		return nil, errors.Unauthorized("bad_issuer")
-	}
-	if !claims.VerifyAudience(v.Audience, true) {
-		return nil, errors.Unauthorized("bad_audience")
-	}
-
-	return &identity.AdminPrincipal{
-		Principal: identity.Principal{
-			UserID: claims.UserID,
-			Email:  claims.Email,
-		},
-		Username:    claims.Username,
-		Permissions: claims.Permissions,
-		GroupIDs:    claims.GroupIDs,
 	}, nil
 }

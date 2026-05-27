@@ -15,8 +15,11 @@ import (
 )
 
 // Registrar attaches a feature's routes to a router subtree. Each feature
-// (transport/http/v1/<feature>) provides a *Routes implementing this.
+// (transport/http/v1/<feature>) provides a *Routes implementing this. Prefix
+// is mounted as a subgroup before Register is called. Multiple Registrars may
+// share a Prefix; the slice order in NewApp determines mount order.
 type Registrar interface {
+	Prefix() string
 	Register(fiber.Router)
 }
 
@@ -24,7 +27,9 @@ type Registrar interface {
 // Order of middleware matters: RequestID first (so every later layer sees the
 // ID), Logging second (wraps everything to compute duration & emit one line),
 // Recovery inside Logging so panics still produce an access log.
-func NewApp(cfg *config.Config, log *logger.Logger, registrars map[string]Registrar) *fiber.App {
+//
+// registrars is a slice (not a map) so mount order is deterministic.
+func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *fiber.App {
 	app := fiber.New(fiber.Config{
 		BodyLimit:         cfg.HTTP.BodyLimit,
 		ReadBufferSize:    cfg.HTTP.ReadBufferSize,
@@ -39,15 +44,15 @@ func NewApp(cfg *config.Config, log *logger.Logger, registrars map[string]Regist
 	app.Use(middleware.RequestID())
 	app.Use(middleware.Logging(log))
 	app.Use(middleware.Recovery())
-	app.Use(middleware.CORS())
+	app.Use(middleware.CORS(cfg.HTTP.CORS))
 	app.Use(middleware.Locale())
 
 	app.Get("/healthz", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
 
-	for prefix, r := range registrars {
-		r.Register(app.Group(prefix))
+	for _, r := range registrars {
+		r.Register(app.Group(r.Prefix()))
 	}
 
 	return app

@@ -19,9 +19,12 @@ type HTTPServer struct {
 	logger *logger.Logger
 }
 
-// NewHTTPServer wraps app for graceful shutdown. Caller (DI) builds app via transport/http.NewApp.
+// NewHTTPServer wraps app for graceful shutdown. The shutdown context is
+// rooted at context.Background(), not the request-lifecycle ctx — by the time
+// cleanup runs the parent ctx is already SIGINT-cancelled, which would
+// collapse the configured ShutdownTimeout to zero and force a hard close.
 func NewHTTPServer(
-	ctx context.Context,
+	_ context.Context,
 	cfg *config.Config,
 	log *logger.Logger,
 	app *fiber.App,
@@ -30,7 +33,7 @@ func NewHTTPServer(
 	s := &HTTPServer{app: app, addr: addr, cfg: cfg, logger: log}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(ctx, cfg.HTTP.ShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down HTTP server", "addr", addr)

@@ -1,105 +1,85 @@
 package user
 
 import (
-	"context"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
 
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/errors"
-	"{{.ModuleName}}/pkg/httputil"
-	"{{.ModuleName}}/pkg/logctx"
 )
 
-// UserHandler is the HTTP boundary for user operations.
-type UserHandler struct {
+// Handler is the HTTP boundary for user operations. It never logs — the
+// Logging middleware reads the AppError back from ctx via the WriteError
+// stash and emits one access log per request.
+type Handler struct {
 	userService *usersvc.Service
 }
 
-func NewUserHandler(userService *usersvc.Service) *UserHandler {
-	return &UserHandler{userService: userService}
+func NewHandler(userService *usersvc.Service) *Handler {
+	return &Handler{userService: userService}
 }
 
-// mapAndLog converts a wrapped domain/usecase error into an *AppError and,
-// for 5xx cases only, emits a single log line carrying the full wrap chain.
-// Client errors (4xx) are not logged here — the access log in the Logging
-// middleware already records them.
-func mapAndLog(ctx context.Context, err error) *errors.AppError {
-	app := errors.ToAppError(err)
-	if app.Code >= 500 {
-		logctx.From(ctx).Error("handler error", "err", err.Error(), "trace", app.Trace())
-	}
-	return app
-}
-
-func (h *UserHandler) Create(c *fiber.Ctx) error {
+func (h *Handler) Create(c *fiber.Ctx) error {
 	var input usersvc.RegisterInput
 	if err := c.BodyParser(&input); err != nil {
-		return writeErr(c, errors.BadRequest(err.Error()))
+		return httpwriter.WriteError(c, errors.BadRequest(err.Error()))
 	}
 	user, err := h.userService.Register(c.UserContext(), input)
 	if err != nil {
-		return writeErr(c, mapAndLog(c.UserContext(), err))
+		return httpwriter.WriteError(c, errors.ToAppError(err))
 	}
-
-	resp := ToUserResponse(user)
-	return c.Status(fiber.StatusCreated).JSON(httputil.SuccessResponse(resp))
+	return httpwriter.WriteJSON(c, fiber.StatusCreated, ToUserResponse(user))
 }
 
-func (h *UserHandler) GetByID(c *fiber.Ctx) error {
+func (h *Handler) GetByID(c *fiber.Ctx) error {
 	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {
-		return writeErr(c, errors.BadRequest("invalid id"))
+		return httpwriter.WriteError(c, errors.BadRequest("invalid id"))
 	}
 	user, err := h.userService.Get(c.UserContext(), id)
 	if err != nil {
-		return writeErr(c, mapAndLog(c.UserContext(), err))
+		return httpwriter.WriteError(c, errors.ToAppError(err))
 	}
-	resp := ToUserResponse(user)
-	return c.JSON(httputil.SuccessResponse(resp))
+	return httpwriter.WriteJSON(c, fiber.StatusOK, ToUserResponse(user))
 }
 
-func (h *UserHandler) Update(c *fiber.Ctx) error {
+func (h *Handler) Update(c *fiber.Ctx) error {
 	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {
-		return writeErr(c, errors.BadRequest("invalid id"))
+		return httpwriter.WriteError(c, errors.BadRequest("invalid id"))
 	}
 	var input usersvc.UpdateInput
 	if bindErr := c.BodyParser(&input); bindErr != nil {
-		return writeErr(c, errors.BadRequest(bindErr.Error()))
+		return httpwriter.WriteError(c, errors.BadRequest(bindErr.Error()))
 	}
 	user, err := h.userService.Update(c.UserContext(), id, input)
 	if err != nil {
-		return writeErr(c, mapAndLog(c.UserContext(), err))
+		return httpwriter.WriteError(c, errors.ToAppError(err))
 	}
-	resp := ToUserResponse(user)
-	return c.JSON(httputil.SuccessResponse(resp))
+	return httpwriter.WriteJSON(c, fiber.StatusOK, ToUserResponse(user))
 }
 
-func (h *UserHandler) Delete(c *fiber.Ctx) error {
+func (h *Handler) Delete(c *fiber.Ctx) error {
 	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {
-		return writeErr(c, errors.BadRequest("invalid id"))
+		return httpwriter.WriteError(c, errors.BadRequest("invalid id"))
 	}
 	if delErr := h.userService.Delete(c.UserContext(), id); delErr != nil {
-		return writeErr(c, mapAndLog(c.UserContext(), delErr))
+		return httpwriter.WriteError(c, errors.ToAppError(delErr))
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func (h *UserHandler) List(c *fiber.Ctx) error {
-	limit := c.QueryInt("limit", 10)
-	offset := c.QueryInt("offset", 0)
-	users, err := h.userService.List(c.UserContext(), toListFilter(limit, offset))
-	if err != nil {
-		return writeErr(c, mapAndLog(c.UserContext(), err))
+func (h *Handler) List(c *fiber.Ctx) error {
+	input := usersvc.ListInput{
+		Limit:  c.QueryInt("limit", 10),
+		Offset: c.QueryInt("offset", 0),
 	}
-
-	resp := ToUserListResponse(users)
-	return c.JSON(httputil.SuccessResponse(resp))
-}
-
-func writeErr(c *fiber.Ctx, app *errors.AppError) error {
-	return httputil.WriteError(c, app)
+	users, err := h.userService.List(c.UserContext(), input)
+	if err != nil {
+		return httpwriter.WriteError(c, errors.ToAppError(err))
+	}
+	return httpwriter.WriteJSON(c, fiber.StatusOK, ToUserListResponse(users))
 }

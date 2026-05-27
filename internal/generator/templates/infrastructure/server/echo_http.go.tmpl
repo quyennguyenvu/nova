@@ -21,9 +21,11 @@ type HTTPServer struct {
 	logger *logger.Logger
 }
 
-// NewHTTPServer wraps echo for graceful shutdown.
+// NewHTTPServer wraps echo for graceful shutdown. The shutdown context is
+// rooted at context.Background(), not the request-lifecycle ctx — by the
+// time cleanup runs the parent ctx is already SIGINT-cancelled.
 func NewHTTPServer(
-	ctx context.Context,
+	_ context.Context,
 	cfg *config.Config,
 	log *logger.Logger,
 	e *echo.Echo,
@@ -32,7 +34,7 @@ func NewHTTPServer(
 	s := &HTTPServer{echo: e, addr: addr, cfg: cfg, logger: log}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(ctx, cfg.HTTP.ShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down HTTP server", "addr", addr)

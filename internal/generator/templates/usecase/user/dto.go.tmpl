@@ -15,6 +15,14 @@ type UpdateInput struct {
 	Name string
 }
 
+// ListInput is the use case's read-side filter shape. Transport hands raw
+// ints in; the service converts to domain.UserFilter internally so transport
+// never imports the domain package.
+type ListInput struct {
+	Limit  int
+	Offset int
+}
+
 // Output is the use-case's return shape — the transport layer projects it
 // into the wire format. Entities never cross this boundary.
 type Output struct {

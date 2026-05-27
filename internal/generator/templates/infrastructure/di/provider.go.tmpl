@@ -1,19 +1,36 @@
 package di
 
 import (
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/tracing"
 	transporthttp "{{.ModuleName}}/internal/transport/http"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 )
 
-// provideRegistrars assembles every feature's Routes into a path-keyed map that
-// transport/http.NewApp consumes. Add new features here as they appear.
+// provideTracingConfig projects the app config into the tracing package's
+// neutral Config struct, so tracing has no compile-time dep on config.
+func provideTracingConfig(cfg *config.Config) tracing.Config {
+	return tracing.Config{
+		ServiceName:    cfg.AppName,
+		ServiceVersion: cfg.AppVersion,
+		Environment:    cfg.AppEnv,
+		Endpoint:       cfg.Tracing.Endpoint,
+		Insecure:       cfg.Tracing.Insecure,
+		SampleRatio:    cfg.Tracing.SampleRatio,
+	}
+}
+
+// provideRegistrars assembles every feature's Routes into a slice that
+// transport/http.NewApp consumes in order. Each Routes carries its own
+// Prefix() — the slice order determines mount order, not the prefix string.
+// Add new features here as they appear.
 //
 // The transporthttp.Registrar interface is framework-specific — its Register
 // signature is set by whichever app file was generated (fiber/gin/chi/echo).
 // As long as each *Routes type's Register method matches the chosen framework's
 // router type, this provider compiles unchanged.
-func provideRegistrars(userRoutes *userv1.Routes) map[string]transporthttp.Registrar {
-	return map[string]transporthttp.Registrar{
-		"/api/v1": userRoutes,
+func provideRegistrars(userRoutes *userv1.Routes) []transporthttp.Registrar {
+	return []transporthttp.Registrar{
+		userRoutes,
 	}
 }

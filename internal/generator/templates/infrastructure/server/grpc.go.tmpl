@@ -19,8 +19,10 @@ type GRPCServer struct {
 }
 
 // NewGRPCServer constructs the gRPC server and wires graceful shutdown.
-// Service registration is done by the caller via Server().
-func NewGRPCServer(ctx context.Context, cfg *config.Config, log *logger.Logger) (*GRPCServer, func(), error) {
+// Service registration is done by the caller via Server(). The shutdown
+// context is rooted at context.Background() so the timeout isn't collapsed
+// by an already-cancelled parent.
+func NewGRPCServer(_ context.Context, cfg *config.Config, log *logger.Logger) (*GRPCServer, func(), error) {
 	addr := ":" + cfg.GRPC.Port
 
 	s := &GRPCServer{
@@ -31,7 +33,7 @@ func NewGRPCServer(ctx context.Context, cfg *config.Config, log *logger.Logger) 
 	}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(ctx, cfg.GRPC.ShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.GRPC.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down gRPC server", "addr", addr)

@@ -1,10 +1,18 @@
+// Package identity holds the domain's view of who is making a request — the
+// principals attached to a request context after authentication. Token shapes
+// and verification live in internal/infrastructure/jwt; this package stays
+// free of crypto so domain/usecase can depend on it without pulling JWT in.
 package identity
 
+// Principal is the common identity shared across actor types.
 type Principal struct {
 	UserID int32
 	Email  string
 }
 
+// UserPrincipal represents an authenticated end-user. Extend with new claims
+// here as the access token grows; add a sibling type (e.g. AdminPrincipal,
+// ServicePrincipal) for distinct audiences rather than overloading this one.
 type UserPrincipal struct {
 	Principal
 
@@ -13,12 +21,4 @@ type UserPrincipal struct {
 	DeviceID  string
 	Platform  string
 	SessionID string
-}
-
-type AdminPrincipal struct {
-	Principal
-
-	Username    string
-	Permissions []string
-	GroupIDs    []int32
 }

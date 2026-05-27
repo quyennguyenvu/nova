@@ -12,9 +12,10 @@ import (
 	"{{.ModuleName}}/pkg/observability"
 )
 
-// Logger aliases observability.Logger so the two cannot drift. Child loggers
-// (via With) are built at the boundary by middleware — inner layers only emit
-// events, they do not fork loggers.
+// Logger aliases observability.Logger so the two cannot drift. The interface
+// exposes With so inner layers (repos, usecases) can fork child loggers with
+// extra structured fields — call logctx.From(ctx).With("user_id", id) before
+// emitting events that span multiple log lines.
 type Logger = observability.Logger
 
 type ctxKey struct{}
@@ -40,7 +41,8 @@ func From(ctx context.Context) Logger {
 // (e.g. tests, or code called before middleware has run).
 type nop struct{}
 
-func (nop) Debug(string, ...any) {}
-func (nop) Info(string, ...any)  {}
-func (nop) Warn(string, ...any)  {}
-func (nop) Error(string, ...any) {}
+func (n nop) Debug(string, ...any)            {}
+func (n nop) Info(string, ...any)             {}
+func (n nop) Warn(string, ...any)             {}
+func (n nop) Error(string, ...any)            {}
+func (n nop) With(string, any) Logger         { return n }

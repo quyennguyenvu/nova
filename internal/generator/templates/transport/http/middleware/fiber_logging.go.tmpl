@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
@@ -25,7 +26,8 @@ func errMsg(err error) string {
 }
 
 // Logging builds a request-scoped logger (enriched with request_id + trace_id),
-// attaches it to ctx so inner layers can retrieve it via logctx.From, and emits
+// attaches it to ctx so inner layers can retrieve it via logctx.From, installs
+// an AppError stash slot (httpwriter.WriteError fills it on 4xx/5xx), and emits
 // exactly ONE access log at the end of the request.
 func Logging(base *logger.Logger) fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -39,21 +41,35 @@ func Logging(base *logger.Logger) fiber.Handler {
 			With("trace_id", traceIDOr(sc)).
 			With("method", c.Method()).
 			With("path", c.Path())
-		c.SetUserContext(logctx.Into(ctx, scoped))
+		ctx = logctx.Into(ctx, scoped)
+		ctx = errors.PrepareAppErrorContext(ctx)
+		c.SetUserContext(ctx)
 
 		err := c.Next()
 
+		status := c.Response().StatusCode()
 		ev := scoped.Info
-		if err != nil || c.Response().StatusCode() >= 500 {
+		if err != nil || status >= 500 {
 			ev = scoped.Error
-		} else if c.Response().StatusCode() >= 400 {
+		} else if status >= 400 {
 			ev = scoped.Warn
 		}
-		ev("request",
-			"status", c.Response().StatusCode(),
+
+		fields := []any{
+			"status", status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"err", errMsg(err),
-		)
+		}
+		if app := errors.AppErrorFromContext(ctx); app != nil {
+			fields = append(fields, "app_code", app.Code)
+			if app.Locale != 0 {
+				fields = append(fields, "app_locale", int(app.Locale))
+			}
+			if status >= 500 {
+				fields = append(fields, "app_trace", app.Trace())
+			}
+		}
+		ev("request", fields...)
 		return err
 	}
 }
