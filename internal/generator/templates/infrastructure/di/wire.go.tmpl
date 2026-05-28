@@ -20,6 +20,9 @@ import (
 {{- if .HasDatabase}}
 	"{{.ModuleName}}/internal/infrastructure/database"
 {{- end}}
+{{- if .HasRedis}}
+	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
+{{- end}}
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/infrastructure/logger"
 	infrasec "{{.ModuleName}}/internal/infrastructure/security"
@@ -33,6 +36,7 @@ import (
 {{- end}}
 {{- if .HasHTTP}}
 	transporthttp "{{.ModuleName}}/internal/transport/http"
+	"{{.ModuleName}}/internal/transport/http/health"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 {{- end}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
@@ -44,8 +48,10 @@ var infraSet = wire.NewSet(
 	config.Load,
 	logger.New,
 	jwtsec.NewTokenService,
-	infrasec.NewDefaultBcryptHasher,
+	infrasec.NewBcryptHasher,
 	wire.Bind(new(domainsec.PasswordHasher), new(*infrasec.BcryptHasher)),
+	provideValidator,
+	provideLoginRateLimit,
 	provideTracingConfig,
 	tracing.Provider,
 {{- if eq .Database "postgres"}}
@@ -54,7 +60,11 @@ var infraSet = wire.NewSet(
 {{- if eq .Database "mysql"}}
 	database.NewMySQLDB,
 {{- end}}
+{{- if .HasRedis}}
+	infraCache.New,
+{{- end}}
 {{- if .HasHTTP}}
+	health.NewChecker,
 	transporthttp.NewApp,
 	server.NewHTTPServer,
 {{- end}}

@@ -25,9 +25,16 @@ type TokenService struct {
 	accessTokenTTL time.Duration
 }
 
+// minSecretBytes is the HS256 secret floor — RFC 7518 §3.2 requires keys
+// of size ≥ hash output (256 bits). Anything shorter weakens the MAC and
+// makes brute-force forgery feasible.
+const minSecretBytes = 32
+
 func NewTokenService(cfg *config.Config) (*TokenService, error) {
-	if cfg.JWT.Secret == "" {
-		return nil, errors.InternalServer("jwt: secret is empty")
+	if len(cfg.JWT.Secret) < minSecretBytes {
+		return nil, errors.InternalServer(
+			"jwt: secret must be at least 32 bytes (256 bits); generate one with `openssl rand -hex 32`",
+		)
 	}
 	ttl := cfg.JWT.AccessTokenTTL
 	if ttl <= 0 {

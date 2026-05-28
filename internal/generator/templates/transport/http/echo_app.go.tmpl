@@ -1,7 +1,7 @@
 // Package http builds the framework instance: it installs middleware in the
-// correct order, exposes /healthz, and lets each feature attach its own routes
-// via the Registrar interface. Lifecycle (port binding, graceful shutdown) is
-// the job of infrastructure/server.
+// correct order, exposes /healthz + /readyz, and lets each feature attach its
+// own routes via the Registrar interface. Lifecycle (port binding, graceful
+// shutdown) is the job of infrastructure/server.
 package http
 
 import (
@@ -11,6 +11,7 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
 
@@ -23,13 +24,15 @@ type Registrar interface {
 	Register(*echo.Group)
 }
 
-// NewApp builds the echo instance: middleware → /healthz → registrars at their prefixes.
-// Order of middleware matters: RequestID first (so every later layer sees the
-// ID), Logging second (wraps everything to compute duration & emit one line),
-// Recovery inside Logging so panics still produce an access log.
+// NewApp builds the echo instance: middleware → probes → registrars at their prefixes.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
-func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *echo.Echo {
+func NewApp(
+	cfg *config.Config,
+	log *logger.Logger,
+	checker *health.Checker,
+	registrars []Registrar,
+) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 
@@ -40,7 +43,15 @@ func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *ech
 	e.Use(middleware.Locale())
 
 	e.GET("/healthz", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		return c.JSON(http.StatusOK, checker.Liveness())
+	})
+	e.GET("/readyz", func(c echo.Context) error {
+		status := checker.Readiness(c.Request().Context())
+		code := http.StatusOK
+		if !status.OK {
+			code = http.StatusServiceUnavailable
+		}
+		return c.JSON(code, status)
 	})
 
 	for _, r := range registrars {

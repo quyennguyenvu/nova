@@ -39,6 +39,9 @@ func Logging(base *logger.Logger) func(http.Handler) http.Handler {
 			reqID := RequestIDFrom(ctx)
 			sc := trace.SpanContextFromContext(ctx)
 
+			// URL.Path is path-only (no query string) — keep it that way so
+			// secrets in `?token=...` never reach structured logs. Do NOT
+			// switch to r.RequestURI or URL.String().
 			scoped := base.
 				With("request_id", reqID).
 				With("trace_id", traceIDOr(sc)).

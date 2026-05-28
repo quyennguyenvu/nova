@@ -7,31 +7,27 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"{{.ModuleName}}/internal/domain/security"
+	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/pkg/errors"
 )
 
 var _ security.PasswordHasher = (*BcryptHasher)(nil)
 
 // BcryptHasher wraps the bcrypt cost parameter so deployments can dial work
-// factor without touching callsites.
+// factor without touching callsites. Production deployments with CPU headroom
+// should raise the cost (12–13) — see SecurityConfig.BcryptCost.
 type BcryptHasher struct {
 	cost int
 }
 
-// NewBcryptHasher builds a hasher at the given cost. Pass bcrypt.DefaultCost
-// (10) for general use; raise per deployment as hardware allows.
-func NewBcryptHasher(cost int) *BcryptHasher {
+// NewBcryptHasher reads the cost from config, clamping invalid values to
+// bcrypt.DefaultCost (10). Cost must be in [bcrypt.MinCost, bcrypt.MaxCost].
+func NewBcryptHasher(cfg *config.Config) *BcryptHasher {
+	cost := cfg.Security.BcryptCost
 	if cost < bcrypt.MinCost || cost > bcrypt.MaxCost {
 		cost = bcrypt.DefaultCost
 	}
 	return &BcryptHasher{cost: cost}
-}
-
-// NewDefaultBcryptHasher is the DI-friendly constructor — picks bcrypt's
-// DefaultCost (10) so wiring doesn't need a config field for the work factor.
-// Replace this provider in your DI graph when you need a tunable cost.
-func NewDefaultBcryptHasher() *BcryptHasher {
-	return NewBcryptHasher(bcrypt.DefaultCost)
 }
 
 func (h *BcryptHasher) Hash(plain string) (string, error) {

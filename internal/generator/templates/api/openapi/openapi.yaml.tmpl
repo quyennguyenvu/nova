@@ -8,17 +8,68 @@ servers:
   - url: http://localhost:8080
     description: Local development
 
+# Authenticated endpoints carry `Authorization: Bearer <accessToken>` issued
+# by POST /api/v1/login. Public endpoints are explicitly marked.
+security:
+  - bearerAuth: []
+
 paths:
-  /health:
+  /healthz:
     get:
-      summary: Health check
+      summary: Liveness probe
+      security: []
       responses:
         "200":
-          description: Service is healthy
+          description: Process is alive
+
+  /readyz:
+    get:
+      summary: Readiness probe — checks DB / cache connectivity
+      security: []
+      responses:
+        "200":
+          description: All dependencies reachable
+        "503":
+          description: One or more dependencies failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/login:
+    post:
+      summary: Exchange credentials for a bearer token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponseEnvelope"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Too many login attempts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /api/v1/users:
     post:
-      summary: Create a new user
+      summary: Register a new user
+      security: []
       requestBody:
         required: true
         content:
@@ -31,9 +82,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserResponse"
+                $ref: "#/components/schemas/UserResponseEnvelope"
         "400":
           description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     get:
       summary: List users
       parameters:
@@ -42,6 +103,7 @@ paths:
           schema:
             type: integer
             default: 10
+            maximum: 500
         - name: offset
           in: query
           schema:
@@ -50,6 +112,16 @@ paths:
       responses:
         "200":
           description: List of users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponseEnvelope"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /api/v1/users/{id}:
     get:
@@ -60,11 +132,20 @@ paths:
           required: true
           schema:
             type: integer
+            format: int64
       responses:
         "200":
           description: User found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponseEnvelope"
         "404":
           description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     put:
       summary: Update user
       parameters:
@@ -73,6 +154,7 @@ paths:
           required: true
           schema:
             type: integer
+            format: int64
       requestBody:
         required: true
         content:
@@ -82,6 +164,10 @@ paths:
       responses:
         "200":
           description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponseEnvelope"
     delete:
       summary: Delete user
       parameters:
@@ -90,50 +176,85 @@ paths:
           required: true
           schema:
             type: integer
+            format: int64
       responses:
         "204":
           description: User deleted
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
+    # ── Request bodies ────────────────────────────────────────────
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
     CreateUserInput:
       type: object
-      required:
-        - email
-        - name
-        - password
+      required: [email, name, password]
       properties:
-        email:
-          type: string
-          format: email
-        name:
-          type: string
-          minLength: 2
-          maxLength: 100
-        password:
-          type: string
-          minLength: 8
+        email: { type: string, format: email }
+        name: { type: string, minLength: 2, maxLength: 100 }
+        password: { type: string, minLength: 8 }
 
     UpdateUserInput:
       type: object
       properties:
-        name:
-          type: string
-          minLength: 2
-          maxLength: 100
+        name: { type: string, minLength: 2, maxLength: 100 }
 
+    # ── Response payloads ─────────────────────────────────────────
     UserResponse:
       type: object
       properties:
-        id:
-          type: integer
-        email:
-          type: string
-        name:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
+        id: { type: integer, format: int64 }
+        email: { type: string }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    LoginResponse:
+      type: object
+      properties:
+        accessToken: { type: string }
+        tokenType: { type: string, example: Bearer }
+        expiresIn: { type: integer, format: int64, description: "Lifetime in seconds (RFC 6749 expires_in)" }
+        user: { $ref: "#/components/schemas/UserResponse" }
+
+    # ── Response envelopes ────────────────────────────────────────
+    UserResponseEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/UserResponse" }
+
+    UserListResponseEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/UserResponse" }
+
+    LoginResponseEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/LoginResponse" }
+
+    ErrorResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:
+          type: object
+          properties:
+            code: { type: integer, description: "HTTP status or locale code identifier" }
+            message: { type: string }

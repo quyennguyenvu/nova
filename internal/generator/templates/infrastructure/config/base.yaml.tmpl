@@ -19,6 +19,11 @@ jwt:
   audience: "{{.ProjectName}}"
   access_token_ttl: 1h
 
+security:
+  # bcrypt work factor. 10 is bcrypt.DefaultCost; raise to 12-13 in
+  # production when CPU headroom allows. Clamped to [4, 31] at construction.
+  bcrypt_cost: 10
+
 {{- if .HasHTTP}}
 
 http:
@@ -29,11 +34,20 @@ http:
   body_limit: 10485760 # 10 MB
   shutdown_timeout: 10s
   cors:
-    # Override per environment via CORS_ALLOW_ORIGINS env var (comma-separated).
-    # Empty in base — each deployment must opt in explicitly; never "*" in prod.
+    # Production deployments MUST set CORS_ALLOW_ORIGINS (comma-separated env
+    # var) to enumerate every allowed origin. Empty here means EVERY
+    # cross-origin request is rejected — browsers will see no
+    # Access-Control-Allow-Origin header and reject preflights. Never use "*".
+    # development.yaml ships localhost defaults so dev tooling works without
+    # editing this file.
     allow_origins: []
     allow_methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
     allow_headers: ["Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"]
+  login_rate_limit:
+    # 5 requests per minute, burst 5 — closes brute-force without locking
+    # out legitimate retries. Tune per deployment via env vars.
+    rps: 0.0833
+    burst: 5
 {{- end}}
 
 {{- if .HasGRPC}}

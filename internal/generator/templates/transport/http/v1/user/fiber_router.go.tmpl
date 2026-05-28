@@ -3,6 +3,7 @@ package user
 import (
 	"github.com/gofiber/fiber/v2"
 
+	"{{.ModuleName}}/internal/infrastructure/config"
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
@@ -10,16 +11,17 @@ import (
 // Routes is the user feature's HTTP route registrar. It implements the
 // transport/http.Registrar interface — mounted at /api/v1 by the app.
 //
-// The constructor takes the JWT verifier so Register can build the auth
-// middleware and gate the protected subgroup. Make-believe public routes
-// (Create == register) sit outside that subgroup.
+// The constructor takes the JWT TokenService + rate-limit config so Register
+// can build the auth middleware and gate the protected subgroup, and
+// throttle the public login endpoint without depending on globals.
 type Routes struct {
-	handler  *Handler
-	tokenSvc *jwtsec.TokenService
+	handler        *Handler
+	tokenSvc       *jwtsec.TokenService
+	loginLimit     config.LoginRateLimitConfig
 }
 
-func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService) *Routes {
-	return &Routes{handler: h, tokenSvc: tokenSvc}
+func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.LoginRateLimitConfig) *Routes {
+	return &Routes{handler: h, tokenSvc: tokenSvc, loginLimit: loginLimit}
 }
 
 // Prefix is the API version subtree this feature mounts under.
@@ -33,7 +35,7 @@ func (*Routes) Prefix() string { return "/api/v1" }
 // Splitting at the group level (not per-route) keeps the auth boundary
 // obvious; protected routes share one Auth middleware instance.
 func (r *Routes) Register(router fiber.Router) {
-	router.Post("/login", r.handler.Login)
+	router.Post("/login", middleware.LoginRateLimit(r.loginLimit), r.handler.Login)
 
 	public := router.Group("/users")
 	public.Post("/", r.handler.Create)

@@ -1,11 +1,28 @@
 package di
 
 import (
+	"github.com/go-playground/validator/v10"
+
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/tracing"
 	transporthttp "{{.ModuleName}}/internal/transport/http"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 )
+
+// provideValidator returns a single concurrent-safe *validator.Validate that
+// every handler uses to enforce `validate:"..."` tags on incoming DTOs.
+// One instance per process — internal caches make repeated Struct() calls
+// cheap once tags have been parsed.
+func provideValidator() *validator.Validate {
+	return validator.New(validator.WithRequiredStructEnabled())
+}
+
+// provideLoginRateLimit projects the nested config.HTTP.LoginRateLimit field
+// out for Wire — Wire prefers values over deeply-nested struct accesses, so
+// expose it as its own provider rather than wire.FieldsOf magic.
+func provideLoginRateLimit(cfg *config.Config) config.LoginRateLimitConfig {
+	return cfg.HTTP.LoginRateLimit
+}
 
 // provideTracingConfig projects the app config into the tracing package's
 // neutral Config struct, so tracing has no compile-time dep on config.

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
 
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
@@ -16,18 +17,36 @@ import (
 // stash and emits one access log per request.
 type Handler struct {
 	userService *usersvc.Service
+	validate    *validator.Validate
 }
 
-func NewHandler(userService *usersvc.Service) *Handler {
-	return &Handler{userService: userService}
+func NewHandler(userService *usersvc.Service, validate *validator.Validate) *Handler {
+	return &Handler{userService: userService, validate: validate}
+}
+
+// bind parses the request body + enforces struct-tag validation. Validation
+// errors map to 400 with the validator's own message so clients see
+// field-by-field detail.
+func (h *Handler) bind(c echo.Context, v any) *errors.AppError {
+	if err := c.Bind(v); err != nil {
+		return errors.BadRequest(err.Error())
+	}
+	if err := h.validate.Struct(v); err != nil {
+		return errors.BadRequest(err.Error())
+	}
+	return nil
 }
 
 func (h *Handler) Create(c echo.Context) error {
-	var input usersvc.RegisterInput
-	if err := c.Bind(&input); err != nil {
-		return httpwriter.WriteError(c, errors.BadRequest(err.Error()))
+	var req CreateUserRequest
+	if appErr := h.bind(c, &req); appErr != nil {
+		return httpwriter.WriteError(c, appErr)
 	}
-	user, err := h.userService.Register(c.Request().Context(), input)
+	user, err := h.userService.Register(c.Request().Context(), usersvc.RegisterInput{
+		Email:    req.Email,
+		Name:     req.Name,
+		Password: req.Password,
+	})
 	if err != nil {
 		return httpwriter.WriteError(c, errors.ToAppError(err))
 	}
@@ -36,8 +55,8 @@ func (h *Handler) Create(c echo.Context) error {
 
 func (h *Handler) Login(c echo.Context) error {
 	var req LoginRequest
-	if err := c.Bind(&req); err != nil {
-		return httpwriter.WriteError(c, errors.BadRequest(err.Error()))
+	if appErr := h.bind(c, &req); appErr != nil {
+		return httpwriter.WriteError(c, appErr)
 	}
 	out, err := h.userService.Login(c.Request().Context(), usersvc.LoginInput{
 		Email:    req.Email,
@@ -66,11 +85,11 @@ func (h *Handler) Update(c echo.Context) error {
 	if err != nil {
 		return httpwriter.WriteError(c, errors.BadRequest("invalid id"))
 	}
-	var input usersvc.UpdateInput
-	if bindErr := c.Bind(&input); bindErr != nil {
-		return httpwriter.WriteError(c, errors.BadRequest(bindErr.Error()))
+	var req UpdateUserRequest
+	if appErr := h.bind(c, &req); appErr != nil {
+		return httpwriter.WriteError(c, appErr)
 	}
-	user, err := h.userService.Update(c.Request().Context(), id, input)
+	user, err := h.userService.Update(c.Request().Context(), id, usersvc.UpdateInput{Name: req.Name})
 	if err != nil {
 		return httpwriter.WriteError(c, errors.ToAppError(err))
 	}

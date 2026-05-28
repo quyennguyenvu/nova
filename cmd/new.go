@@ -89,11 +89,14 @@ func runNew(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintln(os.Stdout)
 
-	gen := generator.New(cfg)
+	gen, err := generator.New(cfg)
+	if err != nil {
+		return fmt.Errorf("generator init: %w", err)
+	}
 	outputDir := cfg.ProjectName
 
-	if err := gen.Generate(outputDir); err != nil {
-		return fmt.Errorf("generation failed: %w", err)
+	if genErr := gen.Generate(outputDir); genErr != nil {
+		return fmt.Errorf("generation failed: %w", genErr)
 	}
 
 	fmt.Fprintf(os.Stdout, "✅ Project generated successfully in ./%s\n\n", cfg.ProjectName)

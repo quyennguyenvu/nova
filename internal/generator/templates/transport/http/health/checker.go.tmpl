@@ -1,0 +1,119 @@
+// Package health is the framework-agnostic readiness probe. Liveness is a
+// trivial process-up signal (use for restart loops); readiness pings every
+// downstream dependency the process needs to serve traffic — DB pool, Redis
+// — and returns 503 if any is unreachable.
+//
+// Each check runs under a 1-second deadline so a hung dependency cannot
+// cause /readyz itself to back up.
+package health
+
+import (
+	"context"
+	"time"
+{{- if .HasDatabase}}
+{{- if eq .Database "postgres"}}
+
+	"github.com/jackc/pgx/v5/pgxpool"
+{{- end}}
+{{- if eq .Database "mysql"}}
+
+	"database/sql"
+{{- end}}
+{{- end}}
+{{- if .HasRedis}}
+
+	"{{.ModuleName}}/internal/infrastructure/cache"
+{{- end}}
+)
+
+// Status is the wire shape of a probe response. Details enumerates per-check
+// outcomes so operators can spot which dependency is failing without
+// shelling onto the host.
+type Status struct {
+	OK      bool              `json:"ok"`
+	Details map[string]string `json:"details,omitempty"`
+}
+
+// Checker owns the dependency handles probed by /readyz. Construct via DI.
+type Checker struct {
+{{- if and .HasDatabase (eq .Database "postgres")}}
+	pool *pgxpool.Pool
+{{- end}}
+{{- if and .HasDatabase (eq .Database "mysql")}}
+	db *sql.DB
+{{- end}}
+{{- if .HasRedis}}
+	cache *cache.Client
+{{- end}}
+}
+
+// NewChecker is the DI provider. Order of parameters mirrors the order
+// these dependencies are constructed in container.go / wire_gen.go.
+func NewChecker(
+{{- if and .HasDatabase (eq .Database "postgres")}}
+	pool *pgxpool.Pool,
+{{- end}}
+{{- if and .HasDatabase (eq .Database "mysql")}}
+	db *sql.DB,
+{{- end}}
+{{- if .HasRedis}}
+	cacheClient *cache.Client,
+{{- end}}
+) *Checker {
+	return &Checker{
+{{- if and .HasDatabase (eq .Database "postgres")}}
+		pool: pool,
+{{- end}}
+{{- if and .HasDatabase (eq .Database "mysql")}}
+		db: db,
+{{- end}}
+{{- if .HasRedis}}
+		cache: cacheClient,
+{{- end}}
+	}
+}
+
+// Liveness is a no-op success — the process being able to answer the request
+// is the signal. Use for orchestrator restart loops; do NOT couple it to DB
+// or cache health (that's what Readiness is for).
+func (*Checker) Liveness() Status {
+	return Status{OK: true}
+}
+
+// Readiness pings every configured dependency under a 1-second deadline.
+// Returns OK=false if ANY check fails — the JSON body carries per-check
+// detail so the failing dependency is visible without log archaeology.
+func (c *Checker) Readiness(ctx context.Context) Status {
+	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+
+	details := map[string]string{}
+	ok := true
+
+{{- if and .HasDatabase (eq .Database "postgres")}}
+	if err := c.pool.Ping(probeCtx); err != nil {
+		details["database"] = err.Error()
+		ok = false
+	} else {
+		details["database"] = "ok"
+	}
+{{- end}}
+{{- if and .HasDatabase (eq .Database "mysql")}}
+	if err := c.db.PingContext(probeCtx); err != nil {
+		details["database"] = err.Error()
+		ok = false
+	} else {
+		details["database"] = "ok"
+	}
+{{- end}}
+{{- if .HasRedis}}
+	if err := c.cache.Ping(probeCtx).Err(); err != nil {
+		details["redis"] = err.Error()
+		ok = false
+	} else {
+		details["redis"] = "ok"
+	}
+{{- end}}
+
+	return Status{OK: ok, Details: details}
+}

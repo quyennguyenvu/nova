@@ -4,10 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Nova is a Go CLI that scaffolds production-ready Go services following Clean Architecture. It has two commands:
+Nova is a Go CLI that scaffolds production-ready Go services following Clean Architecture. The single command is:
 
 - `nova new [name]` — generates a full project (interactive, or non-interactive when any flag is passed)
-- `nova generate <type> <name>` — scaffolds a single component (entity/usecase/handler/repository) into an existing project
 
 Module is `nova` (local name), binary is `bin/nova`. Requires Go 1.25.1+.
 
@@ -34,21 +33,16 @@ Run a single test: `go test -v -run TestName ./path/to/pkg`.
 
 ### Control flow
 
-`main.go → cmd.Execute() → cobra root → (newCommand | generateCommand)`
+`main.go → cmd.Execute() → cobra root → newCommand`
 
-- [cmd/root.go](cmd/root.go) — wires Cobra root and subcommands
+- [cmd/root.go](cmd/root.go) — wires Cobra root and subcommands; calls `locale.NewMapping()` once at startup
 - [cmd/new.go](cmd/new.go) — `new`: builds `config.ProjectConfig`, either from flags (`applyFlags`) or via `prompt.RunInteractive`, then calls `generator.New(cfg).Generate(outputDir)`
-- [cmd/generate.go](cmd/generate.go) — `generate`: dispatches component type to `generator.NewComponentGenerator`
 
-### Two generators, two strategies
+### Rendering strategy
 
-Nova uses **different rendering strategies** for the two commands — don't mix them up:
+[internal/generator/generator.go](internal/generator/generator.go) renders `text/template` files from an `embed.FS` (`//go:embed all:templates`). The template tree lives at [internal/generator/templates/](internal/generator/templates/). Files are selected by `cond` booleans in `buildFileList()` (which composes `rootFiles`, `domainFiles`, `usecaseFiles`, `adapterFiles`, `transportFiles`, `infrastructureFiles`, `pkgFiles`, `migrationFiles`, `sqlcFiles`, `toolingFiles`, `entryPointFiles`).
 
-1. **Full project** ([internal/generator/generator.go](internal/generator/generator.go)) — renders `text/template` files from an `embed.FS` (`//go:embed all:templates`). The template tree lives at [internal/generator/templates/](internal/generator/templates/). Files are selected by `cond` booleans in `buildFileList()` (which composes `rootFiles`, `domainFiles`, `usecaseFiles`, `adapterFiles`, `transportFiles`, `infrastructureFiles`, `pkgFiles`, `migrationFiles`, `sqlcFiles`, `toolingFiles`, `entryPointFiles`).
-
-2. **Single component** ([internal/generator/component.go](internal/generator/component.go)) — does **not** use templates. It builds files with inline `fmt.Sprintf` strings. Scaffolds are TODO stubs meant to be filled in.
-
-### Template naming convention (full-project generator)
+### Template naming convention
 
 Variant-prefixed source → clean output name:
 
@@ -57,7 +51,7 @@ Variant-prefixed source → clean output name:
 - `templates/sqlc/{pg,mysql}_sqlc.yaml.tmpl` → `sqlc/sqlc.yaml` (engine alias from `sqlcEngineAlias()`)
 - `templates/infrastructure/server/http_{framework}.go.tmpl` → `internal/infrastructure/server/http.go`
 
-All framework variants coexist in the template tree; the generator picks one at render time using `cfg.HTTPFramework` / `cfg.Database` / `cfg.QueryGen`. **To add a new HTTP framework or DB engine, add all the prefixed template files — `generator.go` already selects by the prefix string.**
+All framework variants coexist in the template tree; the generator picks one at render time using `cfg.HTTPFramework` / `cfg.Database` / `cfg.QueryGen`. **To add a new HTTP framework or DB engine, add all the prefixed template files AND extend the whitelist in `generator.New()` — `generator.go` validates the choice at construction time before resolving template paths.**
 
 ### Config is the single source of truth
 

@@ -12,6 +12,12 @@ import (
 
 // Recovery logs panics through the request-scoped logger and returns 500 in
 // the standard response envelope.
+//
+// Fiber buffers the response via fasthttp until the handler chain returns;
+// the double-write hazard that chi/gin/echo guard against does not apply
+// here. Do NOT add a wroteHeader flag — fasthttp will silently overwrite
+// the buffered partial response with our 500 envelope, which is the
+// correct behaviour for this middleware.
 func Recovery() fiber.Handler {
 	return func(c *fiber.Ctx) (err error) {
 		defer func() {

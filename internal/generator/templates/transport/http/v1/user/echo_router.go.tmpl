@@ -3,6 +3,7 @@ package user
 import (
 	"github.com/labstack/echo/v4"
 
+	"{{.ModuleName}}/internal/infrastructure/config"
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
@@ -10,12 +11,13 @@ import (
 // Routes is the user feature's HTTP route registrar. It implements the
 // transport/http.Registrar interface — mounted at /api/v1 by the app.
 type Routes struct {
-	handler  *Handler
-	tokenSvc *jwtsec.TokenService
+	handler    *Handler
+	tokenSvc   *jwtsec.TokenService
+	loginLimit config.LoginRateLimitConfig
 }
 
-func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService) *Routes {
-	return &Routes{handler: h, tokenSvc: tokenSvc}
+func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.LoginRateLimitConfig) *Routes {
+	return &Routes{handler: h, tokenSvc: tokenSvc, loginLimit: loginLimit}
 }
 
 // Prefix is the API version subtree this feature mounts under.
@@ -26,7 +28,7 @@ func (*Routes) Prefix() string { return "/api/v1" }
 //   - POST /users              (public — registration)
 //   - GET/PUT/DELETE /users*   (authenticated subgroup)
 func (r *Routes) Register(router *echo.Group) {
-	router.POST("/login", r.handler.Login)
+	router.POST("/login", r.handler.Login, middleware.LoginRateLimit(r.loginLimit))
 
 	public := router.Group("/users")
 	public.POST("", r.handler.Create)

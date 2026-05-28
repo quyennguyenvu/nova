@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
 
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
@@ -17,19 +18,36 @@ import (
 // stash and emits one access log per request.
 type Handler struct {
 	userService *usersvc.Service
+	validate    *validator.Validate
 }
 
-func NewHandler(userService *usersvc.Service) *Handler {
-	return &Handler{userService: userService}
+func NewHandler(userService *usersvc.Service, validate *validator.Validate) *Handler {
+	return &Handler{userService: userService, validate: validate}
+}
+
+// bind decodes JSON + enforces struct-tag validation. Validation errors map
+// to 400 with the validator's own message so clients see field-by-field detail.
+func (h *Handler) bind(r *http.Request, v any) *errors.AppError {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		return errors.BadRequest(err.Error())
+	}
+	if err := h.validate.Struct(v); err != nil {
+		return errors.BadRequest(err.Error())
+	}
+	return nil
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	var input usersvc.RegisterInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		httpwriter.WriteError(w, r, errors.BadRequest(err.Error()))
+	var req CreateUserRequest
+	if appErr := h.bind(r, &req); appErr != nil {
+		httpwriter.WriteError(w, r, appErr)
 		return
 	}
-	user, err := h.userService.Register(r.Context(), input)
+	user, err := h.userService.Register(r.Context(), usersvc.RegisterInput{
+		Email:    req.Email,
+		Name:     req.Name,
+		Password: req.Password,
+	})
 	if err != nil {
 		httpwriter.WriteError(w, r, errors.ToAppError(err))
 		return
@@ -39,8 +57,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpwriter.WriteError(w, r, errors.BadRequest(err.Error()))
+	if appErr := h.bind(r, &req); appErr != nil {
+		httpwriter.WriteError(w, r, appErr)
 		return
 	}
 	out, err := h.userService.Login(r.Context(), usersvc.LoginInput{
@@ -74,12 +92,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		httpwriter.WriteError(w, r, errors.BadRequest("invalid id"))
 		return
 	}
-	var input usersvc.UpdateInput
-	if bindErr := json.NewDecoder(r.Body).Decode(&input); bindErr != nil {
-		httpwriter.WriteError(w, r, errors.BadRequest(bindErr.Error()))
+	var req UpdateUserRequest
+	if appErr := h.bind(r, &req); appErr != nil {
+		httpwriter.WriteError(w, r, appErr)
 		return
 	}
-	user, err := h.userService.Update(r.Context(), id, input)
+	user, err := h.userService.Update(r.Context(), id, usersvc.UpdateInput{Name: req.Name})
 	if err != nil {
 		httpwriter.WriteError(w, r, errors.ToAppError(err))
 		return

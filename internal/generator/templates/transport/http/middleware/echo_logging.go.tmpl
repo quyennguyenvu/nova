@@ -37,6 +37,9 @@ func Logging(base *logger.Logger) echo.MiddlewareFunc {
 			reqID := RequestIDFrom(ctx)
 			sc := trace.SpanContextFromContext(ctx)
 
+			// c.Path() returns the route pattern (no query string) — keep
+			// it that way so secrets in `?token=...` never reach structured
+			// logs. Do NOT switch to req.URL.RequestURI() or URL.String().
 			scoped := base.
 				With("request_id", reqID).
 				With("trace_id", traceIDOr(sc)).

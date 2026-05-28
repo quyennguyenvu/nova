@@ -1,0 +1,79 @@
+package middleware
+
+import (
+	"net"
+	"net/http"
+	"sync"
+
+	"golang.org/x/time/rate"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+type ipLimiter struct {
+	mu       sync.Mutex
+	visitors map[string]*rate.Limiter
+	rps      rate.Limit
+	burst    int
+}
+
+func newIPLimiter(cfg config.LoginRateLimitConfig) *ipLimiter {
+	rps := rate.Limit(cfg.RPS)
+	if rps <= 0 {
+		rps = rate.Limit(5.0 / 60.0)
+	}
+	burst := cfg.Burst
+	if burst <= 0 {
+		burst = 5
+	}
+	return &ipLimiter{visitors: make(map[string]*rate.Limiter), rps: rps, burst: burst}
+}
+
+func (l *ipLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	lim, ok := l.visitors[ip]
+	if !ok {
+		lim = rate.NewLimiter(l.rps, l.burst)
+		l.visitors[ip] = lim
+	}
+	l.mu.Unlock()
+	return lim.Allow()
+}
+
+func clientIP(r *http.Request) string {
+	// Prefer X-Forwarded-For when present and we trust the proxy chain.
+	// Strip port from r.RemoteAddr as a fallback. Reverse-proxy aware code
+	// should set this header; raw r.RemoteAddr is only useful when the app
+	// is fronting clients directly.
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Use the first IP — that's the client per RFC 7239 convention.
+		for i, c := range xff {
+			if c == ',' {
+				return xff[:i]
+			}
+		}
+		return xff
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// LoginRateLimit returns a per-IP token-bucket limiter intended for the
+// /login route.
+func LoginRateLimit(cfg config.LoginRateLimitConfig) func(http.Handler) http.Handler {
+	l := newIPLimiter(cfg)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !l.allow(clientIP(r)) {
+				httpwriter.WriteError(w, r, errors.New(http.StatusTooManyRequests, "too many login attempts"))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

@@ -35,8 +35,47 @@ type Generator struct {
 	tmpl *template.Template
 }
 
-// New creates a new Generator.
-func New(cfg *config.ProjectConfig) *Generator {
+// supportedFrameworks is the whitelist for cfg.HTTPFramework. Each value must
+// have a matching `<framework>_app.go.tmpl` + middleware + handler set in
+// internal/generator/templates/. Add new frameworks here in lockstep with
+// the template files.
+//
+//nolint:gochecknoglobals // immutable validation set; treated as a const.
+var supportedFrameworks = map[string]bool{
+	"fiber": true,
+	"gin":   true,
+	"chi":   true,
+	"echo":  true,
+}
+
+// supportedDatabases lists the choices generator.New() will accept for
+// cfg.Database. Empty string means "no database" (also valid).
+//
+//nolint:gochecknoglobals // immutable validation set; treated as a const.
+var supportedDatabases = map[string]bool{
+	"":         true,
+	"none":     true,
+	"postgres": true,
+	"mysql":    true,
+}
+
+// New creates a new Generator. It fails fast on misconfigured cfg.Framework /
+// cfg.Database so a typo (e.g. "echo2") surfaces here instead of producing a
+// half-rendered project with cryptic "template not found in embedded FS" errors.
+func New(cfg *config.ProjectConfig) (*Generator, error) {
+	if cfg.HasHTTP() && !supportedFrameworks[cfg.HTTPFramework] {
+		return nil, fmt.Errorf(
+			"generator: unsupported HTTPFramework %q (valid: fiber, gin, chi, echo)",
+			cfg.HTTPFramework,
+		)
+	}
+	if !supportedDatabases[cfg.Database] {
+		return nil, fmt.Errorf(
+			"generator: unsupported Database %q (valid: postgres, mysql, none)",
+			cfg.Database,
+		)
+	}
+
 	funcMap := template.FuncMap{
 		"lower":    strings.ToLower,
 		"upper":    strings.ToUpper,
@@ -48,7 +87,7 @@ func New(cfg *config.ProjectConfig) *Generator {
 	return &Generator{
 		cfg:  cfg,
 		tmpl: template.New("").Funcs(funcMap),
-	}
+	}, nil
 }
 
 // templateFile maps a template path to its output path.
@@ -256,6 +295,13 @@ func (g *Generator) transportFiles() []templateFile {
 			cfg.HasHTTP(),
 		},
 
+		// Health probes — framework-agnostic Liveness + Readiness checker.
+		{
+			"templates/transport/http/health/checker.go.tmpl",
+			"internal/transport/http/health/checker.go",
+			cfg.HasHTTP(),
+		},
+
 		// HTTP v1/user — framework-agnostic DTO + assembler.
 		{
 			"templates/transport/http/v1/user/dto.go.tmpl",
@@ -312,24 +358,18 @@ func (g *Generator) transportFiles() []templateFile {
 			"internal/transport/http/middleware/requestid.go",
 			cfg.HasHTTP(),
 		},
+		{
+			fmt.Sprintf("templates/transport/http/middleware/%s_loginlimit.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/loginlimit.go",
+			cfg.HasHTTP(),
+		},
 		// gRPC handler
 		{
 			"templates/transport/grpc/user_handler.go.tmpl",
 			"internal/transport/grpc/user.go",
 			cfg.HasGRPC(),
 		},
-		// Pubsub
-		{
-			"templates/adapter/pubsub/user_message.go.tmpl",
-			"internal/adapter/pubsub/user_message.go",
-			cfg.HasMessageQueue(),
-		},
-		{"templates/adapter/pubsub/publisher.go.tmpl", "internal/adapter/pubsub/publisher.go", cfg.HasMessageQueue()},
-		{
-			"templates/adapter/pubsub/user_publisher.go.tmpl",
-			"internal/adapter/pubsub/user_publisher.go",
-			cfg.HasMessageQueue(),
-		},
+		// Pubsub adapters live in adapterFiles() — not duplicated here.
 	}
 }
 

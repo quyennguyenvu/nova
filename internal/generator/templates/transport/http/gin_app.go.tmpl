@@ -1,7 +1,7 @@
 // Package http builds the framework instance: it installs middleware in the
-// correct order, exposes /healthz, and lets each feature attach its own routes
-// via the Registrar interface. Lifecycle (port binding, graceful shutdown) is
-// the job of infrastructure/server.
+// correct order, exposes /healthz + /readyz, and lets each feature attach its
+// own routes via the Registrar interface. Lifecycle (port binding, graceful
+// shutdown) is the job of infrastructure/server.
 package http
 
 import (
@@ -11,6 +11,7 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
 
@@ -23,13 +24,15 @@ type Registrar interface {
 	Register(gin.IRouter)
 }
 
-// NewApp builds the gin engine: middleware → /healthz → registrars at their prefixes.
-// Order of middleware matters: RequestID first (so every later layer sees the
-// ID), Logging second (wraps everything to compute duration & emit one line),
-// Recovery inside Logging so panics still produce an access log.
+// NewApp builds the gin engine: middleware → probes → registrars at their prefixes.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
-func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *gin.Engine {
+func NewApp(
+	cfg *config.Config,
+	log *logger.Logger,
+	checker *health.Checker,
+	registrars []Registrar,
+) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 
@@ -40,7 +43,15 @@ func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *gin
 	engine.Use(middleware.Locale())
 
 	engine.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusOK, checker.Liveness())
+	})
+	engine.GET("/readyz", func(c *gin.Context) {
+		status := checker.Readiness(c.Request.Context())
+		code := http.StatusOK
+		if !status.OK {
+			code = http.StatusServiceUnavailable
+		}
+		c.JSON(code, status)
 	})
 
 	for _, r := range registrars {

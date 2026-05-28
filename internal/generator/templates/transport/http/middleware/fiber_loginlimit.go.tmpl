@@ -1,0 +1,61 @@
+package middleware
+
+import (
+	"net/http"
+	"sync"
+
+	"github.com/gofiber/fiber/v2"
+	"golang.org/x/time/rate"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+// ipLimiter holds a per-source-IP token bucket. The visitors map grows with
+// distinct client IPs — acceptable for typical low-cardinality login traffic.
+// Swap for an LRU/expiring cache if /login attracts traffic from many IPs
+// (CDN egress, bot farms).
+type ipLimiter struct {
+	mu       sync.Mutex
+	visitors map[string]*rate.Limiter
+	rps      rate.Limit
+	burst    int
+}
+
+func newIPLimiter(cfg config.LoginRateLimitConfig) *ipLimiter {
+	rps := rate.Limit(cfg.RPS)
+	if rps <= 0 {
+		rps = rate.Limit(5.0 / 60.0) // 5 per minute
+	}
+	burst := cfg.Burst
+	if burst <= 0 {
+		burst = 5
+	}
+	return &ipLimiter{visitors: make(map[string]*rate.Limiter), rps: rps, burst: burst}
+}
+
+func (l *ipLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	lim, ok := l.visitors[ip]
+	if !ok {
+		lim = rate.NewLimiter(l.rps, l.burst)
+		l.visitors[ip] = lim
+	}
+	l.mu.Unlock()
+	return lim.Allow()
+}
+
+// LoginRateLimit returns a per-IP token-bucket limiter intended for the
+// /login route. Apply only to that route — global rate limiting belongs
+// upstream (CDN, reverse proxy) where it can shed traffic before reaching
+// the app.
+func LoginRateLimit(cfg config.LoginRateLimitConfig) fiber.Handler {
+	l := newIPLimiter(cfg)
+	return func(c *fiber.Ctx) error {
+		if !l.allow(c.IP()) {
+			return httpwriter.WriteError(c, errors.New(http.StatusTooManyRequests, "too many login attempts"))
+		}
+		return c.Next()
+	}
+}

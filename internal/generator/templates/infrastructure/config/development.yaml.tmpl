@@ -1,3 +1,15 @@
 log:
   level: "debug"
   format: "json"
+
+{{- if .HasHTTP}}
+
+http:
+  cors:
+    # Dev defaults so local frontends (Vite, CRA, Next, Storybook) work out
+    # of the box. Production overrides via CORS_ALLOW_ORIGINS env var.
+    allow_origins:
+      - "http://localhost:3000"
+      - "http://localhost:5173"
+      - "http://localhost:8080"
+{{- end}}

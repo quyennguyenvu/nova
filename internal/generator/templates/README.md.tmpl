@@ -6,34 +6,58 @@ A Go REST API built with Clean Architecture.
 
 ```bash
 internal/
-├── domain/           # Layer 1: Enterprise Business Rules (innermost)
-│   ├── entity/       # Business entities - pure Go structs
-│   ├── repository/   # Repository INTERFACES (ports)
-│   ├── service/      # Domain service INTERFACES
-│   └── valueobject/  # Value objects (Email, Money, etc.)
+├── domain/                 # Layer 1: Enterprise Business Rules (innermost)
+│   ├── entity/             # Business entities — pure Go structs, no framework tags
+│   ├── identity/           # Authenticated principals + ctx plumbing
+│   ├── security/           # Crypto port interfaces (PasswordHasher)
+│   ├── user.go             # UserRepository interface + UserFilter
+│   └── tx_manager.go       # TxManager port (WithinTx)
 │
-├── usecase/          # Layer 2: Application Business Rules
-│   └── user/         # Use case implementation
+├── usecase/                # Layer 2: Application Business Rules
+│   └── user/               # Service (Register, Login, Get, Update, Delete, List)
 │
-├── adapter/          # Layer 3: Interface Adapters
-│   ├── repository/   # Repository IMPLEMENTATIONS
-│   ├── handler/      # HTTP/gRPC handlers
-│   └── presenter/    # Response formatters
+├── adapter/                # Layer 3: Interface Adapters
+│   └── repository/
+│       {{- if eq .Database "postgres"}}
+│       ├── postgres/       # sqlc-backed UserRepository + TxManager + mapper
+│       {{- end}}
+│       {{- if eq .Database "mysql"}}
+│       ├── mysql/          # sqlc-backed UserRepository + TxManager + mapper
+│       {{- end}}
+│       {{- if .HasRedis}}
+│       └── redis/          # Cache-aside decorator over UserRepository
+│       {{- end}}
 │
-└── infrastructure/   # Layer 4: Frameworks & Drivers (outermost)
-    ├── config/       # Configuration loading
-    ├── database/     # Database connection
-    ├── cache/        # Cache connection
-    ├── server/       # Server bootstrap
-    ├── logger/       # Logging setup
-    └── di/           # Dependency injection
+├── transport/              # Inbound transport (HTTP/gRPC)
+│   {{- if .HasHTTP}}
+│   └── http/
+│       ├── app.go          # Framework instance + middleware order + Registrar interface
+│       ├── httpwriter/     # Framework-specific response envelope writer
+│       ├── middleware/     # RequestID, Logging, Recovery, CORS, Locale, Auth
+│       └── v1/user/        # Handler, Routes, DTOs, assembler
+│   {{- end}}
+│
+├── app/                    # Entry-point glue (RunHTTPServer)
+│
+└── infrastructure/         # Layer 4: Frameworks & Drivers (outermost)
+    ├── config/             # cleanenv + embed.FS (base/development/production)
+    ├── database/           # {{.Database}} connection pool
+    {{- if .HasRedis}}
+    ├── cache/              # Redis client factory (single/sentinel/cluster)
+    {{- end}}
+    ├── jwt/                # TokenService (HS256 sign + verify)
+    ├── logger/             # zerolog implementation of observability.Logger
+    ├── security/           # bcrypt PasswordHasher implementation
+    ├── server/             # HTTP server lifecycle (graceful shutdown)
+    ├── tracing/            # OpenTelemetry provider + cleanup
+    └── di/                 # {{if .UseWire}}Wire-generated{{else}}manual{{end}} dependency wiring
 ```
 
 ## Getting Started
 
 ### Prerequisites
 
-- Go 1.23+
+- Go {{.GoVersion}}+
   {{- if eq .Database "postgres"}}
 - PostgreSQL 16+
   {{- end}}
@@ -57,7 +81,10 @@ cd {{.ProjectName}}
 # Copy environment variables
 cp .env.example .env
 
-# Install dependencies
+# Generate a JWT secret (256-bit minimum) and add to .env
+openssl rand -hex 32 | xargs -I {} sed -i.bak 's/^JWT_SECRET=.*/JWT_SECRET={}/' .env && rm .env.bak
+
+# Install dependencies + run code generators (wire, sqlc)
 go mod tidy
 make gen
 {{- if .IncludeDocker}}
@@ -70,6 +97,7 @@ docker-compose up -d
 # Run migrations
 make migrate-up
 {{- end}}
+
 # Run the server
 go run main.go api
 ```
@@ -78,15 +106,18 @@ go run main.go api
 
 ### API Endpoints
 
-| Method | Endpoint          | Description     |
-| ------ | ----------------- | --------------- |
-| POST   | /api/v1/users     | Create a user   |
-| GET    | /api/v1/users/:id | Get user by ID  |
-| PUT    | /api/v1/users/:id | Update a user   |
-| DELETE | /api/v1/users/:id | Delete a user   |
-| GET    | /api/v1/users     | List users      |
-| GET    | /health           | Health check    |
-| GET    | /ready            | Readiness check |
+| Method | Endpoint          | Auth   | Description                                |
+| ------ | ----------------- | ------ | ------------------------------------------ |
+| POST   | /api/v1/login     | public | Exchange email/password for a bearer token |
+| POST   | /api/v1/users     | public | Register a new user                        |
+| GET    | /api/v1/users     | bearer | List users (paginated)                     |
+| GET    | /api/v1/users/:id | bearer | Get user by ID                             |
+| PUT    | /api/v1/users/:id | bearer | Update a user                              |
+| DELETE | /api/v1/users/:id | bearer | Delete a user                              |
+| GET    | /healthz          | public | Liveness check (always 200)                |
+| GET    | /readyz           | public | Readiness check (200 / 503)                |
+
+**Authenticated requests** carry `Authorization: Bearer <accessToken>` where the token comes from `POST /api/v1/login`.
 
 {{- end}}
 
@@ -99,6 +130,7 @@ make dev            # Run with hot-reload (air)
 make test           # Run tests
 make test-coverage  # Run tests with coverage
 make lint           # Run linter
+make gen            # Regenerate wire_gen + sqlc dbgen
 {{- if .HasDatabase}}
 make migrate-up     # Run database migrations
 make migrate-down   # Rollback migrations
@@ -114,8 +146,8 @@ make docker-down    # Stop Docker containers
 
 The project follows Clean Architecture principles:
 
-1. **Dependency Rule**: Source code dependencies point inward only
-2. **Dependency Inversion**: High-level modules define interfaces; low-level modules implement them
+1. **Dependency Rule**: Source code dependencies point inward only (`transport → usecase → domain`)
+2. **Dependency Inversion**: Domain defines repository/security ports; adapters and infrastructure implement them
 3. **Separation of Concerns**: Each layer has a single, well-defined responsibility
 
 ## License

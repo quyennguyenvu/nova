@@ -1,0 +1,57 @@
+package middleware
+
+import (
+	"net/http"
+	"sync"
+
+	"github.com/labstack/echo/v4"
+	"golang.org/x/time/rate"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+type ipLimiter struct {
+	mu       sync.Mutex
+	visitors map[string]*rate.Limiter
+	rps      rate.Limit
+	burst    int
+}
+
+func newIPLimiter(cfg config.LoginRateLimitConfig) *ipLimiter {
+	rps := rate.Limit(cfg.RPS)
+	if rps <= 0 {
+		rps = rate.Limit(5.0 / 60.0)
+	}
+	burst := cfg.Burst
+	if burst <= 0 {
+		burst = 5
+	}
+	return &ipLimiter{visitors: make(map[string]*rate.Limiter), rps: rps, burst: burst}
+}
+
+func (l *ipLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	lim, ok := l.visitors[ip]
+	if !ok {
+		lim = rate.NewLimiter(l.rps, l.burst)
+		l.visitors[ip] = lim
+	}
+	l.mu.Unlock()
+	return lim.Allow()
+}
+
+// LoginRateLimit returns a per-IP token-bucket limiter intended for the
+// /login route.
+func LoginRateLimit(cfg config.LoginRateLimitConfig) echo.MiddlewareFunc {
+	l := newIPLimiter(cfg)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if !l.allow(c.RealIP()) {
+				return httpwriter.WriteError(c, errors.New(http.StatusTooManyRequests, "too many login attempts"))
+			}
+			return next(c)
+		}
+	}
+}

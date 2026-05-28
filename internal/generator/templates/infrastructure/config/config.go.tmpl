@@ -32,6 +32,7 @@ type Config struct {
 	Log        LogConfig     `{{.ConfigFormat}}:"log"`
 	Tracing    TracingConfig `{{.ConfigFormat}}:"tracing"`
 	JWT        JWTConfig     `{{.ConfigFormat}}:"jwt"`
+	Security   SecurityConfig `{{.ConfigFormat}}:"security"`
 {{- if .HasHTTP}}
 	HTTP        HTTPConfig        `{{.ConfigFormat}}:"http"`
 {{- end}}
@@ -68,6 +69,14 @@ type TracingConfig struct {
 	SampleRatio float64 `{{.ConfigFormat}}:"sample_ratio" env:"OTEL_SAMPLE_RATIO"`
 }
 
+// SecurityConfig tunes cryptographic primitives. BcryptCost is clamped to
+// [bcrypt.MinCost, bcrypt.MaxCost] in NewBcryptHasher; values outside the
+// range fall back to bcrypt.DefaultCost (10). Raise to 12–13 in production
+// for stronger password hashing if CPU headroom allows.
+type SecurityConfig struct {
+	BcryptCost int `{{.ConfigFormat}}:"bcrypt_cost" env:"BCRYPT_COST"`
+}
+
 // JWTConfig drives both signing (login) and verification (Auth middleware)
 // via HS256. Secret MUST be set in production and rotated on compromise —
 // every token signed with the old secret becomes invalid the moment the
@@ -90,6 +99,16 @@ type HTTPConfig struct {
 	BodyLimit       int           `{{.ConfigFormat}}:"body_limit"       env:"SERVER_BODY_LIMIT"`
 	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"SERVER_SHUTDOWN_TIMEOUT"`
 	CORS            CORSConfig    `{{.ConfigFormat}}:"cors"`
+	LoginRateLimit  LoginRateLimitConfig `{{.ConfigFormat}}:"login_rate_limit"`
+}
+
+// LoginRateLimitConfig throttles POST /login by remote IP. The limiter is a
+// token bucket with `RPS` refill rate (requests / second) and `Burst` peak
+// capacity. Zero or negative values fall back to a 5-per-minute default so
+// the brute-force surface is closed even when the YAML is misconfigured.
+type LoginRateLimitConfig struct {
+	RPS   float64 `{{.ConfigFormat}}:"rps"   env:"LOGIN_RATE_LIMIT_RPS"`
+	Burst int     `{{.ConfigFormat}}:"burst" env:"LOGIN_RATE_LIMIT_BURST"`
 }
 
 // CORSConfig is driven entirely from configuration — scaffolded code must not

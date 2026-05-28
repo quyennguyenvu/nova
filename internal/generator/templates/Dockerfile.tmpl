@@ -41,5 +41,11 @@ COPY --from=builder /src/migrations /app/migrations
 USER app
 EXPOSE 8080
 
+# Probes the readiness endpoint, not the liveness one, so the container is
+# only "healthy" once DB/cache are reachable. start-period=10s gives the app
+# time to dial dependencies on cold boot.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -qO- http://localhost:8080/readyz >/dev/null 2>&1 || exit 1
+
 ENTRYPOINT ["/app/api"]
 CMD ["api"]

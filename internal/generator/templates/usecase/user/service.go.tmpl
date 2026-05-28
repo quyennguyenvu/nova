@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"sync"
 
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
@@ -156,13 +157,37 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]*Output, error) 
 	return outs, nil
 }
 
+// dummyHash + dummyHashOnce — used to blunt the timing oracle that would
+// otherwise distinguish "user not found" (fast) from "bad password" (slow,
+// because bcrypt.CompareHashAndPassword is CPU-bound). We pay one bcrypt
+// op at first-miss to populate the hash, then constant-cost on every miss.
+var (
+	dummyHash     string
+	dummyHashOnce sync.Once
+)
+
+func (s *Service) primeDummyHash() {
+	dummyHashOnce.Do(func() {
+		// Best effort: if hashing the placeholder ever fails (it shouldn't),
+		// fall back to an empty string — Verify will still consume bcrypt
+		// CPU comparing it against the submitted password.
+		h, _ := s.hasher.Hash("dummy-password-for-timing-uniformity")
+		dummyHash = h
+	})
+}
+
 // Login verifies email+password and returns a signed access token + the user
 // profile. Returns InvalidCredentials (401) for both "no such user" and "bad
-// password" so attackers can't enumerate accounts via timing or status.
+// password" so attackers can't enumerate accounts via status or timing — the
+// unknown-user path consumes a bcrypt verify against a precomputed dummy
+// hash so wall-clock time matches the bad-password path.
 func (s *Service) Login(ctx context.Context, input LoginInput) (*LoginOutput, error) {
+	s.primeDummyHash()
+
 	user, err := s.userRepo.GetByEmail(ctx, input.Email)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
+			_ = s.hasher.Verify(dummyHash, input.Password)
 			return nil, errors.UnauthorizedL(locale.InvalidCredentials)
 		}
 		return nil, errors.Wrapf(err, "login email=%s: lookup", input.Email)

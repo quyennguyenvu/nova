@@ -30,6 +30,24 @@ jobs:
         with:
           version: latest
 
+  tidy:
+    name: go mod tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '{{.GoVersion}}'
+          cache: true
+
+      # Catches forgotten dep updates: re-running tidy should be a no-op on
+      # a clean PR; any drift fails the job.
+      - name: Verify go.mod/go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -88,8 +106,14 @@ jobs:
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
-{{- if .HasDatabase}}
+        # JWT_SECRET is a CI-only fixture so config.Load passes the
+        # min-entropy check in NewTokenService. Real deployments inject a
+        # rotating production secret via a secrets manager.
         env:
+          JWT_SECRET: ci-test-secret-must-be-at-least-32-bytes-long
+          JWT_ISSUER: {{.ProjectName}}
+          JWT_AUDIENCE: {{.ProjectName}}
+{{- if .HasDatabase}}
 {{- if eq .Database "postgres"}}
           DB_HOST: localhost
           DB_PORT: 5432
@@ -105,10 +129,10 @@ jobs:
           DB_PASSWORD: root
           DB_NAME: {{.ProjectName}}_test
 {{- end}}
+{{- end}}
 {{- if .HasRedis}}
           REDIS_MODE: single
           REDIS_ADDRS: localhost:6379
-{{- end}}
 {{- end}}
 
       - name: Upload coverage
@@ -121,7 +145,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, tidy, test]
     steps:
       - uses: actions/checkout@v4
 

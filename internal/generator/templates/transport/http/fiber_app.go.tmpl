@@ -1,7 +1,7 @@
 // Package http builds the framework instance: it installs middleware in the
-// correct order, exposes /healthz, and lets each feature attach its own routes
-// via the Registrar interface. Lifecycle (port binding, graceful shutdown) is
-// the job of infrastructure/server.
+// correct order, exposes /healthz + /readyz, and lets each feature attach its
+// own routes via the Registrar interface. Lifecycle (port binding, graceful
+// shutdown) is the job of infrastructure/server.
 package http
 
 import (
@@ -11,6 +11,7 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
 
@@ -23,13 +24,22 @@ type Registrar interface {
 	Register(fiber.Router)
 }
 
-// NewApp builds the fiber app: middleware → /healthz → registrars at their prefixes.
+// NewApp builds the fiber app: middleware → probes → registrars at their prefixes.
 // Order of middleware matters: RequestID first (so every later layer sees the
 // ID), Logging second (wraps everything to compute duration & emit one line),
 // Recovery inside Logging so panics still produce an access log.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
-func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *fiber.App {
+//
+// /healthz and /readyz are mounted BEFORE the middleware stack-... actually
+// no — they sit inside it so panics during readiness still flow through the
+// envelope. The check itself is cheap so the middleware overhead is fine.
+func NewApp(
+	cfg *config.Config,
+	log *logger.Logger,
+	checker *health.Checker,
+	registrars []Registrar,
+) *fiber.App {
 	app := fiber.New(fiber.Config{
 		BodyLimit:         cfg.HTTP.BodyLimit,
 		ReadBufferSize:    cfg.HTTP.ReadBufferSize,
@@ -48,7 +58,15 @@ func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) *fib
 	app.Use(middleware.Locale())
 
 	app.Get("/healthz", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok"})
+		return c.JSON(checker.Liveness())
+	})
+	app.Get("/readyz", func(c *fiber.Ctx) error {
+		status := checker.Readiness(c.UserContext())
+		code := fiber.StatusOK
+		if !status.OK {
+			code = fiber.StatusServiceUnavailable
+		}
+		return c.Status(code).JSON(status)
 	})
 
 	for _, r := range registrars {

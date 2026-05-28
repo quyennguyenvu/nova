@@ -1,16 +1,18 @@
 // Package http builds the framework instance: it installs middleware in the
-// correct order, exposes /healthz, and lets each feature attach its own routes
-// via the Registrar interface. Lifecycle (port binding, graceful shutdown) is
-// the job of infrastructure/server.
+// correct order, exposes /healthz + /readyz, and lets each feature attach its
+// own routes via the Registrar interface. Lifecycle (port binding, graceful
+// shutdown) is the job of infrastructure/server.
 package http
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
 
@@ -24,13 +26,15 @@ type Registrar interface {
 	Register(chi.Router)
 }
 
-// NewApp builds the chi router: middleware → /healthz → registrars at their prefixes.
-// Order of middleware matters: RequestID first (so every later layer sees the
-// ID), Logging second (wraps everything to compute duration & emit one line),
-// Recovery inside Logging so panics still produce an access log.
+// NewApp builds the chi router: middleware → probes → registrars at their prefixes.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
-func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) chi.Router {
+func NewApp(
+	cfg *config.Config,
+	log *logger.Logger,
+	checker *health.Checker,
+	registrars []Registrar,
+) chi.Router {
 	router := chi.NewRouter()
 
 	router.Use(middleware.RequestID)
@@ -40,8 +44,15 @@ func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) chi.
 	router.Use(middleware.Locale)
 
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		writeJSON(w, http.StatusOK, checker.Liveness())
+	})
+	router.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		status := checker.Readiness(r.Context())
+		code := http.StatusOK
+		if !status.OK {
+			code = http.StatusServiceUnavailable
+		}
+		writeJSON(w, code, status)
 	})
 
 	for _, r := range registrars {
@@ -49,4 +60,10 @@ func NewApp(cfg *config.Config, log *logger.Logger, registrars []Registrar) chi.
 	}
 
 	return router
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }

@@ -36,6 +36,9 @@ func Logging(base *logger.Logger) fiber.Handler {
 		reqID := RequestIDFrom(ctx)
 		sc := trace.SpanContextFromContext(ctx)
 
+		// c.Path() returns the route path only (no query string) — keep it
+		// that way so secrets in `?token=...` never reach structured logs.
+		// Do NOT switch to c.OriginalURL() or fasthttp.RequestURI().
 		scoped := base.
 			With("request_id", reqID).
 			With("trace_id", traceIDOr(sc)).
