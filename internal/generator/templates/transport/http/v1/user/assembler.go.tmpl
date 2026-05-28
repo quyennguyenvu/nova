@@ -23,3 +23,15 @@ func ToUserListResponse(outs []*usersvc.Output) []*UserResponse {
 	}
 	return responses
 }
+
+// ToLoginResponse projects a use-case LoginOutput into the wire response.
+// tokenType is hardcoded to "Bearer" — clients hand this back as
+// "Authorization: Bearer <accessToken>".
+func ToLoginResponse(out *usersvc.LoginOutput) *LoginResponse {
+	return &LoginResponse{
+		AccessToken: out.AccessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   out.ExpiresIn,
+		User:        ToUserResponse(out.User),
+	}
+}

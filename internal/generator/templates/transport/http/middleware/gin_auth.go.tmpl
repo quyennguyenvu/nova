@@ -13,7 +13,7 @@ import (
 
 // Auth verifies the bearer token via the JWT verifier and attaches the
 // resolved *identity.UserPrincipal to the request context.
-func Auth(verifier *jwtsec.Verifier) gin.HandlerFunc {
+func Auth(tokenSvc *jwtsec.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := bearerToken(c.GetHeader("Authorization"))
 		if token == "" {
@@ -21,7 +21,7 @@ func Auth(verifier *jwtsec.Verifier) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		principal, err := verifier.ParseAndVerifyAccessToken(token)
+		principal, err := tokenSvc.ParseAndVerifyAccessToken(token)
 		if err != nil {
 			httpwriter.WriteError(c, errors.ToAppError(err))
 			c.Abort()

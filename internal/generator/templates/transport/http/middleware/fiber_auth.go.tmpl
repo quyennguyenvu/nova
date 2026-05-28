@@ -14,13 +14,13 @@ import (
 // Auth verifies the bearer token via the JWT verifier and attaches the
 // resolved *identity.UserPrincipal to the request context. Inner handlers
 // read it via identity.UserPrincipalFromContext.
-func Auth(verifier *jwtsec.Verifier) fiber.Handler {
+func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		token := bearerToken(c.Get("Authorization"))
 		if token == "" {
 			return httpwriter.WriteError(c, errors.Unauthorized("missing bearer token"))
 		}
-		principal, err := verifier.ParseAndVerifyAccessToken(token)
+		principal, err := tokenSvc.ParseAndVerifyAccessToken(token)
 		if err != nil {
 			return httpwriter.WriteError(c, errors.ToAppError(err))
 		}

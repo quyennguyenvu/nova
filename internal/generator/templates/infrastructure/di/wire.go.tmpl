@@ -43,7 +43,7 @@ import (
 var infraSet = wire.NewSet(
 	config.Load,
 	logger.New,
-	jwtsec.NewVerifier,
+	jwtsec.NewTokenService,
 	infrasec.NewDefaultBcryptHasher,
 	wire.Bind(new(domainsec.PasswordHasher), new(*infrasec.BcryptHasher)),
 	provideTracingConfig,

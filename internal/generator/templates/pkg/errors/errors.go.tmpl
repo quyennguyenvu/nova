@@ -197,7 +197,7 @@ func httpStatusForLocale(code locale.Locale) int {
 	switch code {
 	case locale.RecordNotFound, locale.UserNotFound:
 		return http.StatusNotFound
-	case locale.Unauthorized:
+	case locale.Unauthorized, locale.InvalidCredentials:
 		return http.StatusUnauthorized
 	case locale.InvalidRequest:
 		return http.StatusBadRequest

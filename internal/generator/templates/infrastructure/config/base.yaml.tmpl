@@ -12,6 +12,13 @@ tracing:
   insecure: false
   sample_ratio: 0.1
 
+jwt:
+  # JWT_SECRET MUST be set in env (never commit it). Issuer and audience scope
+  # the tokens this service accepts on Auth — must match what it signs at login.
+  issuer: "{{.ProjectName}}"
+  audience: "{{.ProjectName}}"
+  access_token_ttl: 1h
+
 {{- if .HasHTTP}}
 
 http:

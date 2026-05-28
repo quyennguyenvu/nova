@@ -32,3 +32,17 @@ type Output struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// LoginInput is the credential payload accepted by Service.Login.
+type LoginInput struct {
+	Email    string
+	Password string
+}
+
+// LoginOutput bundles the access token, its lifetime, and the user profile
+// the transport layer projects into the response.
+type LoginOutput struct {
+	AccessToken string
+	ExpiresIn   int64 // seconds; RFC 6749 expires_in
+	User        *Output
+}

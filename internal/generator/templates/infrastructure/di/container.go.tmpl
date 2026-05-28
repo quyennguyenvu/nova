@@ -120,6 +120,11 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	log.Info("connected to RabbitMQ")
 {{- end}}
 
+	tokenSvc, err := jwtsec.NewTokenService(cfg)
+	if err != nil {
+		return fail(err)
+	}
+
 {{- if .HasDatabase}}
 {{- if eq .Database "postgres"}}
 	userRepo := postgresrepo.NewUserRepository(db)
@@ -132,18 +137,13 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- if .HasRedis}}
 	cachedUserRepo := cacherepo.NewUserCacheRepository(userRepo, cacheClient)
 {{- end}}
-	userService := usersvc.NewService(cachedUserRepo, hasher{{- if .HasMessageQueue}}, publisher{{- end}})
+	userService := usersvc.NewService(cachedUserRepo, hasher, tokenSvc{{- if .HasMessageQueue}}, publisher{{- end}})
 {{- else}}
-	userService := usersvc.NewService(userRepo, hasher{{- if .HasMessageQueue}}, publisher{{- end}})
+	userService := usersvc.NewService(userRepo, hasher, tokenSvc{{- if .HasMessageQueue}}, publisher{{- end}})
 {{- end}}
 
-	verifier, err := jwtsec.NewVerifier(cfg)
-	if err != nil {
-		return fail(err)
-	}
-
 	userHandler := userv1.NewHandler(userService)
-	userRoutes := userv1.NewRoutes(userHandler, verifier)
+	userRoutes := userv1.NewRoutes(userHandler, tokenSvc)
 	app := transporthttp.NewApp(cfg, log, provideRegistrars(userRoutes))
 {{- else}}
 	app := transporthttp.NewApp(cfg, log, nil)

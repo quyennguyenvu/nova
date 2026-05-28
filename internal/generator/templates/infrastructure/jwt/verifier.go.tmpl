@@ -1,8 +1,13 @@
+// Package jwtsec issues and verifies access tokens. Default algorithm is
+// HS256 (HMAC-SHA-256) — a single shared secret signs and verifies. Swap to
+// RS256 by replacing the SigningMethod + key plumbing here without touching
+// callers; the TokenService surface (Sign / ParseAndVerifyAccessToken) is
+// what middleware and usecases depend on.
 package jwtsec
 
 import (
-	"crypto/rsa"
-	"encoding/base64"
+	"strconv"
+	"time"
 
 	"github.com/golang-jwt/jwt/v4"
 
@@ -11,66 +16,91 @@ import (
 	"{{.ModuleName}}/pkg/errors"
 )
 
-// Verifier parses and verifies access tokens issued by the identity provider.
-// Add per-audience verifier methods (admin, service-to-service) by introducing
-// a second public key + claim type — don't overload this one with conditionals.
-type Verifier struct {
-	identityIssuer    string
-	identityPublicKey any
-	Audience          string
+// TokenService is the symmetric-key signer/verifier. One instance per
+// process; safe for concurrent use.
+type TokenService struct {
+	secret         []byte
+	issuer         string
+	audience       string
+	accessTokenTTL time.Duration
 }
 
-func NewVerifier(cfg *config.Config) (*Verifier, error) {
-	jwtCfg := cfg.JWTVerifier
-
-	identityPublicKey, err := getPublicKey(jwtCfg.IdentityPublicKeyBase64)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse identity public key")
+func NewTokenService(cfg *config.Config) (*TokenService, error) {
+	if cfg.JWT.Secret == "" {
+		return nil, errors.InternalServer("jwt: secret is empty")
 	}
-
-	return &Verifier{
-		identityPublicKey: identityPublicKey,
-		identityIssuer:    jwtCfg.IdentityIssuer,
-		Audience:          jwtCfg.Audience,
+	ttl := cfg.JWT.AccessTokenTTL
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	return &TokenService{
+		secret:         []byte(cfg.JWT.Secret),
+		issuer:         cfg.JWT.Issuer,
+		audience:       cfg.JWT.Audience,
+		accessTokenTTL: ttl,
 	}, nil
 }
 
-func getPublicKey(publicKeyBase64 string) (*rsa.PublicKey, error) {
-	decodedPublicKey, err := base64.StdEncoding.DecodeString(publicKeyBase64)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to decode RSA public key")
+// AccessTokenTTL exposes the configured lifetime so handlers can return it
+// in the login response (RFC 6749 expires_in).
+func (s *TokenService) AccessTokenTTL() time.Duration { return s.accessTokenTTL }
+
+// Sign issues a signed access token for p. The token's exp/iat/iss/aud are
+// derived from config; custom claims (userId, email, …) come from p.
+func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
+	now := time.Now()
+	claims := AccessTokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    s.issuer,
+			Subject:   formatSubject(p.UserID),
+			Audience:  jwt.ClaimStrings{s.audience},
+			ExpiresAt: jwt.NewNumericDate(now.Add(s.accessTokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+		},
+		UserID:    p.UserID,
+		Email:     p.Email,
+		Name:      p.Name,
+		Phone:     p.Phone,
+		DeviceID:  p.DeviceID,
+		Platform:  p.Platform,
+		SessionID: p.SessionID,
 	}
-	publicKey, err := jwt.ParseRSAPublicKeyFromPEM(decodedPublicKey)
+	tkn := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := tkn.SignedString(s.secret)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse RSA public key")
+		return "", errors.Wrap(err, "jwt: sign access token")
 	}
-	return publicKey, nil
+	return signed, nil
 }
 
-func (v *Verifier) ParseAndVerifyAccessToken(tokenStr string) (*identity.UserPrincipal, error) {
+// ParseAndVerifyAccessToken validates tokenStr and projects its claims into a
+// UserPrincipal. Returns *AppError(401) on any verification failure so the
+// transport boundary can pass the error straight to httpwriter.WriteError.
+func (s *TokenService) ParseAndVerifyAccessToken(tokenStr string) (*identity.UserPrincipal, error) {
 	var claims AccessTokenClaims
 	tkn, err := jwt.ParseWithClaims(
 		tokenStr,
 		&claims,
 		func(t *jwt.Token) (any, error) {
-			if _, isValid := t.Method.(*jwt.SigningMethodRSA); !isValid {
-				return nil, errors.Unauthorized("unexpected_signing_method")
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, errors.Unauthorized("unexpected signing method")
 			}
-			return v.identityPublicKey, nil
+			return s.secret, nil
 		},
-		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, "invalid_access_token")
+		return nil, errors.Wrap(err, "invalid access token")
 	}
 	if !tkn.Valid {
-		return nil, errors.Unauthorized("invalid_access_token")
+		return nil, errors.Unauthorized("invalid access token")
 	}
-	if !claims.VerifyIssuer(v.identityIssuer, true) {
-		return nil, errors.Unauthorized("bad_issuer")
+	if s.issuer != "" && !claims.VerifyIssuer(s.issuer, true) {
+		return nil, errors.Unauthorized("bad issuer")
 	}
-	if !claims.VerifyAudience(v.Audience, true) {
-		return nil, errors.Unauthorized("bad_audience")
+	if s.audience != "" && !claims.VerifyAudience(s.audience, true) {
+		return nil, errors.Unauthorized("bad audience")
 	}
 
 	return &identity.UserPrincipal{
@@ -84,4 +114,10 @@ func (v *Verifier) ParseAndVerifyAccessToken(tokenStr string) (*identity.UserPri
 		Platform:  claims.Platform,
 		SessionID: claims.SessionID,
 	}, nil
+}
+
+// formatSubject keeps the JWT sub claim as a decimal string — JSON numbers
+// in JWT can lose precision in some libraries; stringify defensively.
+func formatSubject(userID int64) string {
+	return strconv.FormatInt(userID, 10)
 }

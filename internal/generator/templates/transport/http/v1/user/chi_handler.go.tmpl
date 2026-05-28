@@ -37,6 +37,23 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	httpwriter.WriteJSON(w, http.StatusCreated, ToUserResponse(user))
 }
 
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpwriter.WriteError(w, r, errors.BadRequest(err.Error()))
+		return
+	}
+	out, err := h.userService.Login(r.Context(), usersvc.LoginInput{
+		Email:    req.Email,
+		Password: req.Password,
+	})
+	if err != nil {
+		httpwriter.WriteError(w, r, errors.ToAppError(err))
+		return
+	}
+	httpwriter.WriteJSON(w, http.StatusOK, ToLoginResponse(out))
+}
+
 func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

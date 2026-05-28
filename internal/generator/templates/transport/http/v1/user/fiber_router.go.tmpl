@@ -15,25 +15,30 @@ import (
 // (Create == register) sit outside that subgroup.
 type Routes struct {
 	handler  *Handler
-	verifier *jwtsec.Verifier
+	tokenSvc *jwtsec.TokenService
 }
 
-func NewRoutes(h *Handler, verifier *jwtsec.Verifier) *Routes {
-	return &Routes{handler: h, verifier: verifier}
+func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService) *Routes {
+	return &Routes{handler: h, tokenSvc: tokenSvc}
 }
 
 // Prefix is the API version subtree this feature mounts under.
 func (*Routes) Prefix() string { return "/api/v1" }
 
-// Register mounts /users twice: an unauthenticated POST for registration and
-// an authenticated subgroup for reads + writes. Splitting at the group level
-// (not per-route) keeps the auth boundary obvious; protected routes share
-// one Auth middleware instance per registration.
+// Register mounts:
+//   - POST /login             (public — issues bearer token)
+//   - POST /users             (public — registration)
+//   - GET/PUT/DELETE /users*  (authenticated subgroup)
+//
+// Splitting at the group level (not per-route) keeps the auth boundary
+// obvious; protected routes share one Auth middleware instance.
 func (r *Routes) Register(router fiber.Router) {
+	router.Post("/login", r.handler.Login)
+
 	public := router.Group("/users")
 	public.Post("/", r.handler.Create)
 
-	protected := router.Group("/users", middleware.Auth(r.verifier))
+	protected := router.Group("/users", middleware.Auth(r.tokenSvc))
 	protected.Get("/", r.handler.List)
 	protected.Get("/:id", r.handler.GetByID)
 	protected.Put("/:id", r.handler.Update)

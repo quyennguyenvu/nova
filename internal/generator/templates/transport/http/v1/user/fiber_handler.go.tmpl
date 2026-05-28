@@ -33,6 +33,21 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	return httpwriter.WriteJSON(c, fiber.StatusCreated, ToUserResponse(user))
 }
 
+func (h *Handler) Login(c *fiber.Ctx) error {
+	var req LoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return httpwriter.WriteError(c, errors.BadRequest(err.Error()))
+	}
+	out, err := h.userService.Login(c.UserContext(), usersvc.LoginInput{
+		Email:    req.Email,
+		Password: req.Password,
+	})
+	if err != nil {
+		return httpwriter.WriteError(c, errors.ToAppError(err))
+	}
+	return httpwriter.WriteJSON(c, fiber.StatusOK, ToLoginResponse(out))
+}
+
 func (h *Handler) GetByID(c *fiber.Ctx) error {
 	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
 	if err != nil {

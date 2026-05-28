@@ -4,9 +4,10 @@
 // free of crypto so domain/usecase can depend on it without pulling JWT in.
 package identity
 
-// Principal is the common identity shared across actor types.
+// Principal is the common identity shared across actor types. UserID matches
+// entity.User.ID width (int64) so values flow through without truncation.
 type Principal struct {
-	UserID int32
+	UserID int64
 	Email  string
 }
 

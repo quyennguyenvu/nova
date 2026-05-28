@@ -34,6 +34,21 @@ func (h *Handler) Create(c echo.Context) error {
 	return httpwriter.WriteJSON(c, http.StatusCreated, ToUserResponse(user))
 }
 
+func (h *Handler) Login(c echo.Context) error {
+	var req LoginRequest
+	if err := c.Bind(&req); err != nil {
+		return httpwriter.WriteError(c, errors.BadRequest(err.Error()))
+	}
+	out, err := h.userService.Login(c.Request().Context(), usersvc.LoginInput{
+		Email:    req.Email,
+		Password: req.Password,
+	})
+	if err != nil {
+		return httpwriter.WriteError(c, errors.ToAppError(err))
+	}
+	return httpwriter.WriteJSON(c, http.StatusOK, ToLoginResponse(out))
+}
+
 func (h *Handler) GetByID(c echo.Context) error {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {

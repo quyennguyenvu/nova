@@ -11,23 +11,27 @@ import (
 // transport/http.Registrar interface — mounted at /api/v1 by the app.
 type Routes struct {
 	handler  *Handler
-	verifier *jwtsec.Verifier
+	tokenSvc *jwtsec.TokenService
 }
 
-func NewRoutes(h *Handler, verifier *jwtsec.Verifier) *Routes {
-	return &Routes{handler: h, verifier: verifier}
+func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService) *Routes {
+	return &Routes{handler: h, tokenSvc: tokenSvc}
 }
 
 // Prefix is the API version subtree this feature mounts under.
 func (*Routes) Prefix() string { return "/api/v1" }
 
-// Register mounts /users twice: an unauthenticated POST for registration and
-// an authenticated subgroup for reads + writes.
+// Register mounts:
+//   - POST /login              (public — issues bearer token)
+//   - POST /users              (public — registration)
+//   - GET/PUT/DELETE /users*   (authenticated subgroup)
 func (r *Routes) Register(router *echo.Group) {
+	router.POST("/login", r.handler.Login)
+
 	public := router.Group("/users")
 	public.POST("", r.handler.Create)
 
-	protected := router.Group("/users", middleware.Auth(r.verifier))
+	protected := router.Group("/users", middleware.Auth(r.tokenSvc))
 	protected.GET("", r.handler.List)
 	protected.GET("/:id", r.handler.GetByID)
 	protected.PUT("/:id", r.handler.Update)

@@ -5,7 +5,9 @@ import (
 
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/internal/domain/identity"
 	"{{.ModuleName}}/internal/domain/security"
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/locale"
 {{- if .HasMessageQueue}}
@@ -15,9 +17,15 @@ import (
 
 // Service implements the user use case. It never calls the logger directly —
 // it wraps errors with errors.Wrapf and lets the transport boundary log once.
+//
+// Note the JWT TokenService dependency: Login lives on this service rather
+// than a separate auth feature because authentication IS a user concern in
+// the scaffold. Split it out when admin/service-account auth diverges from
+// end-user auth.
 type Service struct {
-	userRepo domain.UserRepository
-	hasher   security.PasswordHasher
+	userRepo  domain.UserRepository
+	hasher    security.PasswordHasher
+	tokenSvc  *jwtsec.TokenService
 {{- if .HasMessageQueue}}
 	publisher domain.UserPublisher
 {{- end}}
@@ -26,6 +34,7 @@ type Service struct {
 func NewService(
 	userRepo domain.UserRepository,
 	hasher security.PasswordHasher,
+	tokenSvc *jwtsec.TokenService,
 {{- if .HasMessageQueue}}
 	publisher domain.UserPublisher,
 {{- end}}
@@ -33,6 +42,7 @@ func NewService(
 	return &Service{
 		userRepo: userRepo,
 		hasher:   hasher,
+		tokenSvc: tokenSvc,
 {{- if .HasMessageQueue}}
 		publisher: publisher,
 {{- end}}
@@ -144,6 +154,38 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]*Output, error) 
 		outs[i] = toOutput(u)
 	}
 	return outs, nil
+}
+
+// Login verifies email+password and returns a signed access token + the user
+// profile. Returns InvalidCredentials (401) for both "no such user" and "bad
+// password" so attackers can't enumerate accounts via timing or status.
+func (s *Service) Login(ctx context.Context, input LoginInput) (*LoginOutput, error) {
+	user, err := s.userRepo.GetByEmail(ctx, input.Email)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return nil, errors.UnauthorizedL(locale.InvalidCredentials)
+		}
+		return nil, errors.Wrapf(err, "login email=%s: lookup", input.Email)
+	}
+
+	if verifyErr := s.hasher.Verify(user.PasswordHash, input.Password); verifyErr != nil {
+		return nil, errors.UnauthorizedL(locale.InvalidCredentials)
+	}
+
+	principal := &identity.UserPrincipal{
+		Principal: identity.Principal{UserID: user.ID, Email: user.Email},
+		Name:      user.Name,
+	}
+	token, err := s.tokenSvc.Sign(principal)
+	if err != nil {
+		return nil, errors.Wrapf(err, "login email=%s: sign", input.Email)
+	}
+
+	return &LoginOutput{
+		AccessToken: token,
+		ExpiresIn:   int64(s.tokenSvc.AccessTokenTTL().Seconds()),
+		User:        toOutput(user),
+	}, nil
 }
 
 func toOutput(u *entity.User) *Output {

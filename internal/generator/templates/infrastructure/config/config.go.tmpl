@@ -26,12 +26,12 @@ var configFS embed.FS
 //
 // At runtime every field can be overridden by its env var.
 type Config struct {
-	AppName     string            `{{.ConfigFormat}}:"app_name"     env:"APP_NAME"`
-	AppVersion  string            `{{.ConfigFormat}}:"app_version"  env:"APP_VERSION"`
-	AppEnv      string            `{{.ConfigFormat}}:"app_env"      env:"APP_ENV"`
-	Log         LogConfig         `{{.ConfigFormat}}:"log"`
-	Tracing     TracingConfig     `{{.ConfigFormat}}:"tracing"`
-	JWTVerifier JWTVerifierConfig `{{.ConfigFormat}}:"jwt_verifier"`
+	AppName    string        `{{.ConfigFormat}}:"app_name"    env:"APP_NAME"`
+	AppVersion string        `{{.ConfigFormat}}:"app_version" env:"APP_VERSION"`
+	AppEnv     string        `{{.ConfigFormat}}:"app_env"     env:"APP_ENV"`
+	Log        LogConfig     `{{.ConfigFormat}}:"log"`
+	Tracing    TracingConfig `{{.ConfigFormat}}:"tracing"`
+	JWT        JWTConfig     `{{.ConfigFormat}}:"jwt"`
 {{- if .HasHTTP}}
 	HTTP        HTTPConfig        `{{.ConfigFormat}}:"http"`
 {{- end}}
@@ -68,13 +68,16 @@ type TracingConfig struct {
 	SampleRatio float64 `{{.ConfigFormat}}:"sample_ratio" env:"OTEL_SAMPLE_RATIO"`
 }
 
-// JWTVerifierConfig holds JWT verifier configuration. Add a second public key
-// field here (and the matching env var) when a distinct audience comes online.
-type JWTVerifierConfig struct {
-	IdentityPublicKeyBase64 string `env:"IDENTITY_PUBLIC_KEY_BASE64"`
-
-	IdentityIssuer string `{{.ConfigFormat}}:"identity_issuer" env:"IDENTITY_ISSUER"`
-	Audience       string `{{.ConfigFormat}}:"audience"        env:"JWT_AUDIENCE"`
+// JWTConfig drives both signing (login) and verification (Auth middleware)
+// via HS256. Secret MUST be set in production and rotated on compromise —
+// every token signed with the old secret becomes invalid the moment the
+// secret changes, so plan rollouts accordingly (dual-secret transition is
+// out of scope for this scaffold).
+type JWTConfig struct {
+	Secret         string        `env:"JWT_SECRET"`
+	Issuer         string        `{{.ConfigFormat}}:"issuer"           env:"JWT_ISSUER"`
+	Audience       string        `{{.ConfigFormat}}:"audience"         env:"JWT_AUDIENCE"`
+	AccessTokenTTL time.Duration `{{.ConfigFormat}}:"access_token_ttl" env:"JWT_ACCESS_TOKEN_TTL"`
 }
 {{- if .HasHTTP}}
 

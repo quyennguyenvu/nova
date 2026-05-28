@@ -12,6 +12,21 @@ type UpdateUserRequest struct {
 	Name string `json:"name" validate:"omitempty,min=2,max=100"`
 }
 
+// LoginRequest is the credential payload for POST /api/v1/login.
+type LoginRequest struct {
+	Email    string `json:"email"    validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
+// LoginResponse follows the RFC 6749 token-endpoint shape (access_token,
+// token_type, expires_in) so OAuth-aware clients can consume it directly.
+type LoginResponse struct {
+	AccessToken string        `json:"accessToken"`
+	TokenType   string        `json:"tokenType"`
+	ExpiresIn   int64         `json:"expiresIn"`
+	User        *UserResponse `json:"user"`
+}
+
 // UserResponse is the HTTP response body for user reads — this layer owns the json tags.
 type UserResponse struct {
 	ID        int64     `json:"id"`

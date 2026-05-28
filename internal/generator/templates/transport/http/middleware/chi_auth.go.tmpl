@@ -13,7 +13,7 @@ import (
 // Auth verifies the bearer token via the JWT verifier and attaches the
 // resolved *identity.UserPrincipal to the request context. Returns a chi
 // middleware factory.
-func Auth(verifier *jwtsec.Verifier) func(http.Handler) http.Handler {
+func Auth(tokenSvc *jwtsec.TokenService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := bearerToken(r.Header.Get("Authorization"))
@@ -21,7 +21,7 @@ func Auth(verifier *jwtsec.Verifier) func(http.Handler) http.Handler {
 				httpwriter.WriteError(w, r, errors.Unauthorized("missing bearer token"))
 				return
 			}
-			principal, err := verifier.ParseAndVerifyAccessToken(token)
+			principal, err := tokenSvc.ParseAndVerifyAccessToken(token)
 			if err != nil {
 				httpwriter.WriteError(w, r, errors.ToAppError(err))
 				return
