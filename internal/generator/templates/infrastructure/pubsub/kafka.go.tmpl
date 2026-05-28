@@ -3,14 +3,14 @@ package pubsub
 import (
 	"fmt"
 
+	"github.com/IBM/sarama"
+
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
-
-	"github.com/IBM/sarama"
 )
 
-// NewKafkaProducer creates a Sarama sync producer.
-// This is infrastructure — connection setup only, no business logic.
+// NewKafkaProducer creates a Sarama sync producer. Infrastructure — connection
+// setup only, no business logic.
 func NewKafkaProducer(cfg *config.KafkaConfig, log *logger.Logger) (sarama.SyncProducer, func(), error) {
 	saramaCfg := sarama.NewConfig()
 	saramaCfg.Producer.Return.Successes = true
@@ -24,12 +24,47 @@ func NewKafkaProducer(cfg *config.KafkaConfig, log *logger.Logger) (sarama.SyncP
 
 	cleanup := func() {
 		log.Info("[kafka] shutting down producer ...")
-		if err := producer.Close(); err != nil {
-			log.Error("[kafka] failed to close producer", "error", err)
+		if closeErr := producer.Close(); closeErr != nil {
+			log.Error("[kafka] failed to close producer", "error", closeErr)
 		} else {
 			log.Info("[kafka] producer shutdown complete")
 		}
 	}
 
 	return producer, cleanup, nil
+}
+
+// NewKafkaConsumerGroup builds a Sarama consumer group bound to
+// cfg.ConsumerGroupID. The worker process consumes via group membership so
+// partitions rebalance automatically when replicas come and go. The caller
+// owns Consume()/Close() lifecycle — see transport/worker.kafkaConsumer.
+func NewKafkaConsumerGroup(cfg *config.KafkaConfig, log *logger.Logger) (sarama.ConsumerGroup, func(), error) {
+	if cfg.ConsumerGroupID == "" {
+		return nil, nil, fmt.Errorf("kafka: consumer_group_id is required for worker mode")
+	}
+
+	saramaCfg := sarama.NewConfig()
+	saramaCfg.Consumer.Return.Errors = true
+	// OffsetOldest replays from the earliest available offset on first run;
+	// after the consumer group has committed offsets, it resumes from there.
+	saramaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
+	saramaCfg.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{
+		sarama.NewBalanceStrategyRoundRobin(),
+	}
+
+	group, err := sarama.NewConsumerGroup(cfg.Brokers, cfg.ConsumerGroupID, saramaCfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create kafka consumer group: %w", err)
+	}
+
+	cleanup := func() {
+		log.Info("[kafka] shutting down consumer group ...")
+		if closeErr := group.Close(); closeErr != nil {
+			log.Error("[kafka] failed to close consumer group", "error", closeErr)
+		} else {
+			log.Info("[kafka] consumer group shutdown complete")
+		}
+	}
+
+	return group, cleanup, nil
 }

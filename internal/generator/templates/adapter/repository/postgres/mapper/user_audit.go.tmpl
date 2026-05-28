@@ -1,0 +1,33 @@
+package mapper
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"{{.ModuleName}}/internal/adapter/repository/postgres/dbgen"
+	"{{.ModuleName}}/internal/domain"
+)
+
+// UserAuditToCreateParams builds the sqlc insert params from the domain
+// entry. Payload is mapped through encoding/json.RawMessage (per the sqlc
+// override in pg_sqlc.yaml) so JSONB lands as opaque bytes.
+func UserAuditToCreateParams(e *domain.UserAuditEntry) dbgen.RecordUserAuditParams {
+	return dbgen.RecordUserAuditParams{
+		UserID:     e.UserID,
+		EventType:  e.EventType,
+		Payload:    e.Payload,
+		OccurredAt: pgtype.Timestamptz{Time: e.OccurredAt, Valid: true},
+	}
+}
+
+// UserAuditToEntity hydrates a sqlc row into the domain entity. Currently
+// only the INSERT RETURNING path is wired; add row → entity mapping here
+// when a SELECT query is added.
+func UserAuditToEntity(row dbgen.UserAuditLog) *domain.UserAuditEntry {
+	return &domain.UserAuditEntry{
+		ID:         row.ID,
+		UserID:     row.UserID,
+		EventType:  row.EventType,
+		Payload:    row.Payload,
+		OccurredAt: row.OccurredAt.Time,
+	}
+}

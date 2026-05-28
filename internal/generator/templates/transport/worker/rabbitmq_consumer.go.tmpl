@@ -1,0 +1,98 @@
+package worker
+
+import (
+	"context"
+	"fmt"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+)
+
+// rabbitmqConsumer adapts an AMQP channel to the worker.Consumer port.
+//
+// Wire shape: one durable topic exchange (cfg.Exchange) + one queue per
+// topic-routing-key. Each queue is bound to the exchange with its routing
+// key, then consumed in its own goroutine. Manual ack — nack-with-requeue
+// on handler error so the broker redelivers.
+type rabbitmqConsumer struct {
+	ch       *amqp.Channel
+	exchange string
+	queue    string
+	log      *logger.Logger
+}
+
+// NewRabbitMQConsumer wraps the channel opened by
+// infrastructure/pubsub.NewRabbitMQChannel. The queue name is read from
+// config so multiple consumer replicas share a queue (and load-balance).
+func NewRabbitMQConsumer(ch *amqp.Channel, cfg *config.RabbitMQConfig, log *logger.Logger) Consumer {
+	return &rabbitmqConsumer{
+		ch:       ch,
+		exchange: cfg.Exchange,
+		queue:    cfg.UserCreatedQueue,
+		log:      log,
+	}
+}
+
+func (c *rabbitmqConsumer) Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error {
+	// Declare the exchange so workers boot cleanly even when the publisher
+	// hasn't run yet. Topic exchange so routing keys map to topic names.
+	if err := c.ch.ExchangeDeclare(c.exchange, amqp.ExchangeTopic, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare exchange: %w", err)
+	}
+
+	// All topics for this worker land in one queue — different topics
+	// dispatch via routing key. Multiple replicas of the worker share
+	// the queue and the broker round-robins delivery.
+	if _, err := c.ch.QueueDeclare(c.queue, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare queue %q: %w", c.queue, err)
+	}
+	for _, t := range topics {
+		if err := c.ch.QueueBind(c.queue, t, c.exchange, false, nil); err != nil {
+			return fmt.Errorf("rabbitmq: bind %q→%q: %w", c.queue, t, err)
+		}
+	}
+
+	deliveries, err := c.ch.ConsumeWithContext(ctx, c.queue, "", false, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("rabbitmq: consume %q: %w", c.queue, err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case d, ok := <-deliveries:
+			if !ok {
+				return nil
+			}
+			if dispErr := dispatch(ctx, d.RoutingKey, d.Body); dispErr != nil {
+				c.log.Error("rabbitmq: dispatch failed",
+					"routing_key", d.RoutingKey,
+					"delivery_tag", d.DeliveryTag,
+					"err", dispErr.Error(),
+				)
+				// Requeue so another replica (or the next redelivery)
+				// gets a shot. Switch to a DLQ in production.
+				if nackErr := d.Nack(false, true); nackErr != nil {
+					c.log.Error("rabbitmq: nack failed", "err", nackErr.Error())
+				}
+				continue
+			}
+			if ackErr := d.Ack(false); ackErr != nil {
+				c.log.Error("rabbitmq: ack failed",
+					"delivery_tag", d.DeliveryTag,
+					"err", ackErr.Error(),
+				)
+			}
+		}
+	}
+}
+
+func (c *rabbitmqConsumer) Close() error {
+	// Channel lifecycle is owned by infrastructure/pubsub.NewRabbitMQChannel
+	// cleanup — return nil so the worker layer doesn't double-close. The
+	// connection-level cleanup runs after this in the DI cleanup chain.
+	return nil
+}

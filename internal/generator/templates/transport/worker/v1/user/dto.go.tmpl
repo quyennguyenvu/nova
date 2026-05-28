@@ -1,0 +1,18 @@
+// Package user is the worker-side handler for user.* events. The wire DTO
+// here MIRRORS the publisher's adapter/pubsub.UserCreatedMessage so the
+// worker can deserialize without depending on the publish-side package.
+//
+// Keep this struct in lockstep with adapter/pubsub/user_message.go — same
+// fields, same json tags. If you split this scaffold into two repos
+// (one publisher, one worker), move both to a shared schema module.
+package user
+
+import "time"
+
+// UserCreatedMessage is the wire shape of the user.created event.
+type UserCreatedMessage struct {
+	UserID    int64     `json:"userId"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"createdAt"`
+}

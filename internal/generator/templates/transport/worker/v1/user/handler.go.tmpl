@@ -1,0 +1,52 @@
+package user
+
+import (
+	"context"
+	"encoding/json"
+
+	"{{.ModuleName}}/internal/usecase/useraudit"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// userCreatedTopic is the wire-level event identifier this handler consumes.
+// MUST match the publisher's topic constant (adapter/pubsub.userCreatedTopic).
+const userCreatedTopic = "user.created"
+
+// Handler implements worker.Handler for the user.created event. It
+// deserializes the inbound JSON, calls useraudit.Service.RecordUserCreated,
+// and lets the worker dispatch loop translate errors into broker-level
+// acks/nacks.
+type Handler struct {
+	audit *useraudit.Service
+}
+
+func NewHandler(audit *useraudit.Service) *Handler {
+	return &Handler{audit: audit}
+}
+
+func (*Handler) Topic() string { return userCreatedTopic }
+
+func (h *Handler) Handle(ctx context.Context, payload []byte) error {
+	var msg UserCreatedMessage
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		// Poison message: malformed JSON cannot be retried. Log and ack so
+		// it doesn't block the partition. Tune this to nack-to-DLQ in
+		// production if your broker has one configured.
+		logctx.From(ctx).Error("user.created: malformed payload", "err", err.Error())
+		return nil
+	}
+
+	input := useraudit.UserCreatedInput{
+		UserID:     msg.UserID,
+		Email:      msg.Email,
+		Name:       msg.Name,
+		OccurredAt: msg.CreatedAt,
+		RawPayload: payload,
+	}
+	if err := h.audit.RecordUserCreated(ctx, input); err != nil {
+		return errors.Wrapf(err, "handle user.created user_id=%d", msg.UserID)
+	}
+	logctx.From(ctx).Info("user.created: recorded", "user_id", msg.UserID)
+	return nil
+}

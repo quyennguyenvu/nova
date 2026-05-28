@@ -1,0 +1,3 @@
+-- name: RecordUserAudit :execlastid
+INSERT INTO user_audit_log (user_id, event_type, payload, occurred_at)
+VALUES (?, ?, ?, ?);

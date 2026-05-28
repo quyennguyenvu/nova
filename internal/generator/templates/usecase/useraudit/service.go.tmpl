@@ -1,0 +1,43 @@
+// Package useraudit is the worker-side usecase that records every user.*
+// event the consumer process receives into user_audit_log. Keeping audit
+// in its own aggregate (separate from the user CRUD usecase) lets the
+// worker process write to audit tables without depending on the
+// publish-side Service constructor.
+package useraudit
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+const eventTypeUserCreated = "user.created"
+
+// Service implements the worker usecase. It never logs — the worker's
+// transport layer logs per-message and the access-style audit row IS the
+// log for this code path.
+type Service struct {
+	repo domain.UserAuditRepository
+}
+
+func NewService(repo domain.UserAuditRepository) *Service {
+	return &Service{repo: repo}
+}
+
+// RecordUserCreated writes the inbound user.created event to user_audit_log.
+// Idempotency is NOT enforced here — the broker may redeliver, so consumers
+// that need exactly-once should add UNIQUE(user_id, event_type) on the table
+// and translate the duplicate-key error into a no-op here.
+func (s *Service) RecordUserCreated(ctx context.Context, input UserCreatedInput) error {
+	entry := &domain.UserAuditEntry{
+		UserID:     input.UserID,
+		EventType:  eventTypeUserCreated,
+		Payload:    input.RawPayload,
+		OccurredAt: input.OccurredAt,
+	}
+	if err := s.repo.RecordCreated(ctx, entry); err != nil {
+		return errors.Wrapf(err, "audit: record user.created user_id=%d", input.UserID)
+	}
+	return nil
+}

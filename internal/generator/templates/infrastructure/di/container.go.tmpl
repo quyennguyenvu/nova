@@ -3,34 +3,38 @@ package di
 import (
 	"context"
 
-{{- if .HasHTTP}}
 {{- if eq .Database "postgres"}}
 	postgresrepo "{{.ModuleName}}/internal/adapter/repository/postgres"
 {{- end}}
 {{- if eq .Database "mysql"}}
 	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
 {{- end}}
-{{- if .HasRedis}}
+{{- if and .HasHTTP .HasRedis}}
 	cacherepo "{{.ModuleName}}/internal/adapter/repository/redis"
 {{- end}}
-{{- if .HasMessageQueue}}
+{{- if and .HasHTTP .HasMessageQueue}}
 	"{{.ModuleName}}/internal/adapter/pubsub"
 {{- end}}
-{{- end}}
 	"{{.ModuleName}}/internal/infrastructure/config"
-{{- if and .HasHTTP .HasDatabase}}
+{{- if .HasDatabase}}
 	"{{.ModuleName}}/internal/infrastructure/database"
 {{- end}}
-{{- if and .HasHTTP .HasRedis}}
+{{- if .HasRedis}}
 	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
 {{- end}}
-{{- if and .HasHTTP .HasMessageQueue}}
+{{- if .HasMessageQueue}}
 	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
 {{- end}}
+{{- if .HasHTTP}}
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
+{{- end}}
 	"{{.ModuleName}}/internal/infrastructure/logger"
+{{- if .HasHTTP}}
 	infrasec "{{.ModuleName}}/internal/infrastructure/security"
+{{- end}}
+{{- if or .HasHTTP .HasGRPC}}
 	"{{.ModuleName}}/internal/infrastructure/server"
+{{- end}}
 	"{{.ModuleName}}/internal/infrastructure/tracing"
 {{- if .HasHTTP}}
 	transporthttp "{{.ModuleName}}/internal/transport/http"
@@ -39,6 +43,11 @@ import (
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 {{- end}}
+{{- end}}
+{{- if .HasWorker}}
+	"{{.ModuleName}}/internal/transport/worker"
+	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
+	"{{.ModuleName}}/internal/usecase/useraudit"
 {{- end}}
 )
 
@@ -207,5 +216,92 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 		tracingCleanup()
 	}
 	return &GRPCApp{Logger: log, Server: grpcServer, Tracer: tracer}, cleanup, nil
+}
+{{- end}}
+
+{{- if .HasWorker}}
+
+// InitializeWorker wires the consumer worker. The dep chain is independent
+// of HTTP: no transporthttp.NewApp, no health checker, no TokenService — the
+// worker only needs the broker consumer + audit repo + audit usecase + the
+// per-topic handlers. Cleanup runs in reverse construction order so the
+// broker shuts before the DB pool.
+func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log := logger.New(cfg)
+
+	tracer, tracingCleanup, err := tracing.Provider(ctx, provideTracingConfig(cfg))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var cleanups []func()
+	cleanups = append(cleanups, tracingCleanup)
+	cleanup := func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}
+	fail := func(err error) (*WorkerApp, func(), error) {
+		cleanup()
+		return nil, nil, err
+	}
+
+{{- if eq .Database "postgres"}}
+	db, dbCleanup, err := database.NewPostgresDB(cfg, log)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, dbCleanup)
+	log.Info("connected to PostgreSQL")
+{{- end}}
+{{- if eq .Database "mysql"}}
+	db, dbCleanup, err := database.NewMySQLDB(cfg, log)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, dbCleanup)
+	log.Info("connected to MySQL")
+{{- end}}
+
+{{- if eq .MessageQueue "kafka"}}
+	group, groupCleanup, err := infraPubsub.NewKafkaConsumerGroup(&cfg.Kafka, log)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, groupCleanup)
+	consumer := worker.NewKafkaConsumer(group, log)
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+	conn, err := infraPubsub.NewRabbitMQConnection(&cfg.RabbitMQ)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, func() { _ = conn.Close() })
+	ch, chCleanup, err := infraPubsub.NewRabbitMQChannel(conn, log)
+	if err != nil {
+		return fail(err)
+	}
+	cleanups = append(cleanups, chCleanup)
+	consumer := worker.NewRabbitMQConsumer(ch, &cfg.RabbitMQ, log)
+{{- end}}
+
+{{- if eq .Database "postgres"}}
+	auditRepo := postgresrepo.NewUserAuditRepository(db)
+{{- end}}
+{{- if eq .Database "mysql"}}
+	auditRepo := mysqlrepo.NewUserAuditRepository(db)
+{{- end}}
+	auditService := useraudit.NewService(auditRepo)
+
+	userHandler := workeruser.NewHandler(auditService)
+	handlers := provideWorkerHandlers(userHandler)
+	w := worker.NewWorker(consumer, log, handlers)
+
+	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil
 }
 {{- end}}

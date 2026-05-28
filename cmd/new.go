@@ -31,7 +31,7 @@ Examples:
 	f := newCmd.Flags()
 	f.String("module", "", "Go module name (e.g. github.com/myorg/myproject)")
 	f.String("type", "", "Project type: api, worker, cron, cli")
-	f.String("transport", "", "Transport layer: http, grpc, cron, cli")
+	f.String("transport", "", "Transport layer: http, grpc, cron, cli, worker")
 	f.String("http-framework", "", "HTTP framework: fiber, gin, chi, echo, nethttp")
 	f.Bool("grpc-gateway", false, "Include gRPC-Gateway")
 	f.String("database", "", "Database: postgres, mysql, sqlite, mongodb, none")

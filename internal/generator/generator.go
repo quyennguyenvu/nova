@@ -126,6 +126,7 @@ func (g *Generator) buildFileList() []templateFile {
 	files = append(files, g.usecaseFiles()...)
 	files = append(files, g.adapterFiles()...)
 	files = append(files, g.transportFiles()...)
+	files = append(files, g.workerFiles()...)
 	files = append(files, g.infrastructureFiles()...)
 	files = append(files, g.pkgFiles()...)
 	files = append(files, g.migrationFiles()...)
@@ -171,6 +172,14 @@ func (g *Generator) sqlcFiles() []templateFile {
 			"sqlc/query/user.sql",
 			true,
 		},
+		// Worker projects also write to user_audit_log; the query file is
+		// engine-prefixed because sqlc syntax diverges (RETURNING vs
+		// :execlastid). Only emit when this project is the consumer side.
+		{
+			fmt.Sprintf("templates/sqlc/query/%s_user_audit.sql.tmpl", engine),
+			"sqlc/query/user_audit.sql",
+			cfg.HasWorker(),
+		},
 	}
 }
 
@@ -194,13 +203,29 @@ func (g *Generator) domainFiles() []templateFile {
 		{"templates/domain/identity/context.go.tmpl", "internal/domain/identity/context.go", true},
 		{"templates/domain/security/hasher.go.tmpl", "internal/domain/security/hasher.go", true},
 		{"templates/domain/user_publisher.go.tmpl", "internal/domain/user_publisher.go", cfg.HasMessageQueue()},
+		// UserAudit aggregate — port + entry for the consumer worker's
+		// example DB write. Only emitted in worker mode with a SQL backend.
+		{"templates/domain/user_audit.go.tmpl", "internal/domain/user_audit.go", cfg.HasWorker() && cfg.HasSQL()},
 	}
 }
 
 func (g *Generator) usecaseFiles() []templateFile {
+	cfg := g.cfg
 	return []templateFile{
 		{"templates/usecase/user/service.go.tmpl", "internal/usecase/user/service.go", true},
 		{"templates/usecase/user/dto.go.tmpl", "internal/usecase/user/dto.go", true},
+		// useraudit usecase — worker-only. Records inbound user.* events
+		// to user_audit_log via the audit repo.
+		{
+			"templates/usecase/useraudit/service.go.tmpl",
+			"internal/usecase/useraudit/service.go",
+			cfg.HasWorker() && cfg.HasSQL(),
+		},
+		{
+			"templates/usecase/useraudit/dto.go.tmpl",
+			"internal/usecase/useraudit/dto.go",
+			cfg.HasWorker() && cfg.HasSQL(),
+		},
 	}
 }
 
@@ -240,6 +265,17 @@ func (g *Generator) adapterFiles() []templateFile {
 			"internal/adapter/repository/postgres/user_repository.go",
 			cfg.HasSQL() && (cfg.Database == postgres),
 		},
+		// Audit repo + mapper (postgres) — worker-only.
+		{
+			"templates/adapter/repository/postgres/mapper/user_audit.go.tmpl",
+			"internal/adapter/repository/postgres/mapper/user_audit.go",
+			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == postgres,
+		},
+		{
+			"templates/adapter/repository/postgres/user_audit_repository.go.tmpl",
+			"internal/adapter/repository/postgres/user_audit_repository.go",
+			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == postgres,
+		},
 		// Repository — mysql
 		{
 			"templates/adapter/repository/mysql/qx.go.tmpl",
@@ -260,6 +296,17 @@ func (g *Generator) adapterFiles() []templateFile {
 			"templates/adapter/repository/mysql/user_repository.go.tmpl",
 			"internal/adapter/repository/mysql/user_repository.go",
 			cfg.HasSQL() && (cfg.Database == mysql),
+		},
+		// Audit repo + mapper (mysql) — worker-only.
+		{
+			"templates/adapter/repository/mysql/mapper/user_audit.go.tmpl",
+			"internal/adapter/repository/mysql/mapper/user_audit.go",
+			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == mysql,
+		},
+		{
+			"templates/adapter/repository/mysql/user_audit_repository.go.tmpl",
+			"internal/adapter/repository/mysql/user_audit_repository.go",
+			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == mysql,
 		},
 		// Repository — cache
 		{
@@ -435,11 +482,15 @@ func (g *Generator) infrastructureFiles() []templateFile {
 		{"templates/infrastructure/tracing/otel.go.tmpl", "internal/infrastructure/tracing/otel.go", true},
 		{"templates/infrastructure/di/container.go.tmpl", "internal/infrastructure/di/container.go", cfg.UseManualDI()},
 		{"templates/infrastructure/di/wire.go.tmpl", "internal/infrastructure/di/wire.go", cfg.UseWire()},
-		{"templates/infrastructure/di/provider.go.tmpl", "internal/infrastructure/di/provider.go", cfg.HasHTTP()},
+		{
+			"templates/infrastructure/di/provider.go.tmpl",
+			"internal/infrastructure/di/provider.go",
+			cfg.HasHTTP() || cfg.HasWorker(),
+		},
 		{
 			"templates/infrastructure/di/app.go.tmpl",
 			"internal/infrastructure/di/app.go",
-			cfg.HasHTTP() || cfg.HasGRPC(),
+			cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker(),
 		},
 	}
 }
@@ -447,12 +498,63 @@ func (g *Generator) infrastructureFiles() []templateFile {
 func (g *Generator) entryPointFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{
-		{"templates/cmd/root.go.tmpl", "cmd/root.go", cfg.HasHTTP()},
+		// cmd/root.go is the cobra entrypoint — emit whenever any subcommand
+		// exists (HTTP api, gRPC, cron, or worker).
+		{
+			"templates/cmd/root.go.tmpl",
+			"cmd/root.go",
+			cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasCron() || cfg.HasWorker(),
+		},
 		{"templates/cmd/api.go.tmpl", "cmd/api.go", cfg.HasHTTP()},
 		{"templates/cmd/grpc.go.tmpl", "cmd/grpc.go", cfg.HasGRPC()},
+		{"templates/cmd/worker.go.tmpl", "cmd/worker.go", cfg.HasWorker()},
 		{"templates/app/api.go.tmpl", "internal/app/api.go", cfg.HasHTTP()},
 		{"templates/app/grpc.go.tmpl", "internal/app/grpc.go", cfg.HasGRPC()},
+		{"templates/app/worker.go.tmpl", "internal/app/worker.go", cfg.HasWorker()},
 	}
+}
+
+// workerFiles registers the inbound consumer transport — the Worker
+// orchestrator, the broker-specific consumer, and the per-feature handlers.
+// All gated on cfg.HasWorker() so HTTP-only / gRPC-only projects never
+// emit these files.
+func (g *Generator) workerFiles() []templateFile {
+	cfg := g.cfg
+	if !cfg.HasWorker() {
+		return nil
+	}
+	files := []templateFile{
+		{"templates/transport/worker/handler.go.tmpl", "internal/transport/worker/handler.go", true},
+		{"templates/transport/worker/worker.go.tmpl", "internal/transport/worker/worker.go", true},
+		// Per-feature handlers — currently just user.created.
+		{
+			"templates/transport/worker/v1/user/dto.go.tmpl",
+			"internal/transport/worker/v1/user/dto.go",
+			true,
+		},
+		{
+			"templates/transport/worker/v1/user/handler.go.tmpl",
+			"internal/transport/worker/v1/user/handler.go",
+			true,
+		},
+	}
+	// Broker-specific consumer impl. Picked from cfg.MessageQueue — must be
+	// kafka or rabbitmq; NATS doesn't yet have a consumer template.
+	switch cfg.MessageQueue {
+	case kafka:
+		files = append(files, templateFile{
+			"templates/transport/worker/kafka_consumer.go.tmpl",
+			"internal/transport/worker/consumer.go",
+			true,
+		})
+	case rabbitmq:
+		files = append(files, templateFile{
+			"templates/transport/worker/rabbitmq_consumer.go.tmpl",
+			"internal/transport/worker/consumer.go",
+			true,
+		})
+	}
+	return files
 }
 
 func (g *Generator) pkgFiles() []templateFile {
@@ -478,6 +580,10 @@ func (g *Generator) migrationFiles() []templateFile {
 	}
 
 	filename := fmt.Sprintf("%s_create_users_table", now)
+	// The audit migration timestamp is bumped by one second so migration
+	// runners apply create_users_table first.
+	auditNow := time.Now().Add(time.Second).Format("20060102150405")
+	auditFilename := fmt.Sprintf("%s_create_user_audit_log", auditNow)
 	return []templateFile{
 		{
 			"templates/migrations/create_users_table.up.sql.tmpl",
@@ -488,6 +594,19 @@ func (g *Generator) migrationFiles() []templateFile {
 			"templates/migrations/create_users_table.down.sql.tmpl",
 			fmt.Sprintf("%s/%s.down.sql", dir, filename),
 			cfg.HasSQL(),
+		},
+		// user_audit_log table — written by the consumer worker
+		// (Transport=worker). Only emit when both the worker side and a
+		// SQL backend are present.
+		{
+			"templates/migrations/create_user_audit_log.up.sql.tmpl",
+			fmt.Sprintf("%s/%s.up.sql", dir, auditFilename),
+			cfg.HasSQL() && cfg.HasWorker(),
+		},
+		{
+			"templates/migrations/create_user_audit_log.down.sql.tmpl",
+			fmt.Sprintf("%s/%s.down.sql", dir, auditFilename),
+			cfg.HasSQL() && cfg.HasWorker(),
 		},
 	}
 }

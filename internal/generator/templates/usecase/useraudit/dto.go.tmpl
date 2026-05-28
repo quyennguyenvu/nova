@@ -1,0 +1,17 @@
+package useraudit
+
+import "time"
+
+// UserCreatedInput is the worker-side projection of the user.created event.
+// It mirrors the wire DTO the publisher emits; the worker's handler maps
+// the inbound JSON onto this struct before calling the service.
+type UserCreatedInput struct {
+	UserID     int64
+	Email      string
+	Name       string
+	OccurredAt time.Time
+	// RawPayload is the original bytes received from the broker — stored
+	// in user_audit_log.payload so future schema changes don't require a
+	// backfill from upstream.
+	RawPayload []byte
+}

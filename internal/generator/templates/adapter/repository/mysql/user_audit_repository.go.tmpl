@@ -1,0 +1,31 @@
+package mysql
+
+import (
+	"context"
+	"database/sql"
+
+	"{{.ModuleName}}/internal/adapter/repository/mysql/mapper"
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+var _ domain.UserAuditRepository = (*UserAuditRepository)(nil)
+
+// UserAuditRepository implements domain.UserAuditRepository over the
+// sqlc-generated user_audit_log queries.
+type UserAuditRepository struct {
+	qx *qx
+}
+
+func NewUserAuditRepository(db *sql.DB) *UserAuditRepository {
+	return &UserAuditRepository{qx: newQX(db)}
+}
+
+func (r *UserAuditRepository) RecordCreated(ctx context.Context, entry *domain.UserAuditEntry) error {
+	id, err := r.qx.Q(ctx).RecordUserAudit(ctx, mapper.UserAuditToCreateParams(entry))
+	if err != nil {
+		return errors.Wrapf(err, "user audit repo: insert user_id=%d", entry.UserID)
+	}
+	entry.ID = id
+	return nil
+}

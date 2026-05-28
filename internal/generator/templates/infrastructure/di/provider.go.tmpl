@@ -5,8 +5,14 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/tracing"
+{{- if .HasHTTP}}
 	transporthttp "{{.ModuleName}}/internal/transport/http"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
+{{- end}}
+{{- if .HasWorker}}
+	"{{.ModuleName}}/internal/transport/worker"
+	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
+{{- end}}
 )
 
 // provideValidator returns a single concurrent-safe *validator.Validate that
@@ -17,24 +23,13 @@ func provideValidator() *validator.Validate {
 	return validator.New(validator.WithRequiredStructEnabled())
 }
 
+{{- if .HasHTTP}}
+
 // provideLoginRateLimit projects the nested config.HTTP.LoginRateLimit field
 // out for Wire — Wire prefers values over deeply-nested struct accesses, so
 // expose it as its own provider rather than wire.FieldsOf magic.
 func provideLoginRateLimit(cfg *config.Config) config.LoginRateLimitConfig {
 	return cfg.HTTP.LoginRateLimit
-}
-
-// provideTracingConfig projects the app config into the tracing package's
-// neutral Config struct, so tracing has no compile-time dep on config.
-func provideTracingConfig(cfg *config.Config) tracing.Config {
-	return tracing.Config{
-		ServiceName:    cfg.AppName,
-		ServiceVersion: cfg.AppVersion,
-		Environment:    cfg.AppEnv,
-		Endpoint:       cfg.Tracing.Endpoint,
-		Insecure:       cfg.Tracing.Insecure,
-		SampleRatio:    cfg.Tracing.SampleRatio,
-	}
 }
 
 // provideRegistrars assembles every feature's Routes into a slice that
@@ -51,3 +46,29 @@ func provideRegistrars(userRoutes *userv1.Routes) []transporthttp.Registrar {
 		userRoutes,
 	}
 }
+{{- end}}
+
+// provideTracingConfig projects the app config into the tracing package's
+// neutral Config struct, so tracing has no compile-time dep on config.
+func provideTracingConfig(cfg *config.Config) tracing.Config {
+	return tracing.Config{
+		ServiceName:    cfg.AppName,
+		ServiceVersion: cfg.AppVersion,
+		Environment:    cfg.AppEnv,
+		Endpoint:       cfg.Tracing.Endpoint,
+		Insecure:       cfg.Tracing.Insecure,
+		SampleRatio:    cfg.Tracing.SampleRatio,
+	}
+}
+
+{{- if .HasWorker}}
+
+// provideWorkerHandlers assembles every worker-side message handler into a
+// slice. Each Handler advertises its own Topic() — the Worker dispatches by
+// topic at runtime. Add new feature handlers here as they appear.
+func provideWorkerHandlers(userHandler *workeruser.Handler) []worker.Handler {
+	return []worker.Handler{
+		userHandler,
+	}
+}
+{{- end}}

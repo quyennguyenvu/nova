@@ -1,0 +1,27 @@
+-- user_audit_log captures consumer-side processing of user events for
+-- audit / replay analysis. The worker process (Transport=worker) writes
+-- here every time it receives a user.* message; the HTTP API does not
+-- touch this table.
+--
+-- payload is the raw event JSON so future schema changes don't require
+-- backfills. Add UNIQUE(user_id, event_type) + INSERT ... ON CONFLICT
+-- DO NOTHING if your worker isn't idempotent at the message-broker level.
+CREATE TABLE IF NOT EXISTS user_audit_log (
+{{- if eq .Database "postgres"}}
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    payload JSONB NOT NULL,
+    occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+{{- end}}
+{{- if eq .Database "mysql"}}
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    payload JSON NOT NULL,
+    occurred_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+{{- end}}
+);
+
+CREATE INDEX idx_user_audit_log_user_id ON user_audit_log (user_id);
+CREATE INDEX idx_user_audit_log_occurred_at ON user_audit_log (occurred_at);

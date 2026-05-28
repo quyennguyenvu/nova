@@ -1,0 +1,23 @@
+package domain
+
+import (
+	"context"
+	"time"
+)
+
+// UserAuditEntry is the audit log row written by the consumer worker every
+// time a user.* event arrives. Payload is the raw event JSON — keep it
+// opaque so future schema changes don't require backfills.
+type UserAuditEntry struct {
+	ID         int64
+	UserID     int64
+	EventType  string
+	Payload    []byte // JSON; opaque to the domain
+	OccurredAt time.Time
+}
+
+// UserAuditRepository persists audit rows. RecordCreated returns the
+// inserted row's ID so callers can stash it in tracing spans.
+type UserAuditRepository interface {
+	RecordCreated(ctx context.Context, entry *UserAuditEntry) error
+}

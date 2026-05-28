@@ -99,8 +99,36 @@ make migrate-up
 {{- end}}
 
 # Run the server
+{{- if .HasWorker}}
+go run main.go worker
+{{- else}}
 go run main.go api
+{{- end}}
 ```
+
+{{- if .HasWorker}}
+
+### Worker process
+
+This binary subscribes to a message broker ({{.MessageQueue}}) and processes
+events emitted by an upstream publisher (e.g. a sibling project generated
+with `nova new --transport=http --queue={{.MessageQueue}}`). The current
+handler set:
+
+| Topic            | Handler                                        | Side effect                            |
+| ---------------- | ---------------------------------------------- | -------------------------------------- |
+| `user.created`   | `transport/worker/v1/user.Handler.Handle`      | Inserts a row into `user_audit_log`    |
+
+End-to-end demo:
+
+1. Start {{.MessageQueue}} and {{if eq .Database "postgres"}}Postgres{{else}}MySQL{{end}} locally (docker-compose recommended).
+2. `make migrate-up` — creates `users` and `user_audit_log`.
+3. Generate the publisher counterpart in another directory:
+   `nova new {{.ProjectName}}-api --transport=http --http-framework=fiber --database={{.Database}} --queue={{.MessageQueue}}`.
+4. Run the publisher (`go run main.go api`) and the worker (`go run main.go worker`).
+5. `curl -X POST localhost:8080/api/v1/users -d '{"email":"a@b","name":"A","password":"hunter2-pass"}'`.
+6. `SELECT * FROM user_audit_log;` — see the inbound `user.created` row.
+{{- end}}
 
 {{- if .HasHTTP}}
 

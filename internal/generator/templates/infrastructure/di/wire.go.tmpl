@@ -39,11 +39,22 @@ import (
 	"{{.ModuleName}}/internal/transport/http/health"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 {{- end}}
+{{- if .HasWorker}}
+	"{{.ModuleName}}/internal/transport/worker"
+	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
+	"{{.ModuleName}}/internal/usecase/useraudit"
+{{- end}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 
 	"github.com/google/wire"
 )
 
+// infraSet provides the foundational dependencies every binary needs:
+// config, logger, tracing, DB, redis, and the security primitives
+// (TokenService, hasher, validator). Mode-specific providers live in
+// httpInfraSet / workerInfraSet so unused Transport modes don't drag in
+// providers that would fail at startup (e.g. NewTokenService rejecting
+// an empty secret when the worker doesn't need JWTs).
 var infraSet = wire.NewSet(
 	config.Load,
 	logger.New,
@@ -51,7 +62,9 @@ var infraSet = wire.NewSet(
 	infrasec.NewBcryptHasher,
 	wire.Bind(new(domainsec.PasswordHasher), new(*infrasec.BcryptHasher)),
 	provideValidator,
+{{- if .HasHTTP}}
 	provideLoginRateLimit,
+{{- end}}
 	provideTracingConfig,
 	tracing.Provider,
 {{- if eq .Database "postgres"}}
@@ -63,14 +76,6 @@ var infraSet = wire.NewSet(
 {{- if .HasRedis}}
 	infraCache.New,
 {{- end}}
-{{- if .HasHTTP}}
-	health.NewChecker,
-	transporthttp.NewApp,
-	server.NewHTTPServer,
-{{- end}}
-{{- if .HasGRPC}}
-	server.NewGRPCServer,
-{{- end}}
 {{- if .HasMessageQueue}}
 {{- if eq .MessageQueue "kafka"}}
 	infraPubsub.NewKafkaProducer,
@@ -81,14 +86,60 @@ var infraSet = wire.NewSet(
 {{- end}}
 )
 
+{{- if .HasHTTP}}
+
+// httpInfraSet adds providers only the HTTP transport needs (server, app,
+// health checker). Kept separate from infraSet so the worker mode's wire
+// graph isn't polluted with HTTP-specific dependencies.
+var httpInfraSet = wire.NewSet(
+	health.NewChecker,
+	transporthttp.NewApp,
+	server.NewHTTPServer,
+)
+{{- end}}
+
+{{- if .HasGRPC}}
+
+var grpcInfraSet = wire.NewSet(
+	server.NewGRPCServer,
+)
+{{- end}}
+
+{{- if .HasWorker}}
+
+// workerInfraSet adds the broker-specific consumer factory + the worker
+// orchestrator. The Consumer interface (transport/worker.Consumer) is bound
+// to either the Kafka or RabbitMQ implementation depending on cfg.MessageQueue.
+var workerInfraSet = wire.NewSet(
+{{- if eq .MessageQueue "kafka"}}
+	infraPubsub.NewKafkaConsumerGroup,
+	worker.NewKafkaConsumer,
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+	infraPubsub.NewRabbitMQChannel,
+	worker.NewRabbitMQConsumer,
+{{- end}}
+	worker.NewWorker,
+	provideWorkerHandlers,
+)
+{{- end}}
+
 var adapterSet = wire.NewSet(
 {{- if eq .Database "postgres"}}
 	postgresrepo.NewUserRepository,
 	wire.Bind(new(domain.UserRepository), new(*postgresrepo.UserRepository)),
+{{- if .HasWorker}}
+	postgresrepo.NewUserAuditRepository,
+	wire.Bind(new(domain.UserAuditRepository), new(*postgresrepo.UserAuditRepository)),
+{{- end}}
 {{- end}}
 {{- if eq .Database "mysql"}}
 	mysqlrepo.NewUserRepository,
 	wire.Bind(new(domain.UserRepository), new(*mysqlrepo.UserRepository)),
+{{- if .HasWorker}}
+	mysqlrepo.NewUserAuditRepository,
+	wire.Bind(new(domain.UserAuditRepository), new(*mysqlrepo.UserAuditRepository)),
+{{- end}}
 {{- end}}
 {{- if .HasMessageQueue}}
 	pubsub.NewPublisher,
@@ -98,6 +149,9 @@ var adapterSet = wire.NewSet(
 
 var usecaseSet = wire.NewSet(
 	usersvc.NewService,
+{{- if .HasWorker}}
+	useraudit.NewService,
+{{- end}}
 )
 
 {{- if .HasHTTP}}
@@ -107,11 +161,12 @@ var transportSet = wire.NewSet(
 	provideRegistrars,
 )
 
-// InitializeHTTPServer returns the HTTPApp bundle so the entry point gets the
-// same *logger.Logger that DI wired into every service.
+// InitializeHTTPServer returns the HTTPApp bundle so the entry point gets
+// the same *logger.Logger that DI wired into every service.
 func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	panic(wire.Build(
 		infraSet,
+		httpInfraSet,
 		adapterSet,
 		usecaseSet,
 		transportSet,
@@ -121,12 +176,35 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- end}}
 
 {{- if .HasGRPC}}
+
 // InitializeGRPCServer wires the gRPC server. Service registration is the
 // caller's responsibility — call app.Server.Server() to get the underlying *grpc.Server.
 func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 	panic(wire.Build(
 		infraSet,
+		grpcInfraSet,
 		wire.Struct(new(GRPCApp), "*"),
+	))
+}
+{{- end}}
+
+{{- if .HasWorker}}
+var workerHandlerSet = wire.NewSet(
+	workeruser.NewHandler,
+)
+
+// InitializeWorker returns the WorkerApp bundle for the consumer process.
+// Wire only constructs providers reachable from WorkerApp's struct fields,
+// so HTTP/gRPC-only providers (server.NewHTTPServer, transporthttp.NewApp,
+// health.NewChecker, transportSet) aren't dragged into the worker binary.
+func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
+	panic(wire.Build(
+		infraSet,
+		workerInfraSet,
+		workerHandlerSet,
+		adapterSet,
+		usecaseSet,
+		wire.Struct(new(WorkerApp), "*"),
 	))
 }
 {{- end}}

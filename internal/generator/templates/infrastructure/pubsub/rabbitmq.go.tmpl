@@ -6,14 +6,33 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
-// NewRabbitMQConnection dials RabbitMQ.
-// This is infrastructure — connection setup only, no business logic.
+// NewRabbitMQConnection dials RabbitMQ. Infrastructure — connection setup
+// only, no business logic.
 func NewRabbitMQConnection(cfg *config.RabbitMQConfig) (*amqp.Connection, error) {
 	conn, err := amqp.Dial(cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)
 	}
 	return conn, nil
+}
+
+// NewRabbitMQChannel opens a channel on the supplied connection. Channels are
+// not safe for concurrent use; create one per consumer/publisher. The
+// returned cleanup closes the channel — the connection itself is closed by
+// the connection-level cleanup in DI.
+func NewRabbitMQChannel(conn *amqp.Connection, log *logger.Logger) (*amqp.Channel, func(), error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, nil, fmt.Errorf("open rabbitmq channel: %w", err)
+	}
+	cleanup := func() {
+		log.Info("[rabbitmq] closing channel ...")
+		if closeErr := ch.Close(); closeErr != nil {
+			log.Error("[rabbitmq] failed to close channel", "error", closeErr)
+		}
+	}
+	return ch, cleanup, nil
 }

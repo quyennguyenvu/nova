@@ -1,0 +1,33 @@
+package mapper
+
+import (
+	"encoding/json"
+
+	"{{.ModuleName}}/internal/adapter/repository/mysql/dbgen"
+	"{{.ModuleName}}/internal/domain"
+)
+
+// UserAuditToCreateParams builds the sqlc insert params from the domain
+// entry. Payload is mapped to encoding/json.RawMessage so the MySQL JSON
+// column lands as opaque bytes (per the override in mysql_sqlc.yaml).
+func UserAuditToCreateParams(e *domain.UserAuditEntry) dbgen.RecordUserAuditParams {
+	return dbgen.RecordUserAuditParams{
+		UserID:     e.UserID,
+		EventType:  e.EventType,
+		Payload:    json.RawMessage(e.Payload),
+		OccurredAt: e.OccurredAt,
+	}
+}
+
+// UserAuditToEntity is unused on MySQL (RecordUserAudit returns only the
+// LastInsertID) but defined for parity with the postgres mapper — call
+// sites that need full row hydration are easy to add later.
+func UserAuditToEntity(row dbgen.UserAuditLog) *domain.UserAuditEntry {
+	return &domain.UserAuditEntry{
+		ID:         row.ID,
+		UserID:     row.UserID,
+		EventType:  row.EventType,
+		Payload:    []byte(row.Payload),
+		OccurredAt: row.OccurredAt,
+	}
+}

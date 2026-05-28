@@ -30,7 +30,7 @@ type ProjectConfig struct {
 	MessageQueue string `json:"message_queue"` // "kafka", "rabbitmq", "nats", "none"
 
 	// Configuration format
-	ConfigFormat string `json:"config_format"` // "yaml", "toml", "env"
+	ConfigFormat string `json:"config_format"` // "yaml", "toml"
 
 	// Dependency Injection
 	DI string `json:"di"` // "wire", "fx", "manual"
@@ -58,6 +58,13 @@ func (c *ProjectConfig) HasCron() bool {
 // HasCLI returns true if the project includes CLI transport.
 func (c *ProjectConfig) HasCLI() bool {
 	return c.Transport == "cli"
+}
+
+// HasWorker returns true if the project is a consumer worker — a long-running
+// process that subscribes to a message broker and dispatches messages to
+// usecases. Mutually exclusive with HasHTTP/HasGRPC/HasCron/HasCLI.
+func (c *ProjectConfig) HasWorker() bool {
+	return c.Transport == "worker"
 }
 
 // HasDatabase returns true if a database is selected.

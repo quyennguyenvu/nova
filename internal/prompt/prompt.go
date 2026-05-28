@@ -65,7 +65,7 @@ func promptProjectBasics(cfg *config.ProjectConfig) error {
 func promptTransport(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Transport layer:",
-		Options: []string{"http", "grpc", "cron", "cli"},
+		Options: []string{"http", "grpc", "cron", "cli", "worker"},
 		Default: "http",
 	}, &cfg.Transport); err != nil {
 		return err
@@ -160,7 +160,7 @@ func promptMessageQueue(cfg *config.ProjectConfig) error {
 func promptConfigFormat(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Configuration format:",
-		Options: []string{"yaml", "toml", "env"},
+		Options: []string{"yaml", "toml"},
 		Default: "yaml",
 	}, &cfg.ConfigFormat); err != nil {
 		return err

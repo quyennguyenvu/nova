@@ -32,6 +32,10 @@ func Execute() {
 	{{- if .HasCron }}
 		cronCommand(),
 	{{- end }}
+
+	{{- if .HasWorker }}
+		workerCommand(),
+	{{- end }}
 	)
 
 	if err := root.Execute(); err != nil {

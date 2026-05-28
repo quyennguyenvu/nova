@@ -195,16 +195,26 @@ type RedisConfig struct {
 {{- if eq .MessageQueue "kafka"}}
 
 // KafkaConfig holds Kafka configuration.
+//
+// ConsumerGroupID is only consumed when the binary runs in worker mode
+// (Transport=worker); HTTP-only deployments can leave it empty.
 type KafkaConfig struct {
 	Brokers          []string `{{.ConfigFormat}}:"brokers"            env:"KAFKA_BROKERS" env-separator:","`
 	ProducerRetryMax int      `{{.ConfigFormat}}:"producer_retry_max" env:"KAFKA_PRODUCER_RETRY_MAX"`
+	ConsumerGroupID  string   `{{.ConfigFormat}}:"consumer_group_id"  env:"KAFKA_CONSUMER_GROUP_ID"`
+	UserCreatedTopic string   `{{.ConfigFormat}}:"user_created_topic" env:"KAFKA_USER_CREATED_TOPIC"`
 }
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
 
 // RabbitMQConfig holds RabbitMQ configuration.
+//
+// UserCreatedQueue + Exchange are only consumed in worker mode; HTTP-only
+// deployments can leave them empty.
 type RabbitMQConfig struct {
-	URL string `{{.ConfigFormat}}:"url" env:"RABBITMQ_URL"`
+	URL              string `{{.ConfigFormat}}:"url"                env:"RABBITMQ_URL"`
+	Exchange         string `{{.ConfigFormat}}:"exchange"           env:"RABBITMQ_EXCHANGE"`
+	UserCreatedQueue string `{{.ConfigFormat}}:"user_created_queue" env:"RABBITMQ_USER_CREATED_QUEUE"`
 }
 {{- end}}
 

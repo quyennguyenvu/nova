@@ -1,0 +1,4 @@
+-- name: RecordUserAudit :one
+INSERT INTO user_audit_log (user_id, event_type, payload, occurred_at)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
