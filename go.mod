@@ -1,4 +1,4 @@
-module nova
+module github.com/quyennguyenvu/nova
 
 go 1.25.1
 

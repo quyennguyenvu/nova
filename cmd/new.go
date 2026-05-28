@@ -7,9 +7,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"nova/internal/config"
-	"nova/internal/generator"
-	"nova/internal/prompt"
+	"github.com/quyennguyenvu/nova/internal/config"
+	"github.com/quyennguyenvu/nova/internal/generator"
+	"github.com/quyennguyenvu/nova/internal/prompt"
 )
 
 func newCommand() *cobra.Command {

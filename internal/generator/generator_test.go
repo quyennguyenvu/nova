@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"nova/internal/config"
+	"github.com/quyennguyenvu/nova/internal/config"
 )
 
 // postgresDBGenStub is written into the rendered postgres adapter so go vet

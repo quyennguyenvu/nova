@@ -5,7 +5,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 
-	"nova/internal/config"
+	"github.com/quyennguyenvu/nova/internal/config"
 )
 
 // RunInteractive prompts the user for all project configuration options.

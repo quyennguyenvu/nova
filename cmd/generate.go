@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"nova/internal/generator"
+	"github.com/quyennguyenvu/nova/internal/generator"
 )
 
 const (

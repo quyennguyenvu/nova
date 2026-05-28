@@ -10,7 +10,7 @@ import (
 	"text/template"
 	"time"
 
-	"nova/internal/config"
+	"github.com/quyennguyenvu/nova/internal/config"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"

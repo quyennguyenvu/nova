@@ -1,7 +1,7 @@
 package main
 
 import (
-	"nova/cmd"
+	"github.com/quyennguyenvu/nova/cmd"
 )
 
 func main() {
