@@ -25,22 +25,22 @@ gen: build ## Generate a sample project in interactive mode
 	@echo "✅ new project generated"
 
 
-gen-all: build ## Generate a sample project to test templates (Fiber/Postgres/Redis)
+gen-api: build ## Generate a sample project to test templates (Fiber/Postgres/Redis)
 	rm -rf $(TEST_DIR)
-	./$(BINARY) new testproject \
-		--module=nova/testproject \
+	./$(BINARY) new testapi \
+		--module=nova/testapi \
 		--transport=http \
 		--http-framework=fiber \
 		--database=postgres \
 		--db-driver=pgx \
 		--query=sqlc \
 		--cache=redis \
-		--queue=none \
+		--queue=kafka \
 		--config=yaml \
 		--di=wire \
 		--docker \
 		--ci=github
-	mv testproject $(TEST_DIR)
+	mv testapi $(TEST_DIR)
 	@echo ""
 	@echo "✅ Output at $(TEST_DIR)"
 
@@ -52,7 +52,7 @@ gen-worker: build ## Generate a worker (consumer) service: Kafka + Postgres + sq
 		--database=postgres \
 		--db-driver=pgx \
 		--query=sqlc \
-		--cache=none \
+		--cache=redis \
 		--queue=kafka \
 		--config=yaml \
 		--di=wire \

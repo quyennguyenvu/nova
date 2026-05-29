@@ -2,8 +2,8 @@ package database
 
 import (
 	"context"
-	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,17 +15,18 @@ import (
 
 // NewPostgresDB creates a new PostgreSQL connection pool.
 func NewPostgresDB(cfg config.DatabaseConfig, log *logger.Logger) (*pgxpool.Pool, func(), error) {
-	hostPort := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	dsn := fmt.Sprintf(
-		"postgres://%s:%s@%s/%s?sslmode=%s",
-		cfg.User,
-		cfg.Password,
-		hostPort,
-		cfg.Name,
-		cfg.SSLMode,
-	)
+	// Build the DSN via net/url so credentials are percent-encoded.
+	// A raw fmt.Sprintf corrupts the URL — and breaks pgxpool.ParseConfig —
+	// the moment the password contains '@', ':', '/', '?', '#' or a space.
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(cfg.User, cfg.Password),
+		Host:     net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
+		Path:     cfg.Name,
+		RawQuery: "sslmode=" + cfg.SSLMode,
+	}
 
-	poolCfg, err := pgxpool.ParseConfig(dsn)
+	poolCfg, err := pgxpool.ParseConfig(u.String())
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "failed to parse database config")
 	}

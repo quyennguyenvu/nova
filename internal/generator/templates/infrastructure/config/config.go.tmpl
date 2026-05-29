@@ -26,33 +26,33 @@ var configFS embed.FS
 //
 // At runtime every field can be overridden by its env var.
 type Config struct {
-	AppName    string        `{{.ConfigFormat}}:"app_name"    env:"APP_NAME"`
-	AppVersion string        `{{.ConfigFormat}}:"app_version" env:"APP_VERSION"`
-	AppEnv     string        `{{.ConfigFormat}}:"app_env"     env:"APP_ENV"`
-	Log        LogConfig     `{{.ConfigFormat}}:"log"`
-	Tracing    TracingConfig `{{.ConfigFormat}}:"tracing"`
-	JWT        JWTConfig     `{{.ConfigFormat}}:"jwt"`
+	AppName    string         `{{.ConfigFormat}}:"app_name"    env:"APP_NAME"`
+	AppVersion string         `{{.ConfigFormat}}:"app_version" env:"APP_VERSION"`
+	AppEnv     string         `{{.ConfigFormat}}:"app_env"     env:"APP_ENV"`
+	Log        LogConfig      `{{.ConfigFormat}}:"log"`
+	Tracing    TracingConfig  `{{.ConfigFormat}}:"tracing"`
+	JWT        JWTConfig      `{{.ConfigFormat}}:"jwt"`
 	Security   SecurityConfig `{{.ConfigFormat}}:"security"`
 {{- if .HasHTTP}}
-	HTTP        HTTPConfig        `{{.ConfigFormat}}:"http"`
+	HTTP       HTTPConfig     `{{.ConfigFormat}}:"http"`
 {{- end}}
 {{- if .HasGRPC}}
-	GRPC        GRPCConfig        `{{.ConfigFormat}}:"grpc"`
+	GRPC       GRPCConfig     `{{.ConfigFormat}}:"grpc"`
 {{- end}}
 {{- if .HasCron}}
-	Cron        CronConfig        `{{.ConfigFormat}}:"cron"`
+	Cron       CronConfig     `{{.ConfigFormat}}:"cron"`
 {{- end}}
 {{- if .HasDatabase}}
-	Database    DatabaseConfig    `{{.ConfigFormat}}:"database"`
+	Database   DatabaseConfig `{{.ConfigFormat}}:"database"`
 {{- end}}
 {{- if .HasRedis}}
-	Redis       RedisConfig       `{{.ConfigFormat}}:"redis"`
+	Redis      RedisConfig    `{{.ConfigFormat}}:"redis"`
 {{- end}}
 {{- if eq .MessageQueue "kafka"}}
-	Kafka       KafkaConfig       `{{.ConfigFormat}}:"kafka"`
+	Kafka      KafkaConfig    `{{.ConfigFormat}}:"kafka"`
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
-	RabbitMQ    RabbitMQConfig    `{{.ConfigFormat}}:"rabbitmq"`
+	RabbitMQ   RabbitMQConfig `{{.ConfigFormat}}:"rabbitmq"`
 {{- end}}
 }
 
@@ -92,13 +92,13 @@ type JWTConfig struct {
 
 // HTTPConfig holds HTTP server configuration.
 type HTTPConfig struct {
-	Port            string        `{{.ConfigFormat}}:"port"             env:"SERVER_PORT"`
-	ReadTimeout     time.Duration `{{.ConfigFormat}}:"read_timeout"     env:"SERVER_READ_TIMEOUT"`
-	WriteTimeout    time.Duration `{{.ConfigFormat}}:"write_timeout"    env:"SERVER_WRITE_TIMEOUT"`
-	ReadBufferSize  int           `{{.ConfigFormat}}:"read_buffer_size" env:"SERVER_READ_BUFFER_SIZE"`
-	BodyLimit       int           `{{.ConfigFormat}}:"body_limit"       env:"SERVER_BODY_LIMIT"`
-	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"SERVER_SHUTDOWN_TIMEOUT"`
-	CORS            CORSConfig    `{{.ConfigFormat}}:"cors"`
+	Port            string               `{{.ConfigFormat}}:"port"             env:"SERVER_PORT"`
+	ReadTimeout     time.Duration        `{{.ConfigFormat}}:"read_timeout"     env:"SERVER_READ_TIMEOUT"`
+	WriteTimeout    time.Duration        `{{.ConfigFormat}}:"write_timeout"    env:"SERVER_WRITE_TIMEOUT"`
+	ReadBufferSize  int                  `{{.ConfigFormat}}:"read_buffer_size" env:"SERVER_READ_BUFFER_SIZE"`
+	BodyLimit       int                  `{{.ConfigFormat}}:"body_limit"       env:"SERVER_BODY_LIMIT"`
+	ShutdownTimeout time.Duration        `{{.ConfigFormat}}:"shutdown_timeout" env:"SERVER_SHUTDOWN_TIMEOUT"`
+	CORS            CORSConfig           `{{.ConfigFormat}}:"cors"`
 	LoginRateLimit  LoginRateLimitConfig `{{.ConfigFormat}}:"login_rate_limit"`
 }
 
@@ -144,7 +144,7 @@ type DatabaseConfig struct {
 	Name     string `{{.ConfigFormat}}:"name" env:"DB_NAME"`
 	User     string `env:"DB_USER"`
 	Password string `env:"DB_PASSWORD"`
-	SSLMode  string `env:"DB_SSL_MODE"`
+	SSLMode  string `{{.ConfigFormat}}:"ssl_mode" env:"DB_SSL_MODE"`
 
 	// Pool / connection tuning.
 	MaxConns        int32         `{{.ConfigFormat}}:"max_conns"          env:"DB_MAX_CONNS"`

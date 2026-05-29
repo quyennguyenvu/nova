@@ -70,6 +70,10 @@ database:
   host: "localhost"
   port: 5432
   name: "{{.ProjectName}}"
+  # disable | require | verify-ca | verify-full. "disable" suits local dev;
+  # production.yaml overrides to "require". Use verify-full + sslrootcert to
+  # also authenticate the server cert (pin the CA).
+  ssl_mode: "disable"
   max_conns: 25
   min_conns: 5
   max_conn_lifetime: 5m

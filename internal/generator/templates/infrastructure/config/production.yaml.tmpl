@@ -13,6 +13,7 @@ http:
 
 database:
 {{- if eq .Database "postgres"}}
+  ssl_mode: "require" # encrypt in transit; use verify-full + sslrootcert to also authenticate the server
   max_conns: 50
   min_conns: 10
   max_conn_lifetime: 30m

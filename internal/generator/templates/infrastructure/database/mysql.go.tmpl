@@ -3,8 +3,10 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"net"
+	"strconv"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
@@ -12,16 +14,18 @@ import (
 
 // NewMySQLDB creates a new MySQL database connection.
 func NewMySQLDB(cfg config.DatabaseConfig, log *logger.Logger) (*sql.DB, func(), error) {
-	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s?parseTime=true",
-		cfg.User,
-		cfg.Password,
-		cfg.Host,
-		cfg.Port,
-		cfg.Name,
-	)
+	// NewConfig() seeds the driver defaults (AllowNativePasswords, UTC loc, …)
+	// and FormatDSN() escapes every field — a raw fmt.Sprintf corrupts the DSN
+	// when the password contains '@', ':', '/' or a space.
+	mysqlCfg := mysql.NewConfig()
+	mysqlCfg.User = cfg.User
+	mysqlCfg.Passwd = cfg.Password
+	mysqlCfg.Net = "tcp"
+	mysqlCfg.Addr = net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	mysqlCfg.DBName = cfg.Name
+	mysqlCfg.ParseTime = true
 
-	db, err := sql.Open("mysql", dsn)
+	db, err := sql.Open("mysql", mysqlCfg.FormatDSN())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open database: %w", err)
 	}
