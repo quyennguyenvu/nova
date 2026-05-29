@@ -24,23 +24,22 @@ type Client struct {
 }
 
 // New is the single factory entry-point — picks mode from config.
-func New(cfg *config.Config, log *logger.Logger) (*Client, func(), error) {
-	rdbCfg := &cfg.Redis
+func New(cfg config.RedisConfig, log *logger.Logger) (*Client, func(), error) {
 	var uc redis.UniversalClient
 
-	switch rdbCfg.Mode {
+	switch cfg.Mode {
 	case single:
-		uc = newSingle(rdbCfg)
+		uc = newSingle(cfg)
 	case sentinel:
-		uc = newSentinel(rdbCfg)
+		uc = newSentinel(cfg)
 	case cluster:
-		uc = newCluster(rdbCfg)
+		uc = newCluster(cfg)
 	default:
-		return nil, nil, fmt.Errorf("redis: unknown mode %q", rdbCfg.Mode)
+		return nil, nil, fmt.Errorf("redis: unknown mode %q", cfg.Mode)
 	}
 
-	if err := ping(uc, rdbCfg.PingTimeout); err != nil {
-		return nil, nil, fmt.Errorf("redis: ping failed (%s): %w", rdbCfg.Mode, err)
+	if err := ping(uc, cfg.PingTimeout); err != nil {
+		return nil, nil, fmt.Errorf("redis: ping failed (%s): %w", cfg.Mode, err)
 	}
 
 	cleanup := func() {
@@ -52,7 +51,7 @@ func New(cfg *config.Config, log *logger.Logger) (*Client, func(), error) {
 	return &Client{uc}, cleanup, nil
 }
 
-func newSingle(cfg *config.RedisConfig) redis.UniversalClient {
+func newSingle(cfg config.RedisConfig) redis.UniversalClient {
 	return redis.NewClient(&redis.Options{
 		Addr:            cfg.Addrs[0],
 		Password:        cfg.Password,
@@ -68,7 +67,7 @@ func newSingle(cfg *config.RedisConfig) redis.UniversalClient {
 	})
 }
 
-func newSentinel(cfg *config.RedisConfig) redis.UniversalClient {
+func newSentinel(cfg config.RedisConfig) redis.UniversalClient {
 	return redis.NewFailoverClient(&redis.FailoverOptions{
 		MasterName:      cfg.MasterName,
 		SentinelAddrs:   cfg.Addrs,
@@ -83,7 +82,7 @@ func newSentinel(cfg *config.RedisConfig) redis.UniversalClient {
 	})
 }
 
-func newCluster(cfg *config.RedisConfig) redis.UniversalClient {
+func newCluster(cfg config.RedisConfig) redis.UniversalClient {
 	return redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs:           cfg.Addrs,
 		Password:        cfg.Password,

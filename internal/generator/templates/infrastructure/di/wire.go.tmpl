@@ -57,16 +57,17 @@ import (
 // an empty secret when the worker doesn't need JWTs).
 var infraSet = wire.NewSet(
 	config.Load,
+	wire.FieldsOf(new(*config.Config), "Log", "JWT", "Security"),
 	logger.New,
 	jwtsec.NewTokenService,
 	infrasec.NewBcryptHasher,
 	wire.Bind(new(domainsec.PasswordHasher), new(*infrasec.BcryptHasher)),
 	provideValidator,
-{{- if .HasHTTP}}
-	provideLoginRateLimit,
-{{- end}}
 	provideTracingConfig,
 	tracing.Provider,
+{{- if .HasDatabase}}
+	wire.FieldsOf(new(*config.Config), "Database"),
+{{- end}}
 {{- if eq .Database "postgres"}}
 	database.NewPostgresDB,
 {{- end}}
@@ -74,13 +75,16 @@ var infraSet = wire.NewSet(
 	database.NewMySQLDB,
 {{- end}}
 {{- if .HasRedis}}
+	wire.FieldsOf(new(*config.Config), "Redis"),
 	infraCache.New,
 {{- end}}
 {{- if .HasMessageQueue}}
 {{- if eq .MessageQueue "kafka"}}
+	wire.FieldsOf(new(*config.Config), "Kafka"),
 	infraPubsub.NewKafkaProducer,
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
+	wire.FieldsOf(new(*config.Config), "RabbitMQ"),
 	infraPubsub.NewRabbitMQConnection,
 {{- end}}
 {{- end}}
@@ -92,6 +96,8 @@ var infraSet = wire.NewSet(
 // health checker). Kept separate from infraSet so the worker mode's wire
 // graph isn't polluted with HTTP-specific dependencies.
 var httpInfraSet = wire.NewSet(
+	wire.FieldsOf(new(*config.Config), "HTTP"),
+	wire.FieldsOf(new(config.HTTPConfig), "LoginRateLimit"),
 	health.NewChecker,
 	transporthttp.NewApp,
 	server.NewHTTPServer,
@@ -101,6 +107,7 @@ var httpInfraSet = wire.NewSet(
 {{- if .HasGRPC}}
 
 var grpcInfraSet = wire.NewSet(
+	wire.FieldsOf(new(*config.Config), "GRPC"),
 	server.NewGRPCServer,
 )
 {{- end}}

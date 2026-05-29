@@ -30,20 +30,20 @@ type TokenService struct {
 // makes brute-force forgery feasible.
 const minSecretBytes = 32
 
-func NewTokenService(cfg *config.Config) (*TokenService, error) {
-	if len(cfg.JWT.Secret) < minSecretBytes {
+func NewTokenService(cfg config.JWTConfig) (*TokenService, error) {
+	if len(cfg.Secret) < minSecretBytes {
 		return nil, errors.InternalServer(
 			"jwt: secret must be at least 32 bytes (256 bits); generate one with `openssl rand -hex 32`",
 		)
 	}
-	ttl := cfg.JWT.AccessTokenTTL
+	ttl := cfg.AccessTokenTTL
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
 	return &TokenService{
-		secret:         []byte(cfg.JWT.Secret),
-		issuer:         cfg.JWT.Issuer,
-		audience:       cfg.JWT.Audience,
+		secret:         []byte(cfg.Secret),
+		issuer:         cfg.Issuer,
+		audience:       cfg.Audience,
 		accessTokenTTL: ttl,
 	}, nil
 }

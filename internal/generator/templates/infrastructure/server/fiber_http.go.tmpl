@@ -15,7 +15,7 @@ import (
 type HTTPServer struct {
 	app    *fiber.App
 	addr   string
-	cfg    *config.Config
+	cfg    config.HTTPConfig
 	logger *logger.Logger
 }
 
@@ -25,15 +25,15 @@ type HTTPServer struct {
 // collapse the configured ShutdownTimeout to zero and force a hard close.
 func NewHTTPServer(
 	_ context.Context,
-	cfg *config.Config,
+	cfg config.HTTPConfig,
 	log *logger.Logger,
 	app *fiber.App,
 ) (*HTTPServer, func(), error) {
-	addr := fmt.Sprintf(":%s", cfg.HTTP.Port)
+	addr := fmt.Sprintf(":%s", cfg.Port)
 	s := &HTTPServer{app: app, addr: addr, cfg: cfg, logger: log}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down HTTP server", "addr", addr)

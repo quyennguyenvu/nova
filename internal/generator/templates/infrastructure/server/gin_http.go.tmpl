@@ -16,7 +16,7 @@ import (
 // engine itself (middleware, routes, healthz) is built in transport/http.NewApp.
 type HTTPServer struct {
 	server *http.Server
-	cfg    *config.Config
+	cfg    config.HTTPConfig
 	logger *logger.Logger
 }
 
@@ -25,21 +25,21 @@ type HTTPServer struct {
 // ctx — by the time cleanup runs the parent ctx is already SIGINT-cancelled.
 func NewHTTPServer(
 	_ context.Context,
-	cfg *config.Config,
+	cfg config.HTTPConfig,
 	log *logger.Logger,
 	engine *gin.Engine,
 ) (*HTTPServer, func(), error) {
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%s", cfg.HTTP.Port),
+		Addr:         fmt.Sprintf(":%s", cfg.Port),
 		Handler:      engine,
-		ReadTimeout:  cfg.HTTP.ReadTimeout,
-		WriteTimeout: cfg.HTTP.WriteTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
 	}
 
 	s := &HTTPServer{server: srv, cfg: cfg, logger: log}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down HTTP server", "addr", srv.Addr)

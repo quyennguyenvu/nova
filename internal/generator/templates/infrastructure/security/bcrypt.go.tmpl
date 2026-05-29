@@ -22,8 +22,8 @@ type BcryptHasher struct {
 
 // NewBcryptHasher reads the cost from config, clamping invalid values to
 // bcrypt.DefaultCost (10). Cost must be in [bcrypt.MinCost, bcrypt.MaxCost].
-func NewBcryptHasher(cfg *config.Config) *BcryptHasher {
-	cost := cfg.Security.BcryptCost
+func NewBcryptHasher(cfg config.SecurityConfig) *BcryptHasher {
+	cost := cfg.BcryptCost
 	if cost < bcrypt.MinCost || cost > bcrypt.MaxCost {
 		cost = bcrypt.DefaultCost
 	}

@@ -63,7 +63,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 		return nil, nil, err
 	}
 
-	log := logger.New(cfg)
+	log := logger.New(cfg.Log)
 
 	tracer, tracingCleanup, err := tracing.Provider(ctx, provideTracingConfig(cfg))
 	if err != nil {
@@ -83,7 +83,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	}
 
 {{- if eq .Database "postgres"}}
-	db, dbCleanup, err := database.NewPostgresDB(cfg, log)
+	db, dbCleanup, err := database.NewPostgresDB(cfg.Database, log)
 	if err != nil {
 		return fail(err)
 	}
@@ -91,7 +91,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	log.Info("connected to PostgreSQL")
 {{- end}}
 {{- if eq .Database "mysql"}}
-	db, dbCleanup, err := database.NewMySQLDB(cfg, log)
+	db, dbCleanup, err := database.NewMySQLDB(cfg.Database, log)
 	if err != nil {
 		return fail(err)
 	}
@@ -100,7 +100,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- end}}
 
 {{- if .HasRedis}}
-	cacheClient, cacheCleanup, err := infraCache.New(cfg, log)
+	cacheClient, cacheCleanup, err := infraCache.New(cfg.Redis, log)
 	if err != nil {
 		return fail(err)
 	}
@@ -109,7 +109,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- end}}
 
 {{- if eq .MessageQueue "kafka"}}
-	producer, producerCleanup, err := infraPubsub.NewKafkaProducer(&cfg.Kafka, log)
+	producer, producerCleanup, err := infraPubsub.NewKafkaProducer(cfg.Kafka, log)
 	if err != nil {
 		return fail(err)
 	}
@@ -118,7 +118,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	log.Info("connected to Kafka")
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
-	conn, err := infraPubsub.NewRabbitMQConnection(&cfg.RabbitMQ)
+	conn, err := infraPubsub.NewRabbitMQConnection(cfg.RabbitMQ)
 	if err != nil {
 		return fail(err)
 	}
@@ -130,7 +130,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	log.Info("connected to RabbitMQ")
 {{- end}}
 
-	tokenSvc, err := jwtsec.NewTokenService(cfg)
+	tokenSvc, err := jwtsec.NewTokenService(cfg.JWT)
 	if err != nil {
 		return fail(err)
 	}
@@ -144,7 +144,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- if eq .Database "mysql"}}
 	userRepo := mysqlrepo.NewUserRepository(db)
 {{- end}}
-	hasher := infrasec.NewBcryptHasher(cfg)
+	hasher := infrasec.NewBcryptHasher(cfg.Security)
 {{- if .HasCache}}
 {{- if .HasRedis}}
 	cachedUserRepo := cacherepo.NewUserCacheRepository(userRepo, cacheClient)
@@ -177,7 +177,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	app := transporthttp.NewApp(cfg, log, checker, nil)
 {{- end}}
 
-	httpServer, httpCleanup, err := server.NewHTTPServer(ctx, cfg, log, app)
+	httpServer, httpCleanup, err := server.NewHTTPServer(ctx, cfg.HTTP, log, app)
 	if err != nil {
 		return fail(err)
 	}
@@ -198,14 +198,14 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 		return nil, nil, err
 	}
 
-	log := logger.New(cfg)
+	log := logger.New(cfg.Log)
 
 	tracer, tracingCleanup, err := tracing.Provider(ctx, provideTracingConfig(cfg))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	grpcServer, grpcCleanup, err := server.NewGRPCServer(ctx, cfg, log)
+	grpcServer, grpcCleanup, err := server.NewGRPCServer(ctx, cfg.GRPC, log)
 	if err != nil {
 		tracingCleanup()
 		return nil, nil, err
@@ -232,7 +232,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 		return nil, nil, err
 	}
 
-	log := logger.New(cfg)
+	log := logger.New(cfg.Log)
 
 	tracer, tracingCleanup, err := tracing.Provider(ctx, provideTracingConfig(cfg))
 	if err != nil {
@@ -252,7 +252,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	}
 
 {{- if eq .Database "postgres"}}
-	db, dbCleanup, err := database.NewPostgresDB(cfg, log)
+	db, dbCleanup, err := database.NewPostgresDB(cfg.Database, log)
 	if err != nil {
 		return fail(err)
 	}
@@ -260,7 +260,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	log.Info("connected to PostgreSQL")
 {{- end}}
 {{- if eq .Database "mysql"}}
-	db, dbCleanup, err := database.NewMySQLDB(cfg, log)
+	db, dbCleanup, err := database.NewMySQLDB(cfg.Database, log)
 	if err != nil {
 		return fail(err)
 	}
@@ -269,7 +269,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 {{- end}}
 
 {{- if eq .MessageQueue "kafka"}}
-	group, groupCleanup, err := infraPubsub.NewKafkaConsumerGroup(&cfg.Kafka, log)
+	group, groupCleanup, err := infraPubsub.NewKafkaConsumerGroup(cfg.Kafka, log)
 	if err != nil {
 		return fail(err)
 	}
@@ -277,7 +277,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	consumer := worker.NewKafkaConsumer(group, log)
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
-	conn, err := infraPubsub.NewRabbitMQConnection(&cfg.RabbitMQ)
+	conn, err := infraPubsub.NewRabbitMQConnection(cfg.RabbitMQ)
 	if err != nil {
 		return fail(err)
 	}

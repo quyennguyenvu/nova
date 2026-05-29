@@ -1,4 +1,4 @@
-.PHONY: build run clean generate test-gen verify-gen rebuild help
+.PHONY: build run clean gen gen-all gen-worker test-gen verify-gen diff-gen rebuild test lint fmt vet help
 
 # Binary
 BINARY    := bin/nova
@@ -19,13 +19,13 @@ rebuild: clean build ## Clean + rebuild from scratch
 
 ## —— Template Development ————————————————————————
 
-generate: build ## Generate a sample project in interactive mode
+gen: build ## Generate a sample project in interactive mode
 	./$(BINARY) new
 	@echo ""
 	@echo "✅ new project generated"
 
 
-generate-all: build ## Generate a sample project to test templates (Fiber/Postgres/Redis)
+gen-all: build ## Generate a sample project to test templates (Fiber/Postgres/Redis)
 	rm -rf $(TEST_DIR)
 	./$(BINARY) new testproject \
 		--module=nova/testproject \
@@ -44,27 +44,32 @@ generate-all: build ## Generate a sample project to test templates (Fiber/Postgr
 	@echo ""
 	@echo "✅ Output at $(TEST_DIR)"
 
-generate-minimal: build ## Generate a minimal project (no DB, no cache, no Docker)
+gen-worker: build ## Generate a worker (consumer) service: Kafka + Postgres + sqlc + Wire
 	rm -rf $(TEST_DIR)
-	./$(BINARY) new testproject \
-		--module=nova/testproject \
-		--transport=http \
-		--http-framework=fiber \
-		--database=none \
+	./$(BINARY) new testworker \
+		--module=nova/testworker \
+		--transport=worker \
+		--database=postgres \
+		--db-driver=pgx \
+		--query=sqlc \
 		--cache=none \
-		--queue=none \
+		--queue=kafka \
 		--config=yaml \
-		--di=manual
-	mv testproject $(TEST_DIR)
+		--di=wire \
+		--docker \
+		--ci=github
+	mv testworker $(TEST_DIR)
+	@echo ""
+	@echo "✅ Output at $(TEST_DIR)"
 
-verify-gen: generate ## Generate + list all output files for review
+verify-gen: gen ## Generate + list all output files for review
 	@echo ""
 	@echo "📂 Generated files:"
 	@find $(TEST_DIR) -type f | sort
 	@echo ""
 	@echo "📊 Total: $$(find $(TEST_DIR) -type f | wc -l | tr -d ' ') files"
 
-diff-gen: generate ## Generate + show key template outputs for quick review
+diff-gen: gen ## Generate + show key template outputs for quick review
 	@echo "=== go.mod ==="
 	@cat $(TEST_DIR)/go.mod
 	@echo "\n=== cmd/api.go ==="

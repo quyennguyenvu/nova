@@ -291,6 +291,71 @@ func baseMatrixConfig(database string) *config.ProjectConfig {
 	return cfg
 }
 
+// TestWorkerBrokerConfigProvider guards against a regression where the worker
+// variants compiled fine but `wire gen` failed because no provider extracted
+// the broker sub-config from *config.Config. The wire.go file is behind the
+// `wireinject` build tag, so `go vet` in the matrix test silently skips it —
+// this test asserts on the rendered text directly.
+//
+// The current shape uses wire.FieldsOf(new(*config.Config), "<Field>") to
+// project the sub-config as a value, and the broker constructor takes the
+// value type. Both halves of that contract are asserted here.
+func TestWorkerBrokerConfigProvider(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		broker          string
+		fieldName       string
+		ctorSymbol      string
+		ctorSubConfig   string
+		pubsubFile      string
+	}{
+		{"kafka", "Kafka", "NewKafkaProducer", "cfg config.KafkaConfig", "kafka.go"},
+		{"rabbitmq", "RabbitMQ", "NewRabbitMQConnection", "cfg config.RabbitMQConfig", "rabbitmq.go"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.broker, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			cfg := workerMatrixConfig("postgres", tc.broker)
+
+			gen, err := New(cfg)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if genErr := gen.Generate(dir); genErr != nil {
+				t.Fatalf("Generate: %v", genErr)
+			}
+
+			wire := readFile(t, filepath.Join(dir, "internal/infrastructure/di/wire.go"))
+			expectFieldsOf := `wire.FieldsOf(new(*config.Config), "` + tc.fieldName + `")`
+			if !strings.Contains(wire, expectFieldsOf) {
+				t.Fatalf("wire.go infraSet missing %q — broker constructor cannot satisfy its config dep", expectFieldsOf)
+			}
+
+			pubsub := readFile(t, filepath.Join(dir, "internal/infrastructure/pubsub", tc.pubsubFile))
+			if !strings.Contains(pubsub, tc.ctorSubConfig) {
+				t.Fatalf("%s: expected %s to take %s (value, not pointer)", tc.pubsubFile, tc.ctorSymbol, tc.ctorSubConfig)
+			}
+
+			provider := readFile(t, filepath.Join(dir, "internal/infrastructure/di/provider.go"))
+			if strings.Contains(provider, "provideKafkaConfig") || strings.Contains(provider, "provideRabbitMQConfig") {
+				t.Fatalf("provider.go contains a stale broker config helper — should be replaced by wire.FieldsOf")
+			}
+		})
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(b)
+}
+
 func runGo(t *testing.T, dir string, args ...string) error {
 	t.Helper()
 	cmd := exec.Command("go", args...)

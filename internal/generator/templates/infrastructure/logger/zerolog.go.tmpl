@@ -20,12 +20,12 @@ type Logger struct {
 }
 
 // New builds a Logger from Config. Writes to stdout.
-func New(cfg *config.Config) *Logger {
-	return NewWithWriter(&cfg.Log, os.Stdout)
+func New(cfg config.LogConfig) *Logger {
+	return NewWithWriter(cfg, os.Stdout)
 }
 
 // NewWithWriter is useful for tests.
-func NewWithWriter(cfg *config.LogConfig, w io.Writer) *Logger {
+func NewWithWriter(cfg config.LogConfig, w io.Writer) *Logger {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
 	writer := w

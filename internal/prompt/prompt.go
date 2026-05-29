@@ -65,7 +65,7 @@ func promptProjectBasics(cfg *config.ProjectConfig) error {
 func promptTransport(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Transport layer:",
-		Options: []string{"http", "grpc", "cron", "cli", "worker"},
+		Options: []string{"http", "grpc", "worker", "cron", "cli"},
 		Default: "http",
 	}, &cfg.Transport); err != nil {
 		return err
@@ -147,10 +147,14 @@ func promptCache(cfg *config.ProjectConfig) error {
 }
 
 func promptMessageQueue(cfg *config.ProjectConfig) error {
+	defaultMQ := "none"
+	if cfg.HasWorker() {
+		defaultMQ = "kafka"
+	}
 	if err := survey.AskOne(&survey.Select{
 		Message: "Message queue:",
 		Options: []string{"kafka", "rabbitmq", "nats", "none"},
-		Default: "none",
+		Default: defaultMQ,
 	}, &cfg.MessageQueue); err != nil {
 		return err
 	}

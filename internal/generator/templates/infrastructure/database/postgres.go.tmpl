@@ -14,15 +14,15 @@ import (
 )
 
 // NewPostgresDB creates a new PostgreSQL connection pool.
-func NewPostgresDB(cfg *config.Config, log *logger.Logger) (*pgxpool.Pool, func(), error) {
-	hostPort := net.JoinHostPort(cfg.Database.Host, strconv.Itoa(cfg.Database.Port))
+func NewPostgresDB(cfg config.DatabaseConfig, log *logger.Logger) (*pgxpool.Pool, func(), error) {
+	hostPort := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	dsn := fmt.Sprintf(
 		"postgres://%s:%s@%s/%s?sslmode=%s",
-		cfg.Database.User,
-		cfg.Database.Password,
+		cfg.User,
+		cfg.Password,
 		hostPort,
-		cfg.Database.Name,
-		cfg.Database.SSLMode,
+		cfg.Name,
+		cfg.SSLMode,
 	)
 
 	poolCfg, err := pgxpool.ParseConfig(dsn)
@@ -30,12 +30,12 @@ func NewPostgresDB(cfg *config.Config, log *logger.Logger) (*pgxpool.Pool, func(
 		return nil, nil, errors.Wrap(err, "failed to parse database config")
 	}
 
-	poolCfg.MaxConns = cfg.Database.MaxConns
-	poolCfg.MinConns = cfg.Database.MinConns
-	poolCfg.MaxConnLifetime = cfg.Database.MaxConnLifetime
-	poolCfg.MaxConnIdleTime = cfg.Database.MaxConnIdleTime
+	poolCfg.MaxConns = cfg.MaxConns
+	poolCfg.MinConns = cfg.MinConns
+	poolCfg.MaxConnLifetime = cfg.MaxConnLifetime
+	poolCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Database.ConnectTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
 	defer cancel()
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)

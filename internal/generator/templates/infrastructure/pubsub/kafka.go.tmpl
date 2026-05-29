@@ -11,7 +11,7 @@ import (
 
 // NewKafkaProducer creates a Sarama sync producer. Infrastructure — connection
 // setup only, no business logic.
-func NewKafkaProducer(cfg *config.KafkaConfig, log *logger.Logger) (sarama.SyncProducer, func(), error) {
+func NewKafkaProducer(cfg config.KafkaConfig, log *logger.Logger) (sarama.SyncProducer, func(), error) {
 	saramaCfg := sarama.NewConfig()
 	saramaCfg.Producer.Return.Successes = true
 	saramaCfg.Producer.RequiredAcks = sarama.WaitForAll
@@ -38,7 +38,7 @@ func NewKafkaProducer(cfg *config.KafkaConfig, log *logger.Logger) (sarama.SyncP
 // cfg.ConsumerGroupID. The worker process consumes via group membership so
 // partitions rebalance automatically when replicas come and go. The caller
 // owns Consume()/Close() lifecycle — see transport/worker.kafkaConsumer.
-func NewKafkaConsumerGroup(cfg *config.KafkaConfig, log *logger.Logger) (sarama.ConsumerGroup, func(), error) {
+func NewKafkaConsumerGroup(cfg config.KafkaConfig, log *logger.Logger) (sarama.ConsumerGroup, func(), error) {
 	if cfg.ConsumerGroupID == "" {
 		return nil, nil, fmt.Errorf("kafka: consumer_group_id is required for worker mode")
 	}

@@ -17,7 +17,7 @@ import (
 type HTTPServer struct {
 	echo   *echo.Echo
 	addr   string
-	cfg    *config.Config
+	cfg    config.HTTPConfig
 	logger *logger.Logger
 }
 
@@ -26,15 +26,15 @@ type HTTPServer struct {
 // time cleanup runs the parent ctx is already SIGINT-cancelled.
 func NewHTTPServer(
 	_ context.Context,
-	cfg *config.Config,
+	cfg config.HTTPConfig,
 	log *logger.Logger,
 	e *echo.Echo,
 ) (*HTTPServer, func(), error) {
-	addr := fmt.Sprintf(":%s", cfg.HTTP.Port)
+	addr := fmt.Sprintf(":%s", cfg.Port)
 	s := &HTTPServer{echo: e, addr: addr, cfg: cfg, logger: log}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down HTTP server", "addr", addr)

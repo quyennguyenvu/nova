@@ -11,7 +11,7 @@ import (
 
 // NewRabbitMQConnection dials RabbitMQ. Infrastructure — connection setup
 // only, no business logic.
-func NewRabbitMQConnection(cfg *config.RabbitMQConfig) (*amqp.Connection, error) {
+func NewRabbitMQConnection(cfg config.RabbitMQConfig) (*amqp.Connection, error) {
 	conn, err := amqp.Dial(cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)

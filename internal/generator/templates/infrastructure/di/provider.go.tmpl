@@ -25,13 +25,6 @@ func provideValidator() *validator.Validate {
 
 {{- if .HasHTTP}}
 
-// provideLoginRateLimit projects the nested config.HTTP.LoginRateLimit field
-// out for Wire — Wire prefers values over deeply-nested struct accesses, so
-// expose it as its own provider rather than wire.FieldsOf magic.
-func provideLoginRateLimit(cfg *config.Config) config.LoginRateLimitConfig {
-	return cfg.HTTP.LoginRateLimit
-}
-
 // provideRegistrars assembles every feature's Routes into a slice that
 // transport/http.NewApp consumes in order. Each Routes carries its own
 // Prefix() — the slice order determines mount order, not the prefix string.
