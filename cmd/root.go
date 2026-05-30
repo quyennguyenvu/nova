@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +38,9 @@ Use "{{.CommandPath}} [command] --help" for more info.
 		generateCommand(),
 	)
 
+	// cobra already prints "Error: ..." (and usage) to stderr when a command
+	// returns an error; exit non-zero without dumping a panic stack trace.
 	if err := rootCmd.Execute(); err != nil {
-		panic(err)
+		os.Exit(1)
 	}
 }

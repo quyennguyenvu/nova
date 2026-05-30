@@ -48,7 +48,7 @@ type Checker struct {
 }
 
 // NewChecker is the DI provider. Order of parameters mirrors the order
-// these dependencies are constructed in container.go / wire_gen.go.
+// these dependencies are constructed in wire_gen.go.
 func NewChecker(
 {{- if and .HasDatabase (eq .Database "postgres")}}
 	pool *pgxpool.Pool,

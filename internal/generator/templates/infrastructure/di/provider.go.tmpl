@@ -25,18 +25,18 @@ func provideValidator() *validator.Validate {
 
 {{- if .HasHTTP}}
 
-// provideRegistrars assembles every feature's Routes into a slice that
-// transport/http.NewApp consumes in order. Each Routes carries its own
+// provideRegistrars assembles every feature's Registrar into a slice that
+// transport/http.NewRouter consumes in order. Each Registrar carries its own
 // Prefix() — the slice order determines mount order, not the prefix string.
 // Add new features here as they appear.
 //
 // The transporthttp.Registrar interface is framework-specific — its Register
-// signature is set by whichever app file was generated (fiber/gin/chi/echo).
-// As long as each *Routes type's Register method matches the chosen framework's
-// router type, this provider compiles unchanged.
-func provideRegistrars(userRoutes *userv1.Routes) []transporthttp.Registrar {
+// signature is set by whichever router file was generated (fiber/gin/chi/echo).
+// As long as each *Registrar type's Register method matches the chosen
+// framework's router type, this provider compiles unchanged.
+func provideRegistrars(userRegistrar *userv1.Registrar) []transporthttp.Registrar {
 	return []transporthttp.Registrar{
-		userRoutes,
+		userRegistrar,
 	}
 }
 {{- end}}

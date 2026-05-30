@@ -92,14 +92,14 @@ var infraSet = wire.NewSet(
 
 {{- if .HasHTTP}}
 
-// httpInfraSet adds providers only the HTTP transport needs (server, app,
+// httpInfraSet adds providers only the HTTP transport needs (server, router,
 // health checker). Kept separate from infraSet so the worker mode's wire
 // graph isn't polluted with HTTP-specific dependencies.
 var httpInfraSet = wire.NewSet(
 	wire.FieldsOf(new(*config.Config), "HTTP"),
 	wire.FieldsOf(new(config.HTTPConfig), "LoginRateLimit"),
 	health.NewChecker,
-	transporthttp.NewApp,
+	transporthttp.NewRouter,
 	server.NewHTTPServer,
 )
 {{- end}}
@@ -164,7 +164,7 @@ var usecaseSet = wire.NewSet(
 {{- if .HasHTTP}}
 var transportSet = wire.NewSet(
 	userv1.NewHandler,
-	userv1.NewRoutes,
+	userv1.NewRegistrar,
 	provideRegistrars,
 )
 
@@ -202,7 +202,7 @@ var workerHandlerSet = wire.NewSet(
 
 // InitializeWorker returns the WorkerApp bundle for the consumer process.
 // Wire only constructs providers reachable from WorkerApp's struct fields,
-// so HTTP/gRPC-only providers (server.NewHTTPServer, transporthttp.NewApp,
+// so HTTP/gRPC-only providers (server.NewHTTPServer, transporthttp.NewRouter,
 // health.NewChecker, transportSet) aren't dragged into the worker binary.
 func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	panic(wire.Build(

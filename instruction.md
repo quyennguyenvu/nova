@@ -27,7 +27,7 @@ Ask the user for:
 - Cache: Redis / In-memory (bigcache) / None
 - Message queue: Kafka / RabbitMQ / NATS / None
 - Configuration: YAML / TOML / Environment variables only
-- Dependency Injection: Google Wire / Uber fx / Manual
+- Dependency Injection: Google Wire / Uber fx
 - Include Docker setup: Yes / No
 - Include CI/CD (GitHub Actions): Yes / No
 - Include Makefile: Yes / No

@@ -33,7 +33,7 @@ type ProjectConfig struct {
 	ConfigFormat string `json:"config_format"` // "yaml", "toml"
 
 	// Dependency Injection
-	DI string `json:"di"` // "wire", "fx", "manual"
+	DI string `json:"di"` // "wire", "fx"
 
 	// Optional features
 	IncludeDocker bool `json:"include_docker"`
@@ -100,11 +100,6 @@ func (c *ProjectConfig) UseWire() bool {
 // UseFx returns true if Uber fx DI is selected.
 func (c *ProjectConfig) UseFx() bool {
 	return c.DI == "fx"
-}
-
-// UseManualDI returns true if manual DI is selected.
-func (c *ProjectConfig) UseManualDI() bool {
-	return c.DI == "manual"
 }
 
 // DefaultConfig returns a sensible default configuration (Quick Start).

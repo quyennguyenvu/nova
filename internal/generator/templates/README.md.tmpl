@@ -31,10 +31,10 @@ internal/
 ├── transport/              # Inbound transport (HTTP/gRPC)
 │   {{- if .HasHTTP}}
 │   └── http/
-│       ├── app.go          # Framework instance + middleware order + Registrar interface
+│       ├── router.go       # Framework instance + middleware order + Registrar interface
 │       ├── httpwriter/     # Framework-specific response envelope writer
 │       ├── middleware/     # RequestID, Logging, Recovery, CORS, Locale, Auth
-│       └── v1/user/        # Handler, Routes, DTOs, assembler
+│       └── v1/user/        # Handler, Registrar, DTOs, assembler
 │   {{- end}}
 │
 ├── app/                    # Entry-point glue (RunHTTPServer)

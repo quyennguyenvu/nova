@@ -13,7 +13,7 @@ import (
 )
 
 // HTTPServer is the lifecycle wrapper around a pre-built echo instance. The
-// instance itself (middleware, routes, healthz) is built in transport/http.NewApp.
+// instance itself (middleware, routes, healthz) is built in transport/http.NewRouter.
 type HTTPServer struct {
 	echo   *echo.Echo
 	addr   string

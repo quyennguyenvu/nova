@@ -36,7 +36,7 @@ type Generator struct {
 }
 
 // supportedFrameworks is the whitelist for cfg.HTTPFramework. Each value must
-// have a matching `<framework>_app.go.tmpl` + middleware + handler set in
+// have a matching `<framework>_router.go.tmpl` + middleware + handler set in
 // internal/generator/templates/. Add new frameworks here in lockstep with
 // the template files.
 //
@@ -59,8 +59,19 @@ var supportedDatabases = map[string]bool{
 	"mysql":    true,
 }
 
+// supportedDI is the whitelist for cfg.DI. "wire" renders wire.go (+ wire_gen.go
+// via `make gen`); "fx" is accepted but its templates are not implemented yet.
+// Values outside this set — the removed "manual", or a typo — fail fast in New()
+// instead of rendering a project with no Initialize* functions.
+//
+//nolint:gochecknoglobals // immutable validation set; treated as a const.
+var supportedDI = map[string]bool{
+	"wire": true,
+	"fx":   true,
+}
+
 // New creates a new Generator. It fails fast on misconfigured cfg.Framework /
-// cfg.Database so a typo (e.g. "echo2") surfaces here instead of producing a
+// cfg.Database / cfg.DI so a typo (e.g. "echo2") surfaces here instead of producing a
 // half-rendered project with cryptic "template not found in embedded FS" errors.
 func New(cfg *config.ProjectConfig) (*Generator, error) {
 	if cfg.HasHTTP() && !supportedFrameworks[cfg.HTTPFramework] {
@@ -73,6 +84,12 @@ func New(cfg *config.ProjectConfig) (*Generator, error) {
 		return nil, fmt.Errorf(
 			"generator: unsupported Database %q (valid: postgres, mysql, none)",
 			cfg.Database,
+		)
+	}
+	if !supportedDI[cfg.DI] {
+		return nil, fmt.Errorf(
+			"generator: unsupported DI %q (valid: wire, fx)",
+			cfg.DI,
 		)
 	}
 
@@ -325,12 +342,12 @@ func (g *Generator) adapterFiles() []templateFile {
 func (g *Generator) transportFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{
-		// HTTP app — Registrar interface + NewApp (middleware, healthz, feature
-		// routes). Source is framework-prefixed so all variants live side-by-side;
-		// generated as transport/http/app.go.
+		// HTTP root router — Registrar interface + NewRouter (middleware, healthz,
+		// feature routes). Source is framework-prefixed so all variants live
+		// side-by-side; generated as transport/http/router.go.
 		{
-			fmt.Sprintf("templates/transport/http/%s_app.go.tmpl", cfg.HTTPFramework),
-			"internal/transport/http/app.go",
+			fmt.Sprintf("templates/transport/http/%s_router.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/router.go",
 			cfg.HasHTTP(),
 		},
 
@@ -360,18 +377,18 @@ func (g *Generator) transportFiles() []templateFile {
 			"internal/transport/http/v1/user/assembler.go",
 			cfg.HasHTTP(),
 		},
-		// HTTP v1/user — per-framework handler + router. Source templates are
+		// HTTP v1/user — per-framework handler + registrar. Source templates are
 		// framework-prefixed (fiber_handler.go.tmpl, …) so all variants live
 		// side-by-side, but the generated output drops the prefix so the
-		// project sees clean names: handler.go, router.go.
+		// project sees clean names: handler.go, registrar.go.
 		{
 			fmt.Sprintf("templates/transport/http/v1/user/%s_handler.go.tmpl", cfg.HTTPFramework),
 			"internal/transport/http/v1/user/handler.go",
 			cfg.HasHTTP(),
 		},
 		{
-			fmt.Sprintf("templates/transport/http/v1/user/%s_router.go.tmpl", cfg.HTTPFramework),
-			"internal/transport/http/v1/user/router.go",
+			fmt.Sprintf("templates/transport/http/v1/user/%s_registrar.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/v1/user/registrar.go",
 			cfg.HasHTTP(),
 		},
 		// HTTP middleware — same pattern: framework-prefixed source, clean output.
@@ -480,7 +497,6 @@ func (g *Generator) infrastructureFiles() []templateFile {
 		{"templates/infrastructure/logger/zerolog.go.tmpl", "internal/infrastructure/logger/zerolog.go", true},
 		{"templates/infrastructure/security/bcrypt.go.tmpl", "internal/infrastructure/security/bcrypt.go", true},
 		{"templates/infrastructure/tracing/otel.go.tmpl", "internal/infrastructure/tracing/otel.go", true},
-		{"templates/infrastructure/di/container.go.tmpl", "internal/infrastructure/di/container.go", cfg.UseManualDI()},
 		{"templates/infrastructure/di/wire.go.tmpl", "internal/infrastructure/di/wire.go", cfg.UseWire()},
 		{
 			"templates/infrastructure/di/provider.go.tmpl",

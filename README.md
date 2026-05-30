@@ -77,7 +77,7 @@ Generates a complete project. With no flags it runs interactively; pass any flag
 | `--cache`          | `redis`, `none`                       | `redis`                   |
 | `--queue`          | `kafka`, `none`                       | `none`                    |
 | `--config`         | `yaml`, `toml`, `env`                 | `yaml`                    |
-| `--di`             | `wire`, `manual`                      | `wire`                    |
+| `--di`             | `wire`                                | `wire`                    |
 | `--docker`         | _(bool)_                              | `true`                    |
 | `--makefile`       | _(bool)_                              | `true`                    |
 | `--ci`             | `github`, `none`                      | `github`                  |

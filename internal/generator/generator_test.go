@@ -347,6 +347,27 @@ func TestWorkerBrokerConfigProvider(t *testing.T) {
 	}
 }
 
+// TestNewRejectsUnsupportedDI guards the supportedDI whitelist: removed or
+// typo'd DI strategies must fail fast in New() rather than render a project
+// with no Initialize* functions. "manual" was removed; "" is never valid.
+func TestNewRejectsUnsupportedDI(t *testing.T) {
+	t.Parallel()
+	for _, di := range []string{"manual", "", "spring"} {
+		cfg := baseMatrixConfig("postgres")
+		cfg.DI = di
+		if _, err := New(cfg); err == nil {
+			t.Errorf("New() with DI=%q: want error, got nil", di)
+		}
+	}
+	for _, di := range []string{"wire", "fx"} {
+		cfg := baseMatrixConfig("postgres")
+		cfg.DI = di
+		if _, err := New(cfg); err != nil {
+			t.Errorf("New() with DI=%q: want nil, got %v", di, err)
+		}
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

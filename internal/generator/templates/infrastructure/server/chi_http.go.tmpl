@@ -13,7 +13,7 @@ import (
 )
 
 // HTTPServer is the lifecycle wrapper around a pre-built chi router. The
-// router itself (middleware, routes, healthz) is built in transport/http.NewApp.
+// router itself (middleware, routes, healthz) is built in transport/http.NewRouter.
 type HTTPServer struct {
 	server *http.Server
 	cfg    config.HTTPConfig

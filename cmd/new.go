@@ -40,7 +40,7 @@ Examples:
 	f.String("cache", "", "Cache: redis, bigcache, none")
 	f.String("queue", "", "Message queue: kafka, rabbitmq, nats, none")
 	f.String("config", "", "Configuration format: yaml, toml, env")
-	f.String("di", "", "Dependency injection: wire, fx, manual")
+	f.String("di", "", "Dependency injection: wire, fx")
 	f.Bool("docker", false, "Include Docker setup")
 	f.String("ci", "", "CI/CD: github, none")
 

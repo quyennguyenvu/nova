@@ -17,19 +17,19 @@ import (
 )
 
 // Registrar attaches a feature's routes to a router subtree. Each feature
-// (transport/http/v1/<feature>) provides a *Routes implementing this. Prefix
-// is mounted via chi.Router.Route before Register is called. Multiple
-// Registrars may share a Prefix; the slice order in NewApp determines mount
-// order.
+// (transport/http/v1/<feature>) provides a concrete Registrar implementing
+// this interface. Prefix is mounted via chi.Router.Route before Register is
+// called. Multiple Registrars may share a Prefix; the slice order in NewRouter
+// determines mount order.
 type Registrar interface {
 	Prefix() string
 	Register(chi.Router)
 }
 
-// NewApp builds the chi router: middleware → probes → registrars at their prefixes.
+// NewRouter builds the chi router: middleware → probes → registrars at their prefixes.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
-func NewApp(
+func NewRouter(
 	cfg *config.Config,
 	log *logger.Logger,
 	checker *health.Checker,

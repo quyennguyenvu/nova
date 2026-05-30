@@ -8,20 +8,20 @@ import (
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
 
-// Routes is the user feature's HTTP route registrar. It implements the
-// transport/http.Registrar interface — mounted at /api/v1 by the app.
-type Routes struct {
+// Registrar registers the user feature's HTTP routes. It implements the
+// transport/http.Registrar interface — mounted at /api/v1 by the root router.
+type Registrar struct {
 	handler    *Handler
 	tokenSvc   *jwtsec.TokenService
 	loginLimit config.LoginRateLimitConfig
 }
 
-func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.LoginRateLimitConfig) *Routes {
-	return &Routes{handler: h, tokenSvc: tokenSvc, loginLimit: loginLimit}
+func NewRegistrar(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.LoginRateLimitConfig) *Registrar {
+	return &Registrar{handler: h, tokenSvc: tokenSvc, loginLimit: loginLimit}
 }
 
 // Prefix is the API version subtree this feature mounts under.
-func (*Routes) Prefix() string { return "/api/v1" }
+func (*Registrar) Prefix() string { return "/api/v1" }
 
 // Register mounts:
 //   - POST /login              (public — issues bearer token)
@@ -30,7 +30,7 @@ func (*Routes) Prefix() string { return "/api/v1" }
 //
 // chi.Router.Group introduces a child router that owns the Auth middleware so
 // it never bleeds into siblings.
-func (r *Routes) Register(router chi.Router) {
+func (r *Registrar) Register(router chi.Router) {
 	router.With(middleware.LoginRateLimit(r.loginLimit)).Post("/login", r.handler.Login)
 
 	router.Route("/users", func(sub chi.Router) {

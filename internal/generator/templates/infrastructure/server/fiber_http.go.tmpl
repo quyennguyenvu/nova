@@ -11,7 +11,7 @@ import (
 )
 
 // HTTPServer is the lifecycle wrapper around a pre-built fiber app. The app
-// itself (middleware, routes, healthz) is constructed in transport/http.NewApp.
+// itself (middleware, routes, healthz) is constructed in transport/http.NewRouter.
 type HTTPServer struct {
 	app    *fiber.App
 	addr   string

@@ -8,24 +8,24 @@ import (
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
 
-// Routes is the user feature's HTTP route registrar. It implements the
-// transport/http.Registrar interface — mounted at /api/v1 by the app.
+// Registrar registers the user feature's HTTP routes. It implements the
+// transport/http.Registrar interface — mounted at /api/v1 by the root router.
 //
 // The constructor takes the JWT TokenService + rate-limit config so Register
 // can build the auth middleware and gate the protected subgroup, and
 // throttle the public login endpoint without depending on globals.
-type Routes struct {
-	handler        *Handler
-	tokenSvc       *jwtsec.TokenService
-	loginLimit     config.LoginRateLimitConfig
+type Registrar struct {
+	handler    *Handler
+	tokenSvc   *jwtsec.TokenService
+	loginLimit config.LoginRateLimitConfig
 }
 
-func NewRoutes(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.LoginRateLimitConfig) *Routes {
-	return &Routes{handler: h, tokenSvc: tokenSvc, loginLimit: loginLimit}
+func NewRegistrar(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.LoginRateLimitConfig) *Registrar {
+	return &Registrar{handler: h, tokenSvc: tokenSvc, loginLimit: loginLimit}
 }
 
 // Prefix is the API version subtree this feature mounts under.
-func (*Routes) Prefix() string { return "/api/v1" }
+func (*Registrar) Prefix() string { return "/api/v1" }
 
 // Register mounts:
 //   - POST /login             (public — issues bearer token)
@@ -34,7 +34,7 @@ func (*Routes) Prefix() string { return "/api/v1" }
 //
 // Splitting at the group level (not per-route) keeps the auth boundary
 // obvious; protected routes share one Auth middleware instance.
-func (r *Routes) Register(router fiber.Router) {
+func (r *Registrar) Register(router fiber.Router) {
 	router.Post("/login", middleware.LoginRateLimit(r.loginLimit), r.handler.Login)
 
 	public := router.Group("/users")

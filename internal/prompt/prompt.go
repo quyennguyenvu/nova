@@ -175,7 +175,7 @@ func promptConfigFormat(cfg *config.ProjectConfig) error {
 func promptDI(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Dependency injection:",
-		Options: []string{"wire", "fx", "manual"},
+		Options: []string{"wire", "fx"},
 		Default: "wire",
 	}, &cfg.DI); err != nil {
 		return err

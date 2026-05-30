@@ -16,15 +16,16 @@ import (
 )
 
 // Registrar attaches a feature's routes to a router subtree. Each feature
-// (transport/http/v1/<feature>) provides a *Routes implementing this. Prefix
-// is mounted as a subgroup before Register is called. Multiple Registrars may
-// share a Prefix; the slice order in NewApp determines mount order.
+// (transport/http/v1/<feature>) provides a concrete Registrar implementing
+// this interface. Prefix is mounted as a subgroup before Register is called.
+// Multiple Registrars may share a Prefix; the slice order in NewRouter
+// determines mount order.
 type Registrar interface {
 	Prefix() string
 	Register(fiber.Router)
 }
 
-// NewApp builds the fiber app: middleware → probes → registrars at their prefixes.
+// NewRouter builds the fiber app: middleware → probes → registrars at their prefixes.
 // Order of middleware matters: RequestID first (so every later layer sees the
 // ID), Logging second (wraps everything to compute duration & emit one line),
 // Recovery inside Logging so panics still produce an access log.
@@ -34,7 +35,7 @@ type Registrar interface {
 // /healthz and /readyz are mounted BEFORE the middleware stack-... actually
 // no — they sit inside it so panics during readiness still flow through the
 // envelope. The check itself is cheap so the middleware overhead is fine.
-func NewApp(
+func NewRouter(
 	cfg *config.Config,
 	log *logger.Logger,
 	checker *health.Checker,
