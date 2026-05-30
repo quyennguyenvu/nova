@@ -1,0 +1,281 @@
+package di
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/fx"
+
+{{- if and .HasMessageQueue (or .HasHTTP .HasWorker)}}
+	"{{.ModuleName}}/internal/adapter/pubsub"
+{{- end}}
+{{- if and (eq .Database "postgres") (or .HasHTTP .HasWorker)}}
+	postgresrepo "{{.ModuleName}}/internal/adapter/repository/postgres"
+{{- end}}
+{{- if and (eq .Database "mysql") (or .HasHTTP .HasWorker)}}
+	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
+{{- end}}
+{{- if or .HasHTTP .HasWorker}}
+	"{{.ModuleName}}/internal/domain"
+{{- end}}
+	domainsec "{{.ModuleName}}/internal/domain/security"
+	"{{.ModuleName}}/internal/infrastructure/config"
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+{{- if eq .MessageQueue "rabbitmq"}}
+	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
+{{- end}}
+	infrasec "{{.ModuleName}}/internal/infrastructure/security"
+{{- if or .HasHTTP .HasGRPC}}
+	"{{.ModuleName}}/internal/infrastructure/server"
+{{- end}}
+{{- if .HasHTTP}}
+	transporthttp "{{.ModuleName}}/internal/transport/http"
+	"{{.ModuleName}}/internal/transport/http/health"
+	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
+{{- end}}
+{{- if .HasWorker}}
+	"{{.ModuleName}}/internal/transport/worker"
+	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
+	"{{.ModuleName}}/internal/usecase/useraudit"
+{{- end}}
+{{- if or .HasHTTP .HasWorker}}
+	usersvc "{{.ModuleName}}/internal/usecase/user"
+{{- end}}
+)
+
+// stopTimeout bounds how long fx waits for every OnStop hook to finish during
+// cleanup. Each underlying cleanup also enforces its own deadline, so this is a
+// process-wide backstop, not the per-resource budget.
+const stopTimeout = 15 * time.Second
+
+// This file is the Uber fx counterpart to Wire's wire.go. It produces the same
+// Initialize* entry points with identical (*App, func(), error) signatures, so
+// the app layer (internal/app) is byte-for-byte the same whichever DI engine
+// was selected. fx constructs lazily — only the providers reachable from the
+// populated App fields are built, mirroring Wire's pruning of unused providers.
+// The providers themselves live in fx_provider.go (the fx analogue of
+// provider.go); this file is just the module composition + entry points.
+
+// --- modules ---
+// One module per Wire set. infraModule mirrors infraSet; the transport-specific
+// modules mirror httpInfraSet / grpcInfraSet / workerInfraSet, and are composed
+// per entry point so unused transport providers never enter the graph.
+
+func infraModule() fx.Option {
+	return fx.Provide(
+		config.Load,
+		provideLogConfig,
+		provideJWTConfig,
+		provideSecurityConfig,
+		logger.New,
+		jwtsec.NewTokenService,
+		fx.Annotate(infrasec.NewBcryptHasher, fx.As(new(domainsec.PasswordHasher))),
+		provideValidator,
+		provideTracingConfig,
+		provideTracer,
+{{- if .HasDatabase}}
+		provideDatabaseConfig,
+{{- end}}
+{{- if eq .Database "postgres"}}
+		providePostgresDB,
+{{- end}}
+{{- if eq .Database "mysql"}}
+		provideMySQLDB,
+{{- end}}
+{{- if .HasRedis}}
+		provideRedisConfig,
+		provideRedisCache,
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+		provideKafkaConfig,
+		provideKafkaProducer,
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+		provideRabbitMQConfig,
+		infraPubsub.NewRabbitMQConnection,
+{{- end}}
+	)
+}
+
+{{- if .HasHTTP}}
+
+func httpModule() fx.Option {
+	return fx.Provide(
+		provideHTTPConfig,
+		provideLoginRateLimitConfig,
+		health.NewChecker,
+		transporthttp.NewRouter,
+		provideHTTPServer,
+	)
+}
+
+func transportModule() fx.Option {
+	return fx.Provide(
+		userv1.NewHandler,
+		userv1.NewRegistrar,
+		provideRegistrars,
+	)
+}
+{{- end}}
+
+{{- if .HasGRPC}}
+
+func grpcModule() fx.Option {
+	return fx.Provide(
+		provideGRPCConfig,
+		provideGRPCServer,
+	)
+}
+{{- end}}
+
+{{- if .HasWorker}}
+
+func workerModule() fx.Option {
+	return fx.Provide(
+{{- if eq .MessageQueue "kafka"}}
+		provideKafkaConsumerGroup,
+		worker.NewKafkaConsumer,
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+		provideRabbitMQConfigPtr,
+		provideRabbitMQChannel,
+		worker.NewRabbitMQConsumer,
+{{- end}}
+		worker.NewWorker,
+		provideWorkerHandlers,
+		workeruser.NewHandler,
+	)
+}
+{{- end}}
+
+{{- if or .HasHTTP .HasWorker}}
+
+func adapterModule() fx.Option {
+	return fx.Provide(
+{{- if eq .Database "postgres"}}
+		fx.Annotate(postgresrepo.NewUserRepository, fx.As(new(domain.UserRepository))),
+{{- if .HasWorker}}
+		fx.Annotate(postgresrepo.NewUserAuditRepository, fx.As(new(domain.UserAuditRepository))),
+{{- end}}
+{{- end}}
+{{- if eq .Database "mysql"}}
+		fx.Annotate(mysqlrepo.NewUserRepository, fx.As(new(domain.UserRepository))),
+{{- if .HasWorker}}
+		fx.Annotate(mysqlrepo.NewUserAuditRepository, fx.As(new(domain.UserAuditRepository))),
+{{- end}}
+{{- end}}
+{{- if .HasMessageQueue}}
+		fx.Annotate(pubsub.NewPublisher, fx.As(new(domain.UserPublisher))),
+{{- end}}
+	)
+}
+
+func usecaseModule() fx.Option {
+	return fx.Provide(
+		usersvc.NewService,
+{{- if .HasWorker}}
+		useraudit.NewService,
+{{- end}}
+	)
+}
+{{- end}}
+
+{{- if .HasHTTP}}
+
+// InitializeHTTPServer builds the HTTP app graph with fx and returns the same
+// (*HTTPApp, func(), error) shape as the Wire variant. fx instantiates only the
+// providers HTTPApp's fields transitively need; cleanup runs every OnStop hook
+// in reverse construction order.
+func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
+	var (
+		log    *logger.Logger
+		srv    *server.HTTPServer
+		tracer trace.Tracer
+	)
+	fxApp := fx.New(
+		fx.NopLogger,
+		fx.Provide(func() context.Context { return ctx }),
+		infraModule(),
+		httpModule(),
+		adapterModule(),
+		usecaseModule(),
+		transportModule(),
+		fx.Populate(&log, &srv, &tracer),
+	)
+	if err := fxApp.Start(ctx); err != nil {
+		return nil, nil, fmt.Errorf("fx: start http app: %w", err)
+	}
+	cleanup := func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		_ = fxApp.Stop(stopCtx)
+	}
+	return &HTTPApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
+}
+{{- end}}
+
+{{- if .HasGRPC}}
+
+// InitializeGRPCServer wires the gRPC server with fx. Service registration is
+// the caller's responsibility — call app.Server.Server() to get the underlying
+// *grpc.Server.
+func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
+	var (
+		log    *logger.Logger
+		srv    *server.GRPCServer
+		tracer trace.Tracer
+	)
+	fxApp := fx.New(
+		fx.NopLogger,
+		fx.Provide(func() context.Context { return ctx }),
+		infraModule(),
+		grpcModule(),
+		fx.Populate(&log, &srv, &tracer),
+	)
+	if err := fxApp.Start(ctx); err != nil {
+		return nil, nil, fmt.Errorf("fx: start grpc app: %w", err)
+	}
+	cleanup := func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		_ = fxApp.Stop(stopCtx)
+	}
+	return &GRPCApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
+}
+{{- end}}
+
+{{- if .HasWorker}}
+
+// InitializeWorker builds the consumer worker graph with fx. Only providers
+// reachable from WorkerApp's fields are constructed, so HTTP/gRPC-only
+// providers stay out of the worker binary — the fx analogue of Wire only
+// building what WorkerApp's struct fields reach.
+func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
+	var (
+		log    *logger.Logger
+		w      *worker.Worker
+		tracer trace.Tracer
+	)
+	fxApp := fx.New(
+		fx.NopLogger,
+		fx.Provide(func() context.Context { return ctx }),
+		infraModule(),
+		workerModule(),
+		adapterModule(),
+		usecaseModule(),
+		fx.Populate(&log, &w, &tracer),
+	)
+	if err := fxApp.Start(ctx); err != nil {
+		return nil, nil, fmt.Errorf("fx: start worker app: %w", err)
+	}
+	cleanup := func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		_ = fxApp.Stop(stopCtx)
+	}
+	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil
+}
+{{- end}}

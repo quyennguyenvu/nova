@@ -60,7 +60,9 @@ var supportedDatabases = map[string]bool{
 }
 
 // supportedDI is the whitelist for cfg.DI. "wire" renders wire.go (+ wire_gen.go
-// via `make gen`); "fx" is accepted but its templates are not implemented yet.
+// via `make gen`); "fx" renders fx.go, which wires the graph at runtime with
+// Uber fx and needs no code generation. Both expose the same Initialize* entry
+// points so the app layer is identical regardless of the choice.
 // Values outside this set — the removed "manual", or a typo — fail fast in New()
 // instead of rendering a project with no Initialize* functions.
 //
@@ -499,9 +501,19 @@ func (g *Generator) infrastructureFiles() []templateFile {
 		{"templates/infrastructure/tracing/otel.go.tmpl", "internal/infrastructure/tracing/otel.go", true},
 		{"templates/infrastructure/di/wire.go.tmpl", "internal/infrastructure/di/wire.go", cfg.UseWire()},
 		{
-			"templates/infrastructure/di/provider.go.tmpl",
+			"templates/infrastructure/di/fx.go.tmpl",
+			"internal/infrastructure/di/fx.go",
+			cfg.UseFx() && (cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker()),
+		},
+		{
+			"templates/infrastructure/di/fx_provider.go.tmpl",
+			"internal/infrastructure/di/fx_provider.go",
+			cfg.UseFx() && (cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker()),
+		},
+		{
+			"templates/infrastructure/di/wire_provider.go.tmpl",
 			"internal/infrastructure/di/provider.go",
-			cfg.HasHTTP() || cfg.HasWorker(),
+			cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker(),
 		},
 		{
 			"templates/infrastructure/di/app.go.tmpl",

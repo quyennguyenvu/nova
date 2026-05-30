@@ -50,7 +50,7 @@ internal/
     ├── security/           # bcrypt PasswordHasher implementation
     ├── server/             # HTTP server lifecycle (graceful shutdown)
     ├── tracing/            # OpenTelemetry provider + cleanup
-    └── di/                 # {{if .UseWire}}Wire-generated{{else}}manual{{end}} dependency wiring
+    └── di/                 # {{if .UseWire}}Wire-generated{{else}}Uber fx runtime{{end}} dependency wiring
 ```
 
 ## Getting Started
@@ -84,9 +84,9 @@ cp .env.example .env
 # Generate a JWT secret (256-bit minimum) and add to .env
 openssl rand -hex 32 | xargs -I {} sed -i.bak 's/^JWT_SECRET=.*/JWT_SECRET={}/' .env && rm .env.bak
 
-# Install dependencies + run code generators (wire, sqlc)
-go mod tidy
-make gen
+# Install dependencies{{if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}} + run code generators ({{if .UseWire}}wire{{if or (eq .QueryGen "sqlc") .HasGRPC}}, {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc{{if .HasGRPC}}, {{end}}{{end}}{{if .HasGRPC}}proto{{end}}){{end}}
+go mod tidy{{if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
+make gen{{end}}
 {{- if .IncludeDocker}}
 
 # Start infrastructure (database, cache, etc.)
@@ -158,7 +158,9 @@ make dev            # Run with hot-reload (air)
 make test           # Run tests
 make test-coverage  # Run tests with coverage
 make lint           # Run linter
-make gen            # Regenerate wire_gen + sqlc dbgen
+{{- if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
+make gen            # Regenerate {{if .UseWire}}wire_gen{{if or (eq .QueryGen "sqlc") .HasGRPC}} + {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc dbgen{{if .HasGRPC}} + {{end}}{{end}}{{if .HasGRPC}}proto stubs{{end}}
+{{- end}}
 {{- if .HasDatabase}}
 make migrate-up     # Run database migrations
 make migrate-down   # Rollback migrations

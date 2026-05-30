@@ -175,36 +175,43 @@ func TestGenerateMatrix(t *testing.T) {
 	httpFrameworks := []string{"fiber", "gin", "chi", "echo"}
 	dbs := []string{"postgres", "mysql"}
 	brokers := []string{"kafka", "rabbitmq"}
+	// Both DI engines render their own di package: Wire emits a build-tagged
+	// wire.go (skipped by `go vet`, so we stub wire_gen.go) while fx emits a
+	// plain fx.go that `go vet` actually compiles. Running every combo under
+	// both proves fx's runtime wiring is as complete as Wire's generated graph.
+	dis := []string{"wire", "fx"}
 
-	for _, fw := range httpFrameworks {
-		for _, db := range dbs {
-			name := "http_" + fw + "_" + db
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-				runHTTPMatrixCase(t, fw, db)
-			})
+	for _, di := range dis {
+		for _, fw := range httpFrameworks {
+			for _, db := range dbs {
+				name := "http_" + di + "_" + fw + "_" + db
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					runHTTPMatrixCase(t, fw, db, di)
+				})
+			}
 		}
-	}
-	for _, db := range dbs {
-		for _, broker := range brokers {
-			name := "worker_" + db + "_" + broker
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-				runWorkerMatrixCase(t, db, broker)
-			})
+		for _, db := range dbs {
+			for _, broker := range brokers {
+				name := "worker_" + di + "_" + db + "_" + broker
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					runWorkerMatrixCase(t, db, broker, di)
+				})
+			}
 		}
 	}
 }
 
-func runHTTPMatrixCase(t *testing.T, framework, database string) {
+func runHTTPMatrixCase(t *testing.T, framework, database, di string) {
 	t.Helper()
-	cfg := httpMatrixConfig(framework, database)
+	cfg := httpMatrixConfig(framework, database, di)
 	renderAndVet(t, cfg, wireGenHTTPStub)
 }
 
-func runWorkerMatrixCase(t *testing.T, database, broker string) {
+func runWorkerMatrixCase(t *testing.T, database, broker, di string) {
 	t.Helper()
-	cfg := workerMatrixConfig(database, broker)
+	cfg := workerMatrixConfig(database, broker, di)
 	renderAndVet(t, cfg, wireGenWorkerStub)
 }
 
@@ -253,8 +260,8 @@ func writeDBGenStub(t *testing.T, dir, database string) {
 	}
 }
 
-func httpMatrixConfig(framework, database string) *config.ProjectConfig {
-	cfg := baseMatrixConfig(database)
+func httpMatrixConfig(framework, database, di string) *config.ProjectConfig {
+	cfg := baseMatrixConfig(database, di)
 	cfg.Transport = "http"
 	cfg.HTTPFramework = framework
 	cfg.Cache = "redis"
@@ -262,8 +269,8 @@ func httpMatrixConfig(framework, database string) *config.ProjectConfig {
 	return cfg
 }
 
-func workerMatrixConfig(database, broker string) *config.ProjectConfig {
-	cfg := baseMatrixConfig(database)
+func workerMatrixConfig(database, broker, di string) *config.ProjectConfig {
+	cfg := baseMatrixConfig(database, di)
 	cfg.Transport = "worker"
 	cfg.HTTPFramework = ""
 	cfg.Cache = "none"
@@ -271,7 +278,7 @@ func workerMatrixConfig(database, broker string) *config.ProjectConfig {
 	return cfg
 }
 
-func baseMatrixConfig(database string) *config.ProjectConfig {
+func baseMatrixConfig(database, di string) *config.ProjectConfig {
 	v := runtime.Version()
 	cfg := &config.ProjectConfig{
 		ProjectName:   "matrixtest",
@@ -281,7 +288,7 @@ func baseMatrixConfig(database string) *config.ProjectConfig {
 		DBDriver:      "pgx",
 		QueryGen:      "sqlc",
 		ConfigFormat:  "yaml",
-		DI:            "wire",
+		DI:            di,
 		IncludeDocker: false,
 		IncludeCI:     false,
 	}
@@ -304,11 +311,11 @@ func TestWorkerBrokerConfigProvider(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		broker          string
-		fieldName       string
-		ctorSymbol      string
-		ctorSubConfig   string
-		pubsubFile      string
+		broker        string
+		fieldName     string
+		ctorSymbol    string
+		ctorSubConfig string
+		pubsubFile    string
 	}{
 		{"kafka", "Kafka", "NewKafkaProducer", "cfg config.KafkaConfig", "kafka.go"},
 		{"rabbitmq", "RabbitMQ", "NewRabbitMQConnection", "cfg config.RabbitMQConfig", "rabbitmq.go"},
@@ -318,7 +325,7 @@ func TestWorkerBrokerConfigProvider(t *testing.T) {
 		t.Run(tc.broker, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
-			cfg := workerMatrixConfig("postgres", tc.broker)
+			cfg := workerMatrixConfig("postgres", tc.broker, "wire")
 
 			gen, err := New(cfg)
 			if err != nil {
@@ -331,17 +338,71 @@ func TestWorkerBrokerConfigProvider(t *testing.T) {
 			wire := readFile(t, filepath.Join(dir, "internal/infrastructure/di/wire.go"))
 			expectFieldsOf := `wire.FieldsOf(new(*config.Config), "` + tc.fieldName + `")`
 			if !strings.Contains(wire, expectFieldsOf) {
-				t.Fatalf("wire.go infraSet missing %q — broker constructor cannot satisfy its config dep", expectFieldsOf)
+				t.Fatalf(
+					"wire.go infraSet missing %q — broker constructor cannot satisfy its config dep",
+					expectFieldsOf,
+				)
 			}
 
 			pubsub := readFile(t, filepath.Join(dir, "internal/infrastructure/pubsub", tc.pubsubFile))
 			if !strings.Contains(pubsub, tc.ctorSubConfig) {
-				t.Fatalf("%s: expected %s to take %s (value, not pointer)", tc.pubsubFile, tc.ctorSymbol, tc.ctorSubConfig)
+				t.Fatalf(
+					"%s: expected %s to take %s (value, not pointer)",
+					tc.pubsubFile,
+					tc.ctorSymbol,
+					tc.ctorSubConfig,
+				)
 			}
 
 			provider := readFile(t, filepath.Join(dir, "internal/infrastructure/di/provider.go"))
 			if strings.Contains(provider, "provideKafkaConfig") || strings.Contains(provider, "provideRabbitMQConfig") {
 				t.Fatalf("provider.go contains a stale broker config helper — should be replaced by wire.FieldsOf")
+			}
+		})
+	}
+}
+
+// TestFxDISelection asserts the fx DI engine renders fx.go (and not wire.go),
+// and that fx.go exposes the same Initialize* entry point as the Wire variant
+// for each transport. The app layer calls these by name regardless of DI, so a
+// missing/renamed entry point silently breaks the chosen transport.
+func TestFxDISelection(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		cfg        *config.ProjectConfig
+		entryPoint string
+	}{
+		{"http", httpMatrixConfig("fiber", "postgres", "fx"), "func InitializeHTTPServer("},
+		{"worker", workerMatrixConfig("postgres", "kafka", "fx"), "func InitializeWorker("},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+
+			gen, err := New(tc.cfg)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if genErr := gen.Generate(dir); genErr != nil {
+				t.Fatalf("Generate: %v", genErr)
+			}
+
+			diDir := filepath.Join(dir, "internal/infrastructure/di")
+			if _, statErr := os.Stat(filepath.Join(diDir, "wire.go")); !os.IsNotExist(statErr) {
+				t.Fatalf("fx project rendered wire.go — wire and fx must be mutually exclusive")
+			}
+
+			fxSrc := readFile(t, filepath.Join(diDir, "fx.go"))
+			if !strings.Contains(fxSrc, tc.entryPoint) {
+				t.Fatalf(
+					"fx.go missing entry point %q — app layer cannot boot the %s transport",
+					tc.entryPoint,
+					tc.name,
+				)
 			}
 		})
 	}
@@ -353,15 +414,13 @@ func TestWorkerBrokerConfigProvider(t *testing.T) {
 func TestNewRejectsUnsupportedDI(t *testing.T) {
 	t.Parallel()
 	for _, di := range []string{"manual", "", "spring"} {
-		cfg := baseMatrixConfig("postgres")
-		cfg.DI = di
+		cfg := baseMatrixConfig("postgres", di)
 		if _, err := New(cfg); err == nil {
 			t.Errorf("New() with DI=%q: want error, got nil", di)
 		}
 	}
 	for _, di := range []string{"wire", "fx"} {
-		cfg := baseMatrixConfig("postgres")
-		cfg.DI = di
+		cfg := baseMatrixConfig("postgres", di)
 		if _, err := New(cfg); err != nil {
 			t.Errorf("New() with DI=%q: want nil, got %v", di, err)
 		}

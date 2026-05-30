@@ -1,0 +1,203 @@
+package di
+
+import (
+	"context"
+{{- if eq .Database "mysql"}}
+	"database/sql"
+{{- end}}
+
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/fx"
+
+{{- if .HasRedis}}
+	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
+{{- end}}
+	"{{.ModuleName}}/internal/infrastructure/config"
+{{- if .HasDatabase}}
+	"{{.ModuleName}}/internal/infrastructure/database"
+{{- end}}
+	"{{.ModuleName}}/internal/infrastructure/logger"
+{{- if or (eq .MessageQueue "kafka") (and (eq .MessageQueue "rabbitmq") .HasWorker)}}
+	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
+{{- end}}
+{{- if or .HasHTTP .HasGRPC}}
+	"{{.ModuleName}}/internal/infrastructure/server"
+{{- end}}
+	"{{.ModuleName}}/internal/infrastructure/tracing"
+
+{{- if eq .Database "postgres"}}
+	"github.com/jackc/pgx/v5/pgxpool"
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+	"github.com/IBM/sarama"
+{{- end}}
+{{- if and (eq .MessageQueue "rabbitmq") .HasWorker}}
+	amqp "github.com/rabbitmq/amqp091-go"
+{{- end}}
+{{- if eq .HTTPFramework "fiber"}}
+	"github.com/gofiber/fiber/v2"
+{{- end}}
+{{- if eq .HTTPFramework "gin"}}
+	"github.com/gin-gonic/gin"
+{{- end}}
+{{- if eq .HTTPFramework "chi"}}
+	"github.com/go-chi/chi/v5"
+{{- end}}
+{{- if eq .HTTPFramework "echo"}}
+	"github.com/labstack/echo/v4"
+{{- end}}
+)
+
+// This file holds the fx providers consumed by the modules in fx.go — the fx
+// analogue of provider.go's shared helpers, kept separate so fx.go reads as a
+// clean list of modules and Initialize* entry points (mirroring wire.go).
+
+// --- config field providers ---
+// fx wires by type, so each sub-config the constructors depend on is projected
+// out of *config.Config by a dedicated provider — the equivalent of Wire's
+// wire.FieldsOf(new(*config.Config), "<Field>").
+
+func provideLogConfig(c *config.Config) config.LogConfig           { return c.Log }
+func provideJWTConfig(c *config.Config) config.JWTConfig           { return c.JWT }
+func provideSecurityConfig(c *config.Config) config.SecurityConfig { return c.Security }
+
+{{- if .HasDatabase}}
+func provideDatabaseConfig(c *config.Config) config.DatabaseConfig { return c.Database }
+{{- end}}
+{{- if .HasRedis}}
+func provideRedisConfig(c *config.Config) config.RedisConfig { return c.Redis }
+{{- end}}
+{{- if .HasHTTP}}
+func provideHTTPConfig(c *config.Config) config.HTTPConfig { return c.HTTP }
+
+func provideLoginRateLimitConfig(c *config.Config) config.LoginRateLimitConfig {
+	return c.HTTP.LoginRateLimit
+}
+{{- end}}
+{{- if .HasGRPC}}
+func provideGRPCConfig(c *config.Config) config.GRPCConfig { return c.GRPC }
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+func provideKafkaConfig(c *config.Config) config.KafkaConfig { return c.Kafka }
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+func provideRabbitMQConfig(c *config.Config) config.RabbitMQConfig { return c.RabbitMQ }
+{{- if .HasWorker}}
+
+func provideRabbitMQConfigPtr(c *config.Config) *config.RabbitMQConfig { return &c.RabbitMQ }
+{{- end}}
+{{- end}}
+
+// --- lifecycle-wrapped infrastructure providers ---
+// Each adapts a Wire-style (T, func(), error) constructor into an fx provider
+// that registers the cleanup as an OnStop hook, so fxApp.Stop() runs every
+// cleanup in reverse construction order — the fx equivalent of Wire's
+// aggregated cleanup func.
+
+func provideTracer(lc fx.Lifecycle, ctx context.Context, cfg tracing.Config) (trace.Tracer, error) {
+	tracer, cleanup, err := tracing.Provider(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return tracer, nil
+}
+
+{{- if eq .Database "postgres"}}
+
+func providePostgresDB(lc fx.Lifecycle, cfg config.DatabaseConfig, log *logger.Logger) (*pgxpool.Pool, error) {
+	pool, cleanup, err := database.NewPostgresDB(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return pool, nil
+}
+{{- end}}
+{{- if eq .Database "mysql"}}
+
+func provideMySQLDB(lc fx.Lifecycle, cfg config.DatabaseConfig, log *logger.Logger) (*sql.DB, error) {
+	db, cleanup, err := database.NewMySQLDB(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return db, nil
+}
+{{- end}}
+{{- if .HasRedis}}
+
+func provideRedisCache(lc fx.Lifecycle, cfg config.RedisConfig, log *logger.Logger) (*infraCache.Client, error) {
+	client, cleanup, err := infraCache.New(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return client, nil
+}
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+
+func provideKafkaProducer(lc fx.Lifecycle, cfg config.KafkaConfig, log *logger.Logger) (sarama.SyncProducer, error) {
+	producer, cleanup, err := infraPubsub.NewKafkaProducer(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return producer, nil
+}
+{{- if .HasWorker}}
+
+func provideKafkaConsumerGroup(
+	lc fx.Lifecycle,
+	cfg config.KafkaConfig,
+	log *logger.Logger,
+) (sarama.ConsumerGroup, error) {
+	group, cleanup, err := infraPubsub.NewKafkaConsumerGroup(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return group, nil
+}
+{{- end}}
+{{- end}}
+{{- if and (eq .MessageQueue "rabbitmq") .HasWorker}}
+
+func provideRabbitMQChannel(lc fx.Lifecycle, conn *amqp.Connection, log *logger.Logger) (*amqp.Channel, error) {
+	ch, cleanup, err := infraPubsub.NewRabbitMQChannel(conn, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return ch, nil
+}
+{{- end}}
+{{- if .HasHTTP}}
+
+func provideHTTPServer(
+	lc fx.Lifecycle,
+	ctx context.Context,
+	cfg config.HTTPConfig,
+	log *logger.Logger,
+	router {{if eq .HTTPFramework "fiber"}}*fiber.App{{else if eq .HTTPFramework "gin"}}*gin.Engine{{else if eq .HTTPFramework "chi"}}chi.Router{{else if eq .HTTPFramework "echo"}}*echo.Echo{{end}},
+) (*server.HTTPServer, error) {
+	srv, cleanup, err := server.NewHTTPServer(ctx, cfg, log, router)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return srv, nil
+}
+{{- end}}
+{{- if .HasGRPC}}
+
+func provideGRPCServer(lc fx.Lifecycle, ctx context.Context, cfg config.GRPCConfig, log *logger.Logger) (*server.GRPCServer, error) {
+	srv, cleanup, err := server.NewGRPCServer(ctx, cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return srv, nil
+}
+{{- end}}
