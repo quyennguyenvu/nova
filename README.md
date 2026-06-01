@@ -43,7 +43,7 @@ myproject/
 ├── main.go
 ├── go.mod
 ├── .env.example
-├── cmd/                           # Cobra subcommands (api, grpc, cron…)
+├── cmd/                           # Cobra subcommands (api, grpc, worker…)
 ├── internal/
 │   ├── domain/                    # Layer 1 — entities, repository interfaces, value objects, events
 │   ├── usecase/                   # Layer 2 — business logic, DTOs, errors
@@ -66,21 +66,20 @@ The architectural rationale (why files live where they do, adapter vs infrastruc
 
 Generates a complete project. With no flags it runs interactively; pass any flag and it skips prompts entirely.
 
-| Flag               | Values                                | Default                   |
-| ------------------ | ------------------------------------- | ------------------------- |
-| `--module`         | Go module path                        | `github.com/myorg/<name>` |
-| `--transport`      | `http`, `grpc`, `cron`, `cli`         | _(prompted)_              |
-| `--http-framework` | `fiber`, `gin`, `chi`, `echo`         | _(prompted)_              |
-| `--database`       | `postgres`, `mysql`, `none`           | `postgres`                |
-| `--db-driver`      | `pgx`, `sqlx`, `gorm`, `database/sql` | `pgx`                     |
-| `--query`          | `sqlc`, `raw`, `gorm`                 | `sqlc`                    |
-| `--cache`          | `redis`, `none`                       | `redis`                   |
-| `--queue`          | `kafka`, `none`                       | `none`                    |
-| `--config`         | `yaml`, `toml`, `env`                 | `yaml`                    |
-| `--di`             | `wire`                                | `wire`                    |
-| `--docker`         | _(bool)_                              | `true`                    |
-| `--makefile`       | _(bool)_                              | `true`                    |
-| `--ci`             | `github`, `none`                      | `github`                  |
+| Flag               | Values                                  | Default                   |
+| ------------------ | --------------------------------------- | ------------------------- |
+| `--module`         | Go module path                          | `github.com/myorg/<name>` |
+| `--transport`      | `http`, `grpc`, `worker`, `cron`, `cli` | _(prompted)_              |
+| `--http-framework` | `fiber`, `gin`, `chi`, `echo`           | _(prompted)_              |
+| `--database`       | `postgres`, `mysql`, `none`             | `postgres`                |
+| `--db-driver`      | `pgx`, `sqlx`, `gorm`, `database/sql`   | `pgx`                     |
+| `--query`          | `sqlc`, `raw`, `gorm`                   | `sqlc`                    |
+| `--cache`          | `redis`, `none`                         | `redis`                   |
+| `--queue`          | `kafka`, `rabbitmq`, `none`             | `none`                    |
+| `--config`         | `yaml`, `toml`, `env`                   | `yaml`                    |
+| `--di`             | `wire`, `fx`                            | `wire`                    |
+| `--docker`         | _(bool)_                                | `true`                    |
+| `--ci`             | `github`, `none`                        | `github`                  |
 
 Example — full non-interactive run:
 
@@ -90,7 +89,7 @@ nova new myproject \
   --transport=http --http-framework=fiber \
   --database=postgres --db-driver=pgx --query=sqlc \
   --cache=redis --di=wire \
-  --docker --makefile --ci=github
+  --docker --ci=github
 ```
 
 ### `nova generate`
@@ -126,14 +125,14 @@ make lint             # golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...
 
-make generate         # build + run `nova new` interactively
-make generate-all     # generate a full project (Fiber/Postgres/pgx/sqlc/Redis/Wire)
-make generate-minimal # generate a minimal project (no DB, no cache)
-make verify-gen       # generate + list every output file
-make diff-gen         # generate + print key generated files for review
+make gen              # build + run `nova new` interactively
+make gen-api          # generate a full HTTP project (Fiber/Postgres/pgx/sqlc/Redis/Kafka/Wire)
+make gen-worker       # generate a worker project (Kafka/Postgres/pgx/sqlc/Redis/Wire)
+make verify-gen       # gen-api + list every output file
+make diff-gen         # gen-api + print key generated files for review
 ```
 
-Output for `generate-*` targets lands in `/tmp/nova-test-output`.
+Output for the `gen-api` / `gen-worker` targets lands in `/tmp/nova-test-output`.
 
 ## Releasing
 

@@ -1,4 +1,4 @@
-.PHONY: build run clean gen gen-all gen-worker test-gen verify-gen diff-gen rebuild test lint fmt vet help
+.PHONY: build run clean gen gen-api gen-worker verify-gen diff-gen rebuild test lint fmt vet help
 
 # Binary
 BINARY    := bin/nova
@@ -62,20 +62,20 @@ gen-worker: build ## Generate a worker (consumer) service: Kafka + Postgres + sq
 	@echo ""
 	@echo "✅ Output at $(TEST_DIR)"
 
-verify-gen: gen ## Generate + list all output files for review
+verify-gen: gen-api ## Generate + list all output files for review
 	@echo ""
 	@echo "📂 Generated files:"
 	@find $(TEST_DIR) -type f | sort
 	@echo ""
 	@echo "📊 Total: $$(find $(TEST_DIR) -type f | wc -l | tr -d ' ') files"
 
-diff-gen: gen ## Generate + show key template outputs for quick review
+diff-gen: gen-api ## Generate + show key template outputs for quick review
 	@echo "=== go.mod ==="
 	@cat $(TEST_DIR)/go.mod
 	@echo "\n=== cmd/api.go ==="
 	@cat $(TEST_DIR)/cmd/api.go
-	@echo "\n=== internal/infrastructure/di/container.go ==="
-	@cat $(TEST_DIR)/internal/infrastructure/di/container.go
+	@echo "\n=== internal/infrastructure/di/wire.go ==="
+	@cat $(TEST_DIR)/internal/infrastructure/di/wire.go
 
 ## —— Quality ————————————————————————————————————
 
