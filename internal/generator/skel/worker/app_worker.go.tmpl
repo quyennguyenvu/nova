@@ -1,0 +1,52 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"os/signal"
+	"syscall"
+
+	"{{.ModuleName}}/internal/infrastructure/di"
+)
+
+// RunWorker boots the consumer worker, blocks until the OS signals shutdown
+// or the worker surfaces an unrecoverable consume error, and returns any
+// failure so the caller (cobra RunE) can set a non-zero exit code.
+//
+// Mirrors RunHTTPServer's lifecycle: signal.NotifyContext owns shutdown,
+// DI cleanup runs in reverse construction order (broker first, then DB),
+// the consume loop runs in a goroutine so we can select on ctx.Done.
+func RunWorker() error {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	app, cleanup, err := di.InitializeWorker(ctx)
+	if err != nil {
+		return fmt.Errorf("initialize worker: %w", err)
+	}
+	defer cleanup()
+
+	log := app.Logger
+	worker := app.Worker
+
+	errChan := make(chan error, 1)
+	go func() {
+		if startErr := worker.Start(ctx); startErr != nil && startErr != context.Canceled {
+			errChan <- startErr
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Info("worker: shutdown signal received")
+	case startErr := <-errChan:
+		log.Error("worker: stopped with error", "error", startErr)
+		return startErr
+	}
+
+	log.Info("worker: shutting down")
+	if stopErr := worker.Stop(); stopErr != nil {
+		log.Error("worker: stop failed", "error", stopErr)
+	}
+	return nil
+}

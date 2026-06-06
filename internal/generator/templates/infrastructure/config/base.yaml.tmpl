@@ -13,8 +13,9 @@ tracing:
   sample_ratio: 0.1
 
 jwt:
-  # JWT_SECRET MUST be set in env (never commit it). Issuer and audience scope
-  # the tokens this service accepts on Auth — must match what it signs at login.
+  # JWT_PUBLIC_KEY (and JWT_PRIVATE_KEY on the issuing service) are base64-encoded
+  # PEM keys set in env — never commit them. Issuer and audience scope the tokens
+  # this service accepts on Auth — must match what the issuer signs at login.
   issuer: "{{.ProjectName}}"
   audience: "{{.ProjectName}}"
   access_token_ttl: 1h

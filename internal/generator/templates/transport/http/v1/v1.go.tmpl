@@ -1,0 +1,16 @@
+// Package v1 holds shared wiring for the /api/v1 HTTP routes. Every feature
+// sub-package (user, …) mounts under the same prefix, so the prefix and its
+// Prefix() method live here once and are shared via struct embedding rather
+// than redeclared per feature registrar.
+package v1
+
+// APIPrefix is the URL subtree every v1 feature mounts under.
+const APIPrefix = "/api/v1"
+
+// Prefixed supplies Prefix() to a feature Registrar via embedding, so each
+// feature satisfies the transport/http.Registrar interface without restating
+// the prefix. A new API section (e.g. an unversioned /admin, or /api/v2) is a
+// sibling package with its own APIPrefix + Prefixed base.
+type Prefixed struct{}
+
+func (Prefixed) Prefix() string { return APIPrefix }

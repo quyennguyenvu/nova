@@ -198,3 +198,50 @@ func promptOptionalFeatures(cfg *config.ProjectConfig) error {
 	}
 	return nil
 }
+
+// SupportedComponents is the menu `nova add` offers — exactly the component
+// generators implemented today. Keep in lockstep with the dispatch in runAdd
+// and the Generate* methods in internal/generator/component.go.
+//
+//nolint:gochecknoglobals // immutable menu; treated as a const.
+var SupportedComponents = []string{"worker", "entity", "usecase", "repository", "handler", "all"}
+
+// Component holds the answers `nova add` collects — interactively or from args.
+type Component struct {
+	Type string
+	Name string
+	DB   string // repository/all only — postgres or mysql
+}
+
+// RunComponentInteractive prompts for the component type, its name, and (for
+// repository/all) the database engine. defaultDB seeds the engine select from
+// the project's manifest stack.
+func RunComponentInteractive(c *Component, defaultDB string) error {
+	if err := survey.AskOne(&survey.Select{
+		Message: "Component:",
+		Options: SupportedComponents,
+		Default: SupportedComponents[0],
+	}, &c.Type); err != nil {
+		return err
+	}
+	if err := survey.AskOne(&survey.Input{
+		Message: "Name:",
+	}, &c.Name, survey.WithValidator(survey.Required)); err != nil {
+		return err
+	}
+	if c.Type == "repository" || c.Type == "all" {
+		return promptRepoDB(c, defaultDB)
+	}
+	return nil
+}
+
+func promptRepoDB(c *Component, defaultDB string) error {
+	if defaultDB != "postgres" && defaultDB != "mysql" {
+		defaultDB = "postgres"
+	}
+	return survey.AskOne(&survey.Select{
+		Message: "Repository type:",
+		Options: []string{"postgres", "mysql"},
+		Default: defaultDB,
+	}, &c.DB)
+}

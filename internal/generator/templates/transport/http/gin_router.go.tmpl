@@ -15,8 +15,8 @@ import (
 	"{{.ModuleName}}/internal/transport/http/middleware"
 )
 
-// Registrar attaches a feature's routes to a router subtree. Each feature
-// (transport/http/v1/<feature>) provides a concrete Registrar implementing
+// Registrar attaches a feature's routes to a router subtree. The version
+// package (transport/http/v1) provides a concrete Registrar implementing
 // this interface. Prefix is mounted as a subgroup before Register is called.
 // Multiple Registrars may share a Prefix; the slice order in NewRouter
 // determines mount order.

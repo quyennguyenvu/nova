@@ -1,0 +1,33 @@
+package {{.Package}}
+
+import (
+	"context"
+	"encoding/json"
+)
+
+// {{.Title}}Topic is the wire-level event identifier this handler consumes.
+// MUST match the publisher's topic constant.
+const {{.Title}}Topic = "{{.Topic}}"
+
+// Handler consumes {{.Title}} events. It implements the worker.Handler
+// interface (Topic + Handle) dispatched by the worker loop.
+type Handler struct {
+	// TODO: inject the usecase service this handler delegates to
+}
+
+func NewHandler() *Handler {
+	return &Handler{}
+}
+
+func (*Handler) Topic() string { return {{.Title}}Topic }
+
+func (h *Handler) Handle(ctx context.Context, payload []byte) error {
+	var msg {{.Title}}Message
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		// Malformed payload cannot be retried — ack so it does not block the
+		// partition. Switch to nack-to-DLQ if your broker has one.
+		return nil
+	}
+	// TODO: handle the event (call your usecase with msg)
+	return nil
+}

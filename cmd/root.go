@@ -19,7 +19,7 @@ infrastructure layers, along with Docker, CI/CD, and other tooling.
 	
 Usage:
 	nova new [project-name]       # Generate a new project (interactive or with flags)
-	nova generate <type> <name>   # Generate a component in an existing project`,
+	nova add [type] [name]        # Add a component to an existing project (interactive or with args)`,
 	}
 
 	rootCmd.SetHelpTemplate(`{{.Long}}
@@ -35,7 +35,7 @@ Use "{{.CommandPath}} [command] --help" for more info.
 
 	rootCmd.AddCommand(
 		newCommand(),
-		generateCommand(),
+		addCommand(),
 	)
 
 	// cobra already prints "Error: ..." (and usage) to stderr when a command

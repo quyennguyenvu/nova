@@ -1,0 +1,15 @@
+package {{.PortPkg}}
+
+import (
+	"context"
+
+	"{{.EntityImport}}"
+)
+
+type {{.Title}}Repository interface {
+	Create(ctx context.Context, {{.Lower}} *entity.{{.Title}}) error
+	GetByID(ctx context.Context, id int64) (*entity.{{.Title}}, error)
+	Update(ctx context.Context, {{.Lower}} *entity.{{.Title}}) error
+	Delete(ctx context.Context, id int64) error
+	List(ctx context.Context, limit, offset int32) ([]*entity.{{.Title}}, error)
+}

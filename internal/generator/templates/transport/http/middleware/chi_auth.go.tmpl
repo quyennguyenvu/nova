@@ -21,7 +21,7 @@ func Auth(tokenSvc *jwtsec.TokenService) func(http.Handler) http.Handler {
 				httpwriter.WriteError(w, r, errors.Unauthorized("missing bearer token"))
 				return
 			}
-			principal, err := tokenSvc.ParseAndVerifyAccessToken(token)
+			principal, err := tokenSvc.ParseAndVerifyAccessToken(r.Context(), token)
 			if err != nil {
 				httpwriter.WriteError(w, r, errors.ToAppError(err))
 				return

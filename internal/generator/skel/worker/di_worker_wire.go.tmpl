@@ -1,0 +1,21 @@
+//go:build wireinject
+// +build wireinject
+
+package di
+
+import (
+	"context"
+
+	"github.com/google/wire"
+)
+
+// InitializeWorker is a wire scaffold for the consumer worker: it builds only
+// the WorkerApp struct. Add the provider sets the worker needs — infraSet,
+// workerInfraSet (the broker consumer + worker.NewWorker), adapterSet,
+// usecaseSet, and a set providing your worker.Handler slice — to wire.Build,
+// then run `wire ./...` to (re)generate wire_gen.go.
+func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
+	panic(wire.Build(
+		wire.Struct(new(WorkerApp), "*"),
+	))
+}

@@ -54,7 +54,7 @@ import (
 // (TokenService, hasher, validator). Mode-specific providers live in
 // httpInfraSet / workerInfraSet so unused Transport modes don't drag in
 // providers that would fail at startup (e.g. NewTokenService rejecting
-// an empty secret when the worker doesn't need JWTs).
+// a missing public key when the worker doesn't need JWTs).
 var infraSet = wire.NewSet(
 	config.Load,
 	wire.FieldsOf(new(*config.Config), "Log", "JWT", "Security"),

@@ -6,11 +6,14 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/config"
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/transport/http/middleware"
+	v1 "{{.ModuleName}}/internal/transport/http/v1"
 )
 
 // Registrar registers the user feature's HTTP routes. It implements the
-// transport/http.Registrar interface — mounted at /api/v1 by the root router.
+// transport/http.Registrar interface; its Prefix() (/api/v1) comes from the
+// embedded v1.Prefixed base, so the prefix is declared once for the section.
 type Registrar struct {
+	v1.Prefixed
 	handler    *Handler
 	tokenSvc   *jwtsec.TokenService
 	loginLimit config.LoginRateLimitConfig
@@ -19,9 +22,6 @@ type Registrar struct {
 func NewRegistrar(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.LoginRateLimitConfig) *Registrar {
 	return &Registrar{handler: h, tokenSvc: tokenSvc, loginLimit: loginLimit}
 }
-
-// Prefix is the API version subtree this feature mounts under.
-func (*Registrar) Prefix() string { return "/api/v1" }
 
 // Register mounts:
 //   - POST /login              (public — issues bearer token)

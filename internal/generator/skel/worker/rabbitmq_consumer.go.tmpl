@@ -1,0 +1,77 @@
+package worker
+
+import (
+	"context"
+	"fmt"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+)
+
+// rabbitmqConsumer adapts an AMQP channel to the worker.Consumer port.
+//
+// Wire shape: one durable topic exchange + one queue bound to each topic
+// routing key. Manual ack — nack-with-requeue on handler error so the broker
+// redelivers. exchange/queue are passed in (not read from a config struct) so
+// this consumer stays decoupled from your project's config shape.
+type rabbitmqConsumer struct {
+	ch       *amqp.Channel
+	exchange string
+	queue    string
+	log      *logger.Logger
+}
+
+func NewRabbitMQConsumer(ch *amqp.Channel, exchange, queue string, log *logger.Logger) Consumer {
+	return &rabbitmqConsumer{ch: ch, exchange: exchange, queue: queue, log: log}
+}
+
+func (c *rabbitmqConsumer) Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error {
+	if err := c.ch.ExchangeDeclare(c.exchange, amqp.ExchangeTopic, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare exchange: %w", err)
+	}
+	if _, err := c.ch.QueueDeclare(c.queue, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare queue %q: %w", c.queue, err)
+	}
+	for _, t := range topics {
+		if err := c.ch.QueueBind(c.queue, t, c.exchange, false, nil); err != nil {
+			return fmt.Errorf("rabbitmq: bind %q→%q: %w", c.queue, t, err)
+		}
+	}
+
+	deliveries, err := c.ch.ConsumeWithContext(ctx, c.queue, "", false, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("rabbitmq: consume %q: %w", c.queue, err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case d, ok := <-deliveries:
+			if !ok {
+				return nil
+			}
+			if dispErr := dispatch(ctx, d.RoutingKey, d.Body); dispErr != nil {
+				c.log.Error("rabbitmq: dispatch failed",
+					"routing_key", d.RoutingKey,
+					"delivery_tag", d.DeliveryTag,
+					"err", dispErr.Error(),
+				)
+				if nackErr := d.Nack(false, true); nackErr != nil {
+					c.log.Error("rabbitmq: nack failed", "err", nackErr.Error())
+				}
+				continue
+			}
+			if ackErr := d.Ack(false); ackErr != nil {
+				c.log.Error("rabbitmq: ack failed", "delivery_tag", d.DeliveryTag, "err", ackErr.Error())
+			}
+		}
+	}
+}
+
+func (c *rabbitmqConsumer) Close() error {
+	// Channel lifecycle is owned by your infrastructure/pubsub cleanup —
+	// return nil so the worker layer doesn't double-close.
+	return nil
+}

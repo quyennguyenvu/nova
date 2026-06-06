@@ -298,6 +298,84 @@ func baseMatrixConfig(database, di string) *config.ProjectConfig {
 	return cfg
 }
 
+// TestRegistrarEmbedsSectionPrefix pins the embedded-base routing layout: the
+// registrar is feature-owned (package user, beside its handler) and gets its
+// Prefix() by embedding the section base v1.Prefixed rather than declaring it,
+// while the prefix is defined once in the section package (v1.APIPrefix). The
+// matrix proves it compiles; this pins the shape.
+func TestRegistrarEmbedsSectionPrefix(t *testing.T) {
+	t.Parallel()
+	cfg := httpMatrixConfig("fiber", "postgres", "wire")
+	dir := t.TempDir()
+	gen, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if genErr := gen.Generate(dir); genErr != nil {
+		t.Fatalf("Generate: %v", genErr)
+	}
+
+	reg, err := os.ReadFile(filepath.Join(dir, "internal/transport/http/v1/user/registrar.go"))
+	if err != nil {
+		t.Fatalf("registrar in feature package: %v", err)
+	}
+	regSrc := string(reg)
+	for _, want := range []string{"package user", "func NewRegistrar(h *Handler", "v1.Prefixed"} {
+		if !strings.Contains(regSrc, want) {
+			t.Errorf("registrar.go missing %q", want)
+		}
+	}
+	if strings.Contains(regSrc, "func (*Registrar) Prefix()") {
+		t.Error("registrar should inherit Prefix() from embedded v1.Prefixed, not declare it")
+	}
+
+	// Section base: prefix declared once, Prefix() provided via the Prefixed embed.
+	base, err := os.ReadFile(filepath.Join(dir, "internal/transport/http/v1/v1.go"))
+	if err != nil {
+		t.Fatalf("v1 base package: %v", err)
+	}
+	for _, want := range []string{"package v1", `APIPrefix = "/api/v1"`, "func (Prefixed) Prefix() string"} {
+		if !strings.Contains(string(base), want) {
+			t.Errorf("v1.go missing %q", want)
+		}
+	}
+	// The old version-package registrar location must not exist.
+	if _, statErr := os.Stat(filepath.Join(dir, "internal/transport/http/v1/registrar.go")); statErr == nil {
+		t.Error("registrar.go should not exist at the v1 package root")
+	}
+}
+
+// TestChiRouterGroupsSharedPrefix guards the chi-specific fix: chi.Router.Route
+// panics on a duplicate mount path, so when features share a Prefix (the norm
+// under the embedded v1.Prefixed base) NewRouter must group by Prefix and mount
+// each once — not call Route per registrar. The matrix renders a single feature
+// so it can't catch a regression here; this pins the grouping in the template.
+func TestChiRouterGroupsSharedPrefix(t *testing.T) {
+	t.Parallel()
+	cfg := httpMatrixConfig("chi", "postgres", "wire")
+	dir := t.TempDir()
+	gen, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if genErr := gen.Generate(dir); genErr != nil {
+		t.Fatalf("Generate: %v", genErr)
+	}
+	src, err := os.ReadFile(filepath.Join(dir, "internal/transport/http/router.go"))
+	if err != nil {
+		t.Fatalf("router.go: %v", err)
+	}
+	s := string(src)
+	if strings.Contains(s, "router.Route(r.Prefix(), r.Register)") {
+		t.Error("chi NewRouter mounts per-registrar — features sharing a Prefix will panic on duplicate Route")
+	}
+	for _, want := range []string{"byPrefix", "router.Route(prefix"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("chi router.go missing prefix-grouping marker %q", want)
+		}
+	}
+}
+
 // TestWorkerBrokerConfigProvider guards against a regression where the worker
 // variants compiled fine but `wire gen` failed because no provider extracted
 // the broker sub-config from *config.Config. The wire.go file is behind the

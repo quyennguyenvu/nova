@@ -1,0 +1,17 @@
+package di
+
+import (
+	"go.opentelemetry.io/otel/trace"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/worker"
+)
+
+// WorkerApp bundles every dependency the consumer worker entry point needs
+// from DI. Worker is the orchestrator that owns the broker consumer + the
+// handler dispatch map.
+type WorkerApp struct {
+	Logger *logger.Logger
+	Worker *worker.Worker
+	Tracer trace.Tracer
+}

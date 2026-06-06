@@ -1,0 +1,22 @@
+package {{.Package}}
+
+import (
+	"context"
+)
+
+type Service struct {
+}
+
+func NewService() *Service {
+	return &Service{}
+}
+
+func (s *Service) Create{{.Title}}(ctx context.Context, input Create{{.Title}}Input) (interface{}, error) {
+	// TODO: implement
+	return nil, nil
+}
+
+func (s *Service) Get{{.Title}}(ctx context.Context, id int64) (interface{}, error) {
+	// TODO: implement
+	return nil, nil
+}

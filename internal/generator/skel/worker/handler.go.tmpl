@@ -1,0 +1,19 @@
+// Package worker is the inbound transport for messages received from a
+// message broker. A Worker owns the broker-specific consumer (Kafka group /
+// RabbitMQ channel), routes each received message to a Handler keyed by topic,
+// and exposes Start/Stop for lifecycle.
+//
+// Add a feature handler by implementing Handler and registering it in your DI
+// provider (the slice passed to NewWorker).
+package worker
+
+import "context"
+
+// Handler processes one event off the broker. Topic is the wire-level
+// identifier (Kafka topic / RabbitMQ routing key). Handle returns nil to
+// signal a successful ack; a non-nil error triggers a broker-specific
+// nack/retry path.
+type Handler interface {
+	Topic() string
+	Handle(ctx context.Context, payload []byte) error
+}

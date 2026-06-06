@@ -379,10 +379,18 @@ func (g *Generator) transportFiles() []templateFile {
 			"internal/transport/http/v1/user/assembler.go",
 			cfg.HasHTTP(),
 		},
+		// HTTP v1 — the section base (package v1): APIPrefix + the Prefixed
+		// embed that every v1 feature registrar reuses for its Prefix().
+		{
+			"templates/transport/http/v1/v1.go.tmpl",
+			"internal/transport/http/v1/v1.go",
+			cfg.HasHTTP(),
+		},
 		// HTTP v1/user — per-framework handler + registrar. Source templates are
 		// framework-prefixed (fiber_handler.go.tmpl, …) so all variants live
 		// side-by-side, but the generated output drops the prefix so the
-		// project sees clean names: handler.go, registrar.go.
+		// project sees clean names: handler.go, registrar.go. The registrar is
+		// feature-owned (package user) and embeds v1.Prefixed for its Prefix().
 		{
 			fmt.Sprintf("templates/transport/http/v1/user/%s_handler.go.tmpl", cfg.HTTPFramework),
 			"internal/transport/http/v1/user/handler.go",
@@ -465,8 +473,8 @@ func (g *Generator) infrastructureFiles() []templateFile {
 			true,
 		},
 		{
-			"templates/infrastructure/jwt/verifier.go.tmpl",
-			"internal/infrastructure/jwt/verifier.go",
+			"templates/infrastructure/jwt/service.go.tmpl",
+			"internal/infrastructure/jwt/service.go",
 			true,
 		},
 		{

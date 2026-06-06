@@ -1,0 +1,17 @@
+package cmd
+
+import (
+	"github.com/spf13/cobra"
+
+	"{{.ModuleName}}/internal/app"
+)
+
+func workerCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "worker",
+		Short: "Start the consumer worker",
+		RunE: func(*cobra.Command, []string) error {
+			return app.RunWorker()
+		},
+	}
+}

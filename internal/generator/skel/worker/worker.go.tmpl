@@ -1,0 +1,72 @@
+package worker
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// Consumer is the broker-side abstraction. Implementations live in
+// consumer.go (one is rendered per project per MessageQueue choice).
+// Subscribe blocks until ctx is cancelled or an unrecoverable error surfaces;
+// dispatch is invoked per received message. Return nil from dispatch to ack;
+// a non-nil error nacks (broker-specific retry).
+type Consumer interface {
+	Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error
+	Close() error
+}
+
+// DispatchFunc is the per-message callback the Consumer invokes after receipt.
+// Workers use a single bound dispatch closure that routes by topic.
+type DispatchFunc func(ctx context.Context, topic string, payload []byte) error
+
+// Worker owns one Consumer and a topic-keyed Handler set. The lifecycle is
+// driven by Start(ctx) (blocks) / Stop() (closes the consumer).
+type Worker struct {
+	consumer Consumer
+	handlers map[string]Handler
+	log      *logger.Logger
+}
+
+func NewWorker(c Consumer, log *logger.Logger, handlers []Handler) *Worker {
+	m := make(map[string]Handler, len(handlers))
+	for _, h := range handlers {
+		m[h.Topic()] = h
+	}
+	return &Worker{consumer: c, handlers: m, log: log}
+}
+
+// Topics returns the set of topics this worker subscribes to — read by the
+// Consumer impl to know which subscriptions to create.
+func (w *Worker) Topics() []string {
+	out := make([]string, 0, len(w.handlers))
+	for t := range w.handlers {
+		out = append(out, t)
+	}
+	return out
+}
+
+// Start blocks until ctx is cancelled. Per-message dispatch attaches a scoped
+// logger to ctx so inner layers emit topic-aware structured fields.
+func (w *Worker) Start(ctx context.Context) error {
+	w.log.Info("worker: starting", "topics", w.Topics())
+	return w.consumer.Subscribe(ctx, w.Topics(), w.dispatch)
+}
+
+// Stop closes the consumer. Idempotent at the broker layer.
+func (w *Worker) Stop() error {
+	return w.consumer.Close()
+}
+
+func (w *Worker) dispatch(ctx context.Context, topic string, payload []byte) error {
+	h, ok := w.handlers[topic]
+	if !ok {
+		// Unknown topic — log and ack so we don't poison-pill the partition.
+		w.log.Warn("worker: dropping message, no handler for topic", "topic", topic, "size", len(payload))
+		return nil
+	}
+	scoped := w.log.With("topic", topic).With("size", len(payload))
+	ctx = logctx.Into(ctx, scoped)
+	return h.Handle(ctx, payload)
+}

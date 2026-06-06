@@ -77,13 +77,15 @@ type SecurityConfig struct {
 	BcryptCost int `{{.ConfigFormat}}:"bcrypt_cost" env:"BCRYPT_COST"`
 }
 
-// JWTConfig drives both signing (login) and verification (Auth middleware)
-// via HS256. Secret MUST be set in production and rotated on compromise —
-// every token signed with the old secret becomes invalid the moment the
-// secret changes, so plan rollouts accordingly (dual-secret transition is
-// out of scope for this scaffold).
+// JWTConfig drives signing (login) and verification (Auth middleware) via
+// RS256. Keys are base64-encoded PEM so they survive single-line env vars.
+// PublicKey is required on every service (verification). PrivateKey is set
+// only on the token-issuing service (signing); downstream services leave it
+// empty and run verify-only. Rotate by publishing the new public key to the
+// fleet before the issuer starts signing with the new private key.
 type JWTConfig struct {
-	Secret         string        `env:"JWT_SECRET"`
+	PrivateKey     string        `env:"JWT_PRIVATE_KEY"`
+	PublicKey      string        `env:"JWT_PUBLIC_KEY"`
 	Issuer         string        `{{.ConfigFormat}}:"issuer"           env:"JWT_ISSUER"`
 	Audience       string        `{{.ConfigFormat}}:"audience"         env:"JWT_AUDIENCE"`
 	AccessTokenTTL time.Duration `{{.ConfigFormat}}:"access_token_ttl" env:"JWT_ACCESS_TOKEN_TTL"`

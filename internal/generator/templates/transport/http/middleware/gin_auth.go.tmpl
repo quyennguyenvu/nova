@@ -21,7 +21,7 @@ func Auth(tokenSvc *jwtsec.TokenService) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		principal, err := tokenSvc.ParseAndVerifyAccessToken(token)
+		principal, err := tokenSvc.ParseAndVerifyAccessToken(c.Request.Context(), token)
 		if err != nil {
 			httpwriter.WriteError(c, errors.ToAppError(err))
 			c.Abort()

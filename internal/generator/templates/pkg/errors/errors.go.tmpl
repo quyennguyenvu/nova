@@ -35,7 +35,6 @@ import (
 	stderrors "errors"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -65,15 +64,16 @@ var (
 type Frame struct {
 	File string
 	Line int
-	Func string
 	Msg  string
 }
 
 func (f Frame) String() string {
+	loc := fmt.Sprintf("%s:%d", f.File, f.Line)
+
 	if f.Msg != "" {
-		return fmt.Sprintf("%s:%d(%s)", f.File, f.Line, f.Msg)
+		return fmt.Sprintf("%s (%s)", loc, f.Msg)
 	}
-	return fmt.Sprintf("%s:%d", f.File, f.Line)
+	return loc
 }
 
 // AppError is the HTTP-mappable error returned to clients at the transport
@@ -111,8 +111,9 @@ func (e *AppError) Origin() Frame {
 	return e.frames[0]
 }
 
-// Trace returns a compact one-line trail "file:line(msg) → file:line(msg)"
-// suitable for a single structured log field at the transport boundary.
+// Trace returns a compact one-line trail "func file:line(msg) → func file:line(msg)"
+// suitable for a single structured log field at the transport boundary. The
+// package-qualified func name disambiguates same-named files across packages.
 func (e *AppError) Trace() string {
 	if len(e.frames) == 0 {
 		return ""
@@ -125,18 +126,12 @@ func (e *AppError) Trace() string {
 }
 
 func captureFrame(skip int, msg string) Frame {
-	pc, file, line, ok := runtime.Caller(skip + 1)
+	_, file, line, ok := runtime.Caller(skip + 1)
 	if !ok {
 		return Frame{File: "?", Msg: msg}
 	}
-	fn := ""
-	if f := runtime.FuncForPC(pc); f != nil {
-		fn = f.Name()
-		if i := strings.LastIndex(fn, "/"); i >= 0 {
-			fn = fn[i+1:]
-		}
-	}
-	return Frame{File: filepath.Base(file), Line: line, Func: fn, Msg: msg}
+
+	return Frame{File: file, Line: line, Msg: msg}
 }
 
 // New creates a new AppError and captures the call site as the first frame.

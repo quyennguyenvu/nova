@@ -17,10 +17,10 @@ import (
 )
 
 // Registrar attaches a feature's routes to a router subtree. Each feature
-// (transport/http/v1/<feature>) provides a concrete Registrar implementing
-// this interface. Prefix is mounted via chi.Router.Route before Register is
-// called. Multiple Registrars may share a Prefix; the slice order in NewRouter
-// determines mount order.
+// package (transport/http/v1/<feature>) provides a concrete Registrar; its
+// Prefix() is the subtree it mounts under. Registrars that share a Prefix
+// (e.g. every /api/v1 feature) are mounted together under one chi.Route — see
+// NewRouter — so the slice order determines mount order.
 type Registrar interface {
 	Prefix() string
 	Register(chi.Router)
@@ -55,8 +55,25 @@ func NewRouter(
 		writeJSON(w, code, status)
 	})
 
+	// chi.Router.Route panics if the same pattern is mounted twice, so group
+	// registrars by Prefix and mount each prefix once. The order slice keeps
+	// first-seen prefix order; registrars within a prefix keep slice order.
+	order := make([]string, 0, len(registrars))
+	byPrefix := make(map[string][]Registrar, len(registrars))
 	for _, r := range registrars {
-		router.Route(r.Prefix(), r.Register)
+		prefix := r.Prefix()
+		if _, seen := byPrefix[prefix]; !seen {
+			order = append(order, prefix)
+		}
+		byPrefix[prefix] = append(byPrefix[prefix], r)
+	}
+	for _, prefix := range order {
+		group := byPrefix[prefix]
+		router.Route(prefix, func(sub chi.Router) {
+			for _, r := range group {
+				r.Register(sub)
+			}
+		})
 	}
 
 	return router

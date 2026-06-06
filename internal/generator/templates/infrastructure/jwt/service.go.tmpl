@@ -1,0 +1,228 @@
+// Package jwtsec issues and verifies access tokens using RS256 (RSA-SHA-256,
+// asymmetric). The private key signs at login; the public key verifies on
+// every request. In a microservices fleet the token-issuing service holds
+// both keys (signs + verifies) while downstream services configure only the
+// public key and run verify-only — Sign errors when no private key is set.
+// Swap to a different algorithm by replacing the SigningMethod + key plumbing
+// here without touching callers; the TokenService surface (Sign /
+// ParseAndVerifyAccessToken) is what middleware and usecases depend on.
+package jwtsec
+
+import (
+	"context"
+	"crypto/rsa"
+	"encoding/base64"
+	"strconv"
+	"time"
+
+	"github.com/golang-jwt/jwt/v4"
+
+	"{{.ModuleName}}/internal/domain/identity"
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// TokenService is the RS256 signer/verifier. One instance per process; safe
+// for concurrent use. privateKey is nil on verify-only services.
+type TokenService struct {
+	privateKey     *rsa.PrivateKey
+	publicKey      *rsa.PublicKey
+	issuer         string
+	audience       string
+	accessTokenTTL time.Duration
+}
+
+// NewTokenService parses the base64-encoded PEM keys from config once at
+// startup, so request-path verification touches only the in-memory key. The
+// public key is mandatory — every service must verify. The private key is
+// optional: when absent the service runs verify-only and Sign errors.
+func NewTokenService(cfg config.JWTConfig) (*TokenService, error) {
+	publicKey, err := parseRSAPublicKey(cfg.PublicKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "jwt: load public key")
+	}
+
+	var privateKey *rsa.PrivateKey
+	if cfg.PrivateKey != "" {
+		privateKey, err = parseRSAPrivateKey(cfg.PrivateKey)
+		if err != nil {
+			return nil, errors.Wrap(err, "jwt: load private key")
+		}
+	}
+
+	ttl := cfg.AccessTokenTTL
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	return &TokenService{
+		privateKey:     privateKey,
+		publicKey:      publicKey,
+		issuer:         cfg.Issuer,
+		audience:       cfg.Audience,
+		accessTokenTTL: ttl,
+	}, nil
+}
+
+// AccessTokenTTL exposes the configured lifetime so handlers can return it
+// in the login response (RFC 6749 expires_in).
+func (s *TokenService) AccessTokenTTL() time.Duration { return s.accessTokenTTL }
+
+// Sign issues a signed access token for p. The token's exp/iat/iss/aud are
+// derived from config; custom claims (userId, email, …) come from p. Returns
+// an error on verify-only services (no private key configured).
+func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
+	if s.privateKey == nil {
+		return "", errors.InternalServer(
+			"jwt: signing not configured — this service is verify-only (no private key)",
+		)
+	}
+	now := time.Now()
+	claims := AccessTokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    s.issuer,
+			Subject:   formatSubject(p.UserID),
+			Audience:  jwt.ClaimStrings{s.audience},
+			ExpiresAt: jwt.NewNumericDate(now.Add(s.accessTokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+		},
+		UserID:    p.UserID,
+		Email:     p.Email,
+		Name:      p.Name,
+		Phone:     p.Phone,
+		DeviceID:  p.DeviceID,
+		Platform:  p.Platform,
+		SessionID: p.SessionID,
+	}
+	tkn := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := tkn.SignedString(s.privateKey)
+	if err != nil {
+		return "", errors.Wrap(err, "jwt: sign access token")
+	}
+	return signed, nil
+}
+
+// ParseAndVerifyAccessToken validates tokenStr against the public key and
+// projects its claims into a UserPrincipal. Returns *AppError(401) on any
+// verification failure so the transport boundary can pass the error straight
+// to httpwriter.WriteError. The client always gets a generic "invalid access
+// token" — the specific reason is logged server-side, never returned. ctx is
+// used only to reach the request-scoped logger via logctx.From.
+func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr string) (*identity.UserPrincipal, error) {
+	var claims AccessTokenClaims
+	tkn, err := jwt.ParseWithClaims(
+		tokenStr,
+		&claims,
+		func(t *jwt.Token) (any, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, errors.Unauthorized("unexpected signing method")
+			}
+			return s.publicKey, nil
+		},
+		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
+	)
+	if err != nil {
+		logVerifyFailure(ctx, err)
+		return nil, errors.Unauthorized("invalid access token")
+	}
+	if !tkn.Valid {
+		return nil, errors.Unauthorized("invalid access token")
+	}
+	// A token whose signature checked out against our key but carries the wrong
+	// issuer/audience is suspicious (cross-environment replay or misconfig), not
+	// routine — log it at Warn even though the client still gets a generic 401.
+	if s.issuer != "" && !claims.VerifyIssuer(s.issuer, true) {
+		logctx.From(ctx).Warn("jwt verification anomaly", "reason", "bad_issuer")
+		return nil, errors.Unauthorized("invalid access token")
+	}
+	if s.audience != "" && !claims.VerifyAudience(s.audience, true) {
+		logctx.From(ctx).Warn("jwt verification anomaly", "reason", "bad_audience")
+		return nil, errors.Unauthorized("invalid access token")
+	}
+
+	return &identity.UserPrincipal{
+		Principal: identity.Principal{
+			UserID: claims.UserID,
+			Email:  claims.Email,
+		},
+		Name:      claims.Name,
+		Phone:     claims.Phone,
+		DeviceID:  claims.DeviceID,
+		Platform:  claims.Platform,
+		SessionID: claims.SessionID,
+	}, nil
+}
+
+// logVerifyFailure routes a token-parse failure by operational severity rather
+// than logging every one. At millions of logins the routine rejections —
+// expired tokens, malformed/garbage input from buggy or stale clients — are
+// constant background noise and carry no signal, so they go to Debug (silent at
+// the default Info level). An invalid signature or unverifiable token is the
+// opposite: it means either the public key has drifted across the fleet (an ops
+// bug) or someone is presenting a forged token, so it goes to Warn. The stable
+// `reason` field lets a log-based alert key off the anomalous bucket without a
+// metrics pipeline; raw err goes only to the server-side log, never the client.
+func logVerifyFailure(ctx context.Context, err error) {
+	reason, anomalous := classifyParseError(err)
+	if anomalous {
+		logctx.From(ctx).Warn("jwt verification anomaly", "reason", reason, "err", err.Error())
+		return
+	}
+	logctx.From(ctx).Debug("jwt verification rejected", "reason", reason)
+}
+
+// classifyParseError maps a golang-jwt v4 *ValidationError bitfield to a stable
+// reason string and whether it is anomalous (worth a Warn). Anything that is
+// not a recognised routine rejection — including a non-ValidationError, which
+// shouldn't happen — is treated as anomalous so it can never hide in the noise.
+func classifyParseError(err error) (reason string, anomalous bool) {
+	var ve *jwt.ValidationError
+	if !errors.As(err, &ve) {
+		return "unknown", true
+	}
+	switch {
+	case ve.Errors&(jwt.ValidationErrorSignatureInvalid|jwt.ValidationErrorUnverifiable) != 0:
+		return "signature_invalid", true
+	case ve.Errors&jwt.ValidationErrorMalformed != 0:
+		return "malformed", false
+	case ve.Errors&jwt.ValidationErrorExpired != 0:
+		return "expired", false
+	case ve.Errors&jwt.ValidationErrorNotValidYet != 0:
+		return "not_yet_valid", false
+	default:
+		return "claims_invalid", false
+	}
+}
+
+// parseRSAPublicKey decodes a base64-encoded PEM block into an RSA public key.
+func parseRSAPublicKey(b64 string) (*rsa.PublicKey, error) {
+	pemBytes, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, errors.Wrap(err, "base64 decode")
+	}
+	key, err := jwt.ParseRSAPublicKeyFromPEM(pemBytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse PEM")
+	}
+	return key, nil
+}
+
+// parseRSAPrivateKey decodes a base64-encoded PEM block into an RSA private key.
+func parseRSAPrivateKey(b64 string) (*rsa.PrivateKey, error) {
+	pemBytes, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, errors.Wrap(err, "base64 decode")
+	}
+	key, err := jwt.ParseRSAPrivateKeyFromPEM(pemBytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse PEM")
+	}
+	return key, nil
+}
+
+// formatSubject keeps the JWT sub claim as a decimal string — JSON numbers
+// in JWT can lose precision in some libraries; stringify defensively.
+func formatSubject(userID int64) string {
+	return strconv.FormatInt(userID, 10)
+}

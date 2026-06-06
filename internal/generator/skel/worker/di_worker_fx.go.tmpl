@@ -1,0 +1,41 @@
+package di
+
+import (
+	"context"
+	"fmt"
+
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/fx"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/internal/transport/worker"
+)
+
+// InitializeWorker is an fx scaffold for the consumer worker. It populates the
+// WorkerApp fields but provides no modules yet — add the modules the worker
+// needs (infraModule(), workerModule(), adapterModule(), usecaseModule()) to
+// fx.New so fx can construct *worker.Worker. Until then fxApp.Start reports the
+// missing dependencies. stopTimeout is shared with the other Initialize* entry
+// points in fx.go.
+func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
+	var (
+		log    *logger.Logger
+		w      *worker.Worker
+		tracer trace.Tracer
+	)
+	fxApp := fx.New(
+		fx.NopLogger,
+		fx.Provide(func() context.Context { return ctx }),
+		// TODO: add infraModule(), workerModule(), adapterModule(), usecaseModule()
+		fx.Populate(&log, &w, &tracer),
+	)
+	if err := fxApp.Start(ctx); err != nil {
+		return nil, nil, fmt.Errorf("fx: start worker app: %w", err)
+	}
+	cleanup := func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		_ = fxApp.Stop(stopCtx)
+	}
+	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil
+}

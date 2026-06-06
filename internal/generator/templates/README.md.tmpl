@@ -18,24 +18,25 @@ internal/
 │
 ├── adapter/                # Layer 3: Interface Adapters
 │   └── repository/
-│       {{- if eq .Database "postgres"}}
+{{- if eq .Database "postgres"}}
 │       ├── postgres/       # sqlc-backed UserRepository + TxManager + mapper
-│       {{- end}}
-│       {{- if eq .Database "mysql"}}
+{{- end}}
+{{- if eq .Database "mysql"}}
 │       ├── mysql/          # sqlc-backed UserRepository + TxManager + mapper
-│       {{- end}}
-│       {{- if .HasRedis}}
+{{- end}}
+{{- if .HasRedis}}
 │       └── redis/          # Cache-aside decorator over UserRepository
-│       {{- end}}
+{{- end}}
 │
 ├── transport/              # Inbound transport (HTTP/gRPC)
-│   {{- if .HasHTTP}}
+{{- if .HasHTTP}}
 │   └── http/
 │       ├── router.go       # Framework instance + middleware order + Registrar interface
 │       ├── httpwriter/     # Framework-specific response envelope writer
 │       ├── middleware/     # RequestID, Logging, Recovery, CORS, Locale, Auth
-│       └── v1/user/        # Handler, Registrar, DTOs, assembler
-│   {{- end}}
+│       └── v1/             # v1.go: APIPrefix + Prefixed embed (one prefix per section)
+│           └── user/       # Handler, Registrar (embeds v1.Prefixed), DTOs, assembler
+{{- end}}
 │
 ├── app/                    # Entry-point glue (RunHTTPServer)
 │
@@ -45,7 +46,7 @@ internal/
     {{- if .HasRedis}}
     ├── cache/              # Redis client factory (single/sentinel/cluster)
     {{- end}}
-    ├── jwt/                # TokenService (HS256 sign + verify)
+    ├── jwt/                # TokenService (RS256 sign + verify)
     ├── logger/             # zerolog implementation of observability.Logger
     ├── security/           # bcrypt PasswordHasher implementation
     ├── server/             # HTTP server lifecycle (graceful shutdown)
@@ -81,8 +82,13 @@ cd {{.ProjectName}}
 # Copy environment variables
 cp .env.example .env
 
-# Generate a JWT secret (256-bit minimum) and add to .env
-openssl rand -hex 32 | xargs -I {} sed -i.bak 's/^JWT_SECRET=.*/JWT_SECRET={}/' .env && rm .env.bak
+# Generate an RS256 keypair and add the base64-encoded PEMs to .env.
+# Only the token-issuing service needs JWT_PRIVATE_KEY; verify-only services
+# set JWT_PUBLIC_KEY alone.
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt.key
+openssl rsa -in jwt.key -pubout -out jwt.pub
+sed -i.bak "s|^JWT_PUBLIC_KEY=.*|JWT_PUBLIC_KEY=$(base64 < jwt.pub | tr -d '\n')|" .env
+sed -i.bak "s|^JWT_PRIVATE_KEY=.*|JWT_PRIVATE_KEY=$(base64 < jwt.key | tr -d '\n')|" .env && rm .env.bak
 
 # Install dependencies{{if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}} + run code generators ({{if .UseWire}}wire{{if or (eq .QueryGen "sqlc") .HasGRPC}}, {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc{{if .HasGRPC}}, {{end}}{{end}}{{if .HasGRPC}}proto{{end}}){{end}}
 go mod tidy{{if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
@@ -146,6 +152,19 @@ End-to-end demo:
 | GET    | /readyz           | public | Readiness check (200 / 503)                |
 
 **Authenticated requests** carry `Authorization: Bearer <accessToken>` where the token comes from `POST /api/v1/login`.
+
+#### Adding routes, sections, and versions
+
+Each feature owns a `Registrar` in its own package (e.g. `transport/http/v1/user`) that declares
+*which* endpoints exist and their per-endpoint auth (login public, CRUD bearer-protected). It
+implements `transport/http.Registrar` (`Prefix()` + `Register`); `NewRouter` mounts each at its
+`Prefix()` in order. `provideRegistrars` (`infrastructure/di`) collects them.
+
+- **New feature under `/api/v1`** — add a `Registrar` in its feature package, embed `v1.Prefixed`
+  to inherit the `/api/v1` prefix, and append it to `provideRegistrars`.
+- **New section** (e.g. unversioned `/admin`, or `/api/v2`) — add a sibling base package with its
+  own `APIPrefix` + `Prefixed` embed; its features embed that base. Versioning/section is the
+  prefix carried by the embedded base, declared once and shared — not restated per feature.
 
 {{- end}}
 

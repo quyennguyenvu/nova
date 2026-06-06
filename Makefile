@@ -24,7 +24,6 @@ gen: build ## Generate a sample project in interactive mode
 	@echo ""
 	@echo "✅ new project generated"
 
-
 gen-api: build ## Generate a sample project to test templates (Fiber/Postgres/Redis)
 	rm -rf $(TEST_DIR)
 	./$(BINARY) new testapi \

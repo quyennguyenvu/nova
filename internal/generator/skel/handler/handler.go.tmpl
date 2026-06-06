@@ -1,0 +1,33 @@
+package {{.Package}}
+
+import (
+	"github.com/gofiber/fiber/v2"
+)
+
+type {{.Title}}Handler struct {
+	// TODO: inject {{.Lower}} use case service
+}
+
+func New{{.Title}}Handler() *{{.Title}}Handler {
+	return &{{.Title}}Handler{}
+}
+
+func (h *{{.Title}}Handler) Create(c *fiber.Ctx) error {
+	// TODO: implement
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "created"})
+}
+
+func (h *{{.Title}}Handler) GetByID(c *fiber.Ctx) error {
+	// TODO: implement
+	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+func (h *{{.Title}}Handler) Update(c *fiber.Ctx) error {
+	// TODO: implement
+	return c.JSON(fiber.Map{"status": "updated"})
+}
+
+func (h *{{.Title}}Handler) Delete(c *fiber.Ctx) error {
+	// TODO: implement
+	return c.SendStatus(fiber.StatusNoContent)
+}

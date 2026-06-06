@@ -20,7 +20,7 @@ func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 		if token == "" {
 			return httpwriter.WriteError(c, errors.Unauthorized("missing bearer token"))
 		}
-		principal, err := tokenSvc.ParseAndVerifyAccessToken(token)
+		principal, err := tokenSvc.ParseAndVerifyAccessToken(c.UserContext(), token)
 		if err != nil {
 			return httpwriter.WriteError(c, errors.ToAppError(err))
 		}

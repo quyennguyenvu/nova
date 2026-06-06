@@ -1,0 +1,17 @@
+package {{.Package}}
+
+import "time"
+
+type {{.Title}} struct {
+	ID        int64     `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func New{{.Title}}() *{{.Title}} {
+	now := time.Now()
+	return &{{.Title}}{
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+}

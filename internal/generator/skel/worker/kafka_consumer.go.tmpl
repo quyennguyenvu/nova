@@ -1,0 +1,81 @@
+package worker
+
+import (
+	"context"
+	stderrors "errors"
+
+	"github.com/IBM/sarama"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+)
+
+// kafkaConsumer adapts sarama.ConsumerGroup to the worker.Consumer port.
+// One goroutine per partition is owned by sarama; ConsumeClaim pulls messages
+// off the partition channel and calls dispatch sequentially. Partition order
+// is preserved within a claim; cross-partition ordering is NOT.
+type kafkaConsumer struct {
+	group sarama.ConsumerGroup
+	log   *logger.Logger
+}
+
+// NewKafkaConsumer wraps a sarama consumer group (constructed in your
+// infrastructure/pubsub layer).
+func NewKafkaConsumer(group sarama.ConsumerGroup, log *logger.Logger) Consumer {
+	return &kafkaConsumer{group: group, log: log}
+}
+
+func (c *kafkaConsumer) Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error {
+	handler := &kafkaSessionHandler{dispatch: dispatch, log: c.log}
+
+	// sarama's Consume returns each time a rebalance occurs. Loop until the
+	// parent context is cancelled or the group emits a non-recoverable error.
+	for {
+		if err := c.group.Consume(ctx, topics, handler); err != nil {
+			if stderrors.Is(err, sarama.ErrClosedConsumerGroup) {
+				return nil
+			}
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+}
+
+func (c *kafkaConsumer) Close() error {
+	return c.group.Close()
+}
+
+// kafkaSessionHandler is sarama's per-session callback bundle.
+type kafkaSessionHandler struct {
+	dispatch DispatchFunc
+	log      *logger.Logger
+}
+
+func (*kafkaSessionHandler) Setup(sarama.ConsumerGroupSession) error   { return nil }
+func (*kafkaSessionHandler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+
+func (h *kafkaSessionHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for {
+		select {
+		case msg, ok := <-claim.Messages():
+			if !ok {
+				return nil
+			}
+			if err := h.dispatch(sess.Context(), msg.Topic, msg.Value); err != nil {
+				// Surface to sarama; the offset is not advanced (no MarkMessage)
+				// so the message is redelivered after rebalance.
+				h.log.Error("kafka: dispatch failed",
+					"topic", msg.Topic,
+					"partition", msg.Partition,
+					"offset", msg.Offset,
+					"err", err.Error(),
+				)
+				return err
+			}
+			sess.MarkMessage(msg, "")
+		case <-sess.Context().Done():
+			return nil
+		}
+	}
+}
