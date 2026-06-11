@@ -13,10 +13,14 @@ import (
 )
 
 // WriteJSON writes a successful JSON response wrapped in the standard envelope.
+// WriteJSON has no request handle, so it reads the correlation ID back from the
+// response header the RequestID middleware already set rather than from ctx.
 func WriteJSON(w http.ResponseWriter, status int, data any) {
+	resp := httputil.SuccessResponse(data)
+	resp.RequestID = w.Header().Get(httputil.RequestIDHeader)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(httputil.SuccessResponse(data))
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // WriteError writes an error JSON response wrapped in the standard envelope.
@@ -29,7 +33,9 @@ func WriteError(w http.ResponseWriter, r *http.Request, app *errors.AppError) {
 	ctx := r.Context()
 	errors.StashAppError(ctx, app)
 	lang := locale.LanguageFromContext(ctx)
+	resp := httputil.ErrorResponseFromApp(app, lang)
+	resp.RequestID = httputil.RequestIDFrom(ctx)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(app.Code)
-	_ = json.NewEncoder(w).Encode(httputil.ErrorResponseFromApp(app, lang))
+	_ = json.NewEncoder(w).Encode(resp)
 }

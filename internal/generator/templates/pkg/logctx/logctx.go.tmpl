@@ -1,9 +1,13 @@
-// Package logctx carries a request-scoped structured logger through context.Context.
+// Package logctx carries a request-scoped logger through context.Context so any
+// inner layer (usecase, adapter, repository) can log with the request's
+// correlation fields (request_id, trace_id, …) already attached — without
+// taking the logger as a constructor dependency or re-deriving the IDs on every
+// call.
 //
-// The transport layer builds a logger enriched with request_id / trace_id and stores
-// it in ctx. Inner layers (usecase, repository) pull it out via From(ctx) and emit
-// fields without needing to know the concrete logger implementation. Never call
-// Into outside a boundary (middleware, worker loop).
+// The transport boundary forks the base logger once (see middleware.Logging)
+// and stashes it here; inner layers retrieve it with From. This keeps the
+// dependency direction clean: this package depends only on the observability
+// port, never on a concrete logger or a transport package.
 package logctx
 
 import (
@@ -12,37 +16,21 @@ import (
 	"{{.ModuleName}}/pkg/observability"
 )
 
-// Logger aliases observability.Logger so the two cannot drift. The interface
-// exposes With so inner layers (repos, usecases) can fork child loggers with
-// extra structured fields — call logctx.From(ctx).With("user_id", id) before
-// emitting events that span multiple log lines.
-type Logger = observability.Logger
-
 type ctxKey struct{}
 
-// Into returns a child context carrying l.
-func Into(ctx context.Context, l Logger) context.Context {
-	if l == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, ctxKey{}, l)
+// With returns a copy of ctx carrying log as the request-scoped logger.
+func With(ctx context.Context, log observability.Logger) context.Context {
+	return context.WithValue(ctx, ctxKey{}, log)
 }
 
-// From returns the logger attached to ctx, or a no-op logger if none is present.
-// Never returns nil — callers can use the result unconditionally.
-func From(ctx context.Context) Logger {
-	if l, ok := ctx.Value(ctxKey{}).(Logger); ok {
+// From returns the request-scoped logger attached to ctx, or a no-op logger when
+// none is present (background goroutines, tests, or code paths that skip the
+// access-log middleware). It never returns nil, so callers can chain directly:
+//
+//	logctx.From(ctx).Warn("cache miss", "key", key)
+func From(ctx context.Context) observability.Logger {
+	if l, ok := ctx.Value(ctxKey{}).(observability.Logger); ok {
 		return l
 	}
-	return nop{}
+	return observability.Nop()
 }
-
-// nop is a Logger that discards everything. Used when ctx has no logger
-// (e.g. tests, or code called before middleware has run).
-type nop struct{}
-
-func (n nop) Debug(string, ...any)            {}
-func (n nop) Info(string, ...any)             {}
-func (n nop) Warn(string, ...any)             {}
-func (n nop) Error(string, ...any)            {}
-func (n nop) With(string, any) Logger         { return n }

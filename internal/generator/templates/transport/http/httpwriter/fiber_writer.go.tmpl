@@ -13,7 +13,9 @@ import (
 
 // WriteJSON writes a successful JSON response wrapped in the standard envelope.
 func WriteJSON(c *fiber.Ctx, status int, data any) error {
-	return c.Status(status).JSON(httputil.SuccessResponse(data))
+	resp := httputil.SuccessResponse(data)
+	resp.RequestID = httputil.RequestIDFrom(c.UserContext())
+	return c.Status(status).JSON(resp)
 }
 
 // WriteError writes an error JSON response wrapped in the standard envelope.
@@ -27,5 +29,7 @@ func WriteError(c *fiber.Ctx, app *errors.AppError) error {
 	ctx := c.UserContext()
 	errors.StashAppError(ctx, app)
 	lang := locale.LanguageFromContext(ctx)
-	return c.Status(app.Code).JSON(httputil.ErrorResponseFromApp(app, lang))
+	resp := httputil.ErrorResponseFromApp(app, lang)
+	resp.RequestID = httputil.RequestIDFrom(ctx)
+	return c.Status(app.Code).JSON(resp)
 }

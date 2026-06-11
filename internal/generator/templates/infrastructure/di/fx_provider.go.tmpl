@@ -24,6 +24,7 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/server"
 {{- end}}
 	"{{.ModuleName}}/internal/infrastructure/tracing"
+	"{{.ModuleName}}/pkg/observability"
 
 {{- if eq .Database "postgres"}}
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -60,6 +61,14 @@ import (
 func provideLogConfig(c *config.Config) config.LogConfig           { return c.Log }
 func provideJWTConfig(c *config.Config) config.JWTConfig           { return c.JWT }
 func provideSecurityConfig(c *config.Config) config.SecurityConfig { return c.Security }
+
+// provideObservabilityLogger exposes the concrete *logger.Logger as the
+// observability.Logger port. fx matches by exact type, so transport consumers
+// that depend on the port (router, middleware, worker, consumer) need this
+// bridge. logger.New still provides the concrete for infra consumers and the
+// App bundle. fx.As is unusable here — it would replace the concrete in the
+// graph, breaking those consumers and fx.Populate(&log *logger.Logger).
+func provideObservabilityLogger(l *logger.Logger) observability.Logger { return l }
 
 {{- if .HasDatabase}}
 func provideDatabaseConfig(c *config.Config) config.DatabaseConfig { return c.Database }

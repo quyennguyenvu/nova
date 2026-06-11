@@ -11,9 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
-	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/middleware"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 // Registrar attaches a feature's routes to a router subtree. Each feature
@@ -31,7 +31,7 @@ type Registrar interface {
 // registrars is a slice (not a map) so mount order is deterministic.
 func NewRouter(
 	cfg *config.Config,
-	log *logger.Logger,
+	log observability.Logger,
 	checker *health.Checker,
 	registrars []Registrar,
 ) chi.Router {

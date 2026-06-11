@@ -3,8 +3,8 @@ package worker
 import (
 	"context"
 
-	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/pkg/logctx"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 // Consumer is the broker-side abstraction. Implementations live in
@@ -27,10 +27,10 @@ type DispatchFunc func(ctx context.Context, topic string, payload []byte) error
 type Worker struct {
 	consumer Consumer
 	handlers map[string]Handler
-	log      *logger.Logger
+	log      observability.Logger
 }
 
-func NewWorker(c Consumer, log *logger.Logger, handlers []Handler) *Worker {
+func NewWorker(c Consumer, log observability.Logger, handlers []Handler) *Worker {
 	m := make(map[string]Handler, len(handlers))
 	for _, h := range handlers {
 		m[h.Topic()] = h
@@ -71,6 +71,6 @@ func (w *Worker) dispatch(ctx context.Context, topic string, payload []byte) err
 		return nil
 	}
 	scoped := w.log.With("topic", topic).With("size", len(payload))
-	ctx = logctx.Into(ctx, scoped)
+	ctx = logctx.With(ctx, scoped)
 	return h.Handle(ctx, payload)
 }

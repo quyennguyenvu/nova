@@ -44,14 +44,15 @@ func (r *UserCacheRepository) Create(ctx context.Context, user *entity.User) err
 }
 
 func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.User, error) {
+	log := logctx.From(ctx)
 	key := userKey(id)
 	if cached, err := r.cache.Get(ctx, key).Result(); err == nil {
 		if u, decodeErr := mapper.UnmarshalUser([]byte(cached)); decodeErr == nil {
 			return u, nil
 		}
-		logctx.From(ctx).Warn("user cache: decode failed, refilling", "key", key)
+		log.Warn("user cache: decode failed, refilling", "key", key)
 	} else if !stderrors.Is(err, redis.Nil) {
-		logctx.From(ctx).Warn("user cache: read failed, falling through", "key", key, "err", err)
+		log.Warn("user cache: read failed, falling through", "key", key, "err", err)
 	}
 
 	user, err := r.repo.GetByID(ctx, id)
@@ -62,7 +63,7 @@ func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.Us
 	// Best-effort write — log the miss but don't fail the read.
 	if data, marshalErr := mapper.MarshalUser(user); marshalErr == nil {
 		if setErr := r.cache.Set(ctx, key, data, userCacheTTL).Err(); setErr != nil {
-			logctx.From(ctx).Warn("user cache: refill failed", "key", key, "err", setErr)
+			log.Warn("user cache: refill failed", "key", key, "err", setErr)
 		}
 	}
 	return user, nil
