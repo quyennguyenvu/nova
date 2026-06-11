@@ -110,6 +110,7 @@ func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 // token" — the specific reason is logged server-side, never returned. ctx is
 // used only to reach the request-scoped logger via logctx.From.
 func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr string) (*identity.UserPrincipal, error) {
+	log := logctx.From(ctx)
 	var claims AccessTokenClaims
 	tkn, err := jwt.ParseWithClaims(
 		tokenStr,
@@ -133,11 +134,11 @@ func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr s
 	// issuer/audience is suspicious (cross-environment replay or misconfig), not
 	// routine — log it at Warn even though the client still gets a generic 401.
 	if s.issuer != "" && !claims.VerifyIssuer(s.issuer, true) {
-		logctx.From(ctx).Warn("jwt verification anomaly", "reason", "bad_issuer")
+		log.Warn("jwt verification anomaly", "reason", "bad_issuer")
 		return nil, errors.Unauthorized("invalid access token")
 	}
 	if s.audience != "" && !claims.VerifyAudience(s.audience, true) {
-		logctx.From(ctx).Warn("jwt verification anomaly", "reason", "bad_audience")
+		log.Warn("jwt verification anomaly", "reason", "bad_audience")
 		return nil, errors.Unauthorized("invalid access token")
 	}
 
@@ -164,12 +165,13 @@ func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr s
 // `reason` field lets a log-based alert key off the anomalous bucket without a
 // metrics pipeline; raw err goes only to the server-side log, never the client.
 func logVerifyFailure(ctx context.Context, err error) {
+	log := logctx.From(ctx)
 	reason, anomalous := classifyParseError(err)
 	if anomalous {
-		logctx.From(ctx).Warn("jwt verification anomaly", "reason", reason, "err", err.Error())
+		log.Warn("jwt verification anomaly", "reason", reason, "err", err.Error())
 		return
 	}
-	logctx.From(ctx).Debug("jwt verification rejected", "reason", reason)
+	log.Debug("jwt verification rejected", "reason", reason)
 }
 
 // classifyParseError maps a golang-jwt v4 *ValidationError bitfield to a stable

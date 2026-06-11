@@ -28,12 +28,13 @@ func NewHandler(audit *useraudit.Service) *Handler {
 func (*Handler) Topic() string { return userCreatedTopic }
 
 func (h *Handler) Handle(ctx context.Context, payload []byte) error {
+	log := logctx.From(ctx)
 	var msg UserCreatedMessage
 	if err := json.Unmarshal(payload, &msg); err != nil {
 		// Poison message: malformed JSON cannot be retried. Log and ack so
 		// it doesn't block the partition. Tune this to nack-to-DLQ in
 		// production if your broker has one configured.
-		logctx.From(ctx).Error("user.created: malformed payload", "err", err.Error())
+		log.Error("user.created: malformed payload", "err", err.Error())
 		return nil
 	}
 
@@ -47,6 +48,6 @@ func (h *Handler) Handle(ctx context.Context, payload []byte) error {
 	if err := h.audit.RecordUserCreated(ctx, input); err != nil {
 		return errors.Wrapf(err, "handle user.created user_id=%d", msg.UserID)
 	}
-	logctx.From(ctx).Info("user.created: recorded", "user_id", msg.UserID)
+	log.Info("user.created: recorded", "user_id", msg.UserID)
 	return nil
 }

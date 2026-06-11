@@ -6,9 +6,10 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/logctx"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 func traceIDOr(sc trace.SpanContext) string {
@@ -31,23 +32,36 @@ func (s *statusRecorder) WriteHeader(code int) {
 // Logging builds a request-scoped logger (request_id + trace_id), attaches it
 // to ctx, installs an AppError stash slot (httpwriter.WriteError fills it on
 // 4xx/5xx), and emits ONE access log per request with severity by status.
-func Logging(base *logger.Logger) func(http.Handler) http.Handler {
+func Logging(base observability.Logger) func(http.Handler) http.Handler {
+	skipPaths := map[string]struct{}{
+		"/healthz": {},
+		"/readyz":  {},
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := skipPaths[r.URL.Path]; ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			start := time.Now()
 			ctx := r.Context()
-			reqID := RequestIDFrom(ctx)
+			reqID := httputil.RequestIDFrom(ctx)
 			sc := trace.SpanContextFromContext(ctx)
 
 			// URL.Path is path-only (no query string) — keep it that way so
 			// secrets in `?token=...` never reach structured logs. Do NOT
 			// switch to r.RequestURI or URL.String().
+			// scoped is the request-scoped logger handed to inner layers via
+			// logctx: only the correlation fields belong here. client_ip/user_agent
+			// are deliberately NOT attached — they're entry-point facts that belong
+			// on the single access line below, not repeated on every inner log.
 			scoped := base.
 				With("request_id", reqID).
 				With("trace_id", traceIDOr(sc)).
 				With("method", r.Method).
 				With("path", r.URL.Path)
-			ctx = logctx.Into(ctx, scoped)
+			ctx = logctx.With(ctx, scoped)
 			ctx = errors.PrepareAppErrorContext(ctx)
 			r = r.WithContext(ctx)
 
@@ -63,6 +77,8 @@ func Logging(base *logger.Logger) func(http.Handler) http.Handler {
 			fields := []any{
 				"status", rec.status,
 				"duration_ms", time.Since(start).Milliseconds(),
+				"client_ip", r.RemoteAddr,
+				"user_agent", r.UserAgent(),
 			}
 			if app := errors.AppErrorFromContext(ctx); app != nil {
 				fields = append(fields, "app_code", app.Code)

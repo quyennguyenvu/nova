@@ -7,7 +7,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
-	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 // rabbitmqConsumer adapts an AMQP channel to the worker.Consumer port.
@@ -20,13 +20,13 @@ type rabbitmqConsumer struct {
 	ch       *amqp.Channel
 	exchange string
 	queue    string
-	log      *logger.Logger
+	log      observability.Logger
 }
 
 // NewRabbitMQConsumer wraps the channel opened by
 // infrastructure/pubsub.NewRabbitMQChannel. The queue name is read from
 // config so multiple consumer replicas share a queue (and load-balance).
-func NewRabbitMQConsumer(ch *amqp.Channel, cfg *config.RabbitMQConfig, log *logger.Logger) Consumer {
+func NewRabbitMQConsumer(ch *amqp.Channel, cfg *config.RabbitMQConfig, log observability.Logger) Consumer {
 	return &rabbitmqConsumer{
 		ch:       ch,
 		exchange: cfg.Exchange,

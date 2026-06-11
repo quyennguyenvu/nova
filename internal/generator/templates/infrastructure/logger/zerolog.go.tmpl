@@ -3,6 +3,8 @@ package logger
 import (
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -13,6 +15,19 @@ import (
 )
 
 var _ observability.Logger = (*Logger)(nil)
+
+// callerSkip counts the wrapper frames between a caller's logging call and the
+// zerolog Event.Caller() invocation inside emit: emit → Logger.<Level> → the
+// real call site. Without it every line would report zerolog.go (the wrapper)
+// as the source.
+const callerSkip = 2
+
+// shortCaller renders the caller as "package/file:line" (the directory holding
+// the file + the file), e.g. "redis/user_cache.go:52" — enough to locate the
+// source without absolute-path noise.
+func shortCaller(_ uintptr, file string, line int) string {
+	return filepath.Base(filepath.Dir(file)) + "/" + filepath.Base(file) + ":" + strconv.Itoa(line)
+}
 
 // Logger is an instance-based structured logger. Pass it through DI; never use a package global.
 type Logger struct {
@@ -27,6 +42,7 @@ func New(cfg config.LogConfig) *Logger {
 // NewWithWriter is useful for tests.
 func NewWithWriter(cfg config.LogConfig, w io.Writer) *Logger {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+	zerolog.CallerMarshalFunc = shortCaller
 
 	writer := w
 	if strings.EqualFold(cfg.Format, "console") {
@@ -62,6 +78,7 @@ func (l *Logger) Error(msg string, kv ...any) { emit(l.zl.Error(), msg, kv) }
 
 // emit writes (key, value) pairs as structured fields. Odd-length input is ignored silently.
 func emit(ev *zerolog.Event, msg string, kv []any) {
+	ev = ev.Caller(callerSkip)
 	if len(kv)%2 != 0 {
 		kv = kv[:len(kv)-1]
 	}

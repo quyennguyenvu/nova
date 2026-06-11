@@ -3,26 +3,58 @@
 // All success and error responses share a single shape:
 //
 //	{
-//	  "success": true|false,
-//	  "data":    <payload>,           // present on success
-//	  "error":   { "code": int, "message": string }, // present on error
-//	  "meta":    { "page": int, "per_page": int, "total": int } // optional pagination
+//	  "success":   true|false,
+//	  "data":      <payload>,           // present on success
+//	  "error":     { "code": int, "message": string }, // present on error
+//	  "meta":      { "page": int, "per_page": int, "total": int }, // optional pagination
+//	  "requestId": string               // correlation ID, mirrors the X-Request-ID header
 //	}
+//
+// requestId is the same value as the X-Request-ID response header (see
+// RequestIDHeader). Surfacing it in the body lets a client quote one ID when
+// reporting an issue; grepping the logs for that request_id replays the whole
+// request — every log line the request produced carries it, with caller
+// file:line — so you can see what ran and where it errored.
 package httputil
 
 import (
+	"context"
 	"net/http"
 
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/locale"
 )
 
+// RequestIDHeader is the HTTP header carrying the correlation ID on both the
+// inbound request (clients may supply their own) and the response.
+const RequestIDHeader = "X-Request-ID"
+
+type requestIDKey struct{}
+
+// WithRequestID returns a copy of ctx carrying id as the request correlation ID.
+// The RequestID middleware calls this at the transport boundary.
+func WithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// RequestIDFrom returns the request ID attached to ctx, or "" if none. Safe to
+// call from any layer (usecase, repository) that needs to log or propagate the
+// ID to downstream services — it lives here, not in transport, so inner layers
+// can reach it without importing a transport package.
+func RequestIDFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(requestIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // Response is the single envelope for every HTTP response.
 type Response struct {
-	Success bool       `json:"success"`
-	Data    any        `json:"data,omitempty"`
-	Error   *ErrorBody `json:"error,omitempty"`
-	Meta    *Meta      `json:"meta,omitempty"`
+	Success   bool       `json:"success"`
+	Data      any        `json:"data,omitempty"`
+	Error     *ErrorBody `json:"error,omitempty"`
+	Meta      *Meta      `json:"meta,omitempty"`
+	RequestID string     `json:"requestId,omitempty"`
 }
 
 // ErrorBody is the machine-readable error payload.

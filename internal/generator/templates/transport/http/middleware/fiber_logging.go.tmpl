@@ -1,14 +1,16 @@
 package middleware
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"go.opentelemetry.io/otel/trace"
 
-	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/logctx"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 func traceIDOr(sc trace.SpanContext) string {
@@ -29,22 +31,34 @@ func errMsg(err error) string {
 // attaches it to ctx so inner layers can retrieve it via logctx.From, installs
 // an AppError stash slot (httpwriter.WriteError fills it on 4xx/5xx), and emits
 // exactly ONE access log at the end of the request.
-func Logging(base *logger.Logger) fiber.Handler {
+func Logging(base observability.Logger) fiber.Handler {
+	skipPaths := map[string]struct{}{
+		"/healthz": {},
+		"/readyz":  {},
+	}
 	return func(c *fiber.Ctx) error {
+		if _, ok := skipPaths[c.Path()]; ok {
+			return c.Next()
+		}
+
 		start := time.Now()
 		ctx := c.UserContext()
-		reqID := RequestIDFrom(ctx)
+		reqID := httputil.RequestIDFrom(ctx)
 		sc := trace.SpanContextFromContext(ctx)
 
 		// c.Path() returns the route path only (no query string) — keep it
 		// that way so secrets in `?token=...` never reach structured logs.
 		// Do NOT switch to c.OriginalURL() or fasthttp.RequestURI().
+		// scoped is the request-scoped logger handed to inner layers via
+		// logctx: only the correlation fields belong here. client_ip/user_agent
+		// are deliberately NOT attached — they're entry-point facts that belong
+		// on the single access line below, not repeated on every inner log.
 		scoped := base.
 			With("request_id", reqID).
 			With("trace_id", traceIDOr(sc)).
 			With("method", c.Method()).
 			With("path", c.Path())
-		ctx = logctx.Into(ctx, scoped)
+		ctx = logctx.With(ctx, scoped)
 		ctx = errors.PrepareAppErrorContext(ctx)
 		c.SetUserContext(ctx)
 
@@ -52,9 +66,9 @@ func Logging(base *logger.Logger) fiber.Handler {
 
 		status := c.Response().StatusCode()
 		ev := scoped.Info
-		if err != nil || status >= 500 {
+		if err != nil || status >= http.StatusInternalServerError {
 			ev = scoped.Error
-		} else if status >= 400 {
+		} else if status >= http.StatusBadRequest {
 			ev = scoped.Warn
 		}
 
@@ -62,13 +76,15 @@ func Logging(base *logger.Logger) fiber.Handler {
 			"status", status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"err", errMsg(err),
+			"client_ip", c.IP(),
+			"user_agent", string(c.Request().Header.UserAgent()),
 		}
 		if app := errors.AppErrorFromContext(ctx); app != nil {
 			fields = append(fields, "app_code", app.Code)
 			if app.Locale != 0 {
 				fields = append(fields, "app_locale", int(app.Locale))
 			}
-			if status >= 500 {
+			if err != nil || status >= http.StatusInternalServerError {
 				fields = append(fields, "app_trace", app.Trace())
 			}
 		}

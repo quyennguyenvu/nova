@@ -67,6 +67,6 @@ func (w *Worker) dispatch(ctx context.Context, topic string, payload []byte) err
 		return nil
 	}
 	scoped := w.log.With("topic", topic).With("size", len(payload))
-	ctx = logctx.Into(ctx, scoped)
+	ctx = logctx.With(ctx, scoped)
 	return h.Handle(ctx, payload)
 }

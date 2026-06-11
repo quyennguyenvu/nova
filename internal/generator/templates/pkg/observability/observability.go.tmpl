@@ -1,7 +1,7 @@
 // Package observability defines the cross-cutting telemetry ports used across
-// the application. Logger is the canonical structured-logging surface —
-// pkg/logctx aliases it, internal/infrastructure/logger satisfies it, and
-// inner layers (usecase, repository) depend on it via logctx.From(ctx).
+// the application. Logger is the canonical structured-logging surface that
+// internal/infrastructure/logger satisfies; pkg/logctx threads it through
+// context and inner layers (usecase, repository) depend on it via logctx.From.
 //
 // Tracing and metrics are intentionally not modelled as ports here: the
 // OpenTelemetry package-level APIs (otel.Tracer / otel.Meter) and ctx-threaded
@@ -20,3 +20,16 @@ type Logger interface {
 	Error(msg string, kv ...any)
 	With(key string, value any) Logger
 }
+
+// Nop returns a Logger that discards everything. It is the port-level default
+// so callers that resolve a logger from context (see pkg/logctx) can fall back
+// without importing a concrete implementation or nil-checking on every call.
+func Nop() Logger { return nopLogger{} }
+
+type nopLogger struct{}
+
+func (nopLogger) Debug(string, ...any)    {}
+func (nopLogger) Info(string, ...any)     {}
+func (nopLogger) Warn(string, ...any)     {}
+func (nopLogger) Error(string, ...any)    {}
+func (nopLogger) With(string, any) Logger { return nopLogger{} }

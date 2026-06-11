@@ -6,9 +6,10 @@ import (
 	"github.com/labstack/echo/v4"
 	"go.opentelemetry.io/otel/trace"
 
-	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/logctx"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 func traceIDOr(sc trace.SpanContext) string {
@@ -28,24 +29,36 @@ func errMsg(err error) string {
 // Logging builds a request-scoped logger (request_id + trace_id), attaches it
 // to ctx, installs an AppError stash slot (httpwriter.WriteError fills it on
 // 4xx/5xx), and emits ONE access log per request with severity by status.
-func Logging(base *logger.Logger) echo.MiddlewareFunc {
+func Logging(base observability.Logger) echo.MiddlewareFunc {
+	skipPaths := map[string]struct{}{
+		"/healthz": {},
+		"/readyz":  {},
+	}
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			if _, ok := skipPaths[c.Path()]; ok {
+				return next(c)
+			}
+
 			start := time.Now()
 			req := c.Request()
 			ctx := req.Context()
-			reqID := RequestIDFrom(ctx)
+			reqID := httputil.RequestIDFrom(ctx)
 			sc := trace.SpanContextFromContext(ctx)
 
 			// c.Path() returns the route pattern (no query string) — keep
 			// it that way so secrets in `?token=...` never reach structured
 			// logs. Do NOT switch to req.URL.RequestURI() or URL.String().
+			// scoped is the request-scoped logger handed to inner layers via
+			// logctx: only the correlation fields belong here. client_ip/user_agent
+			// are deliberately NOT attached — they're entry-point facts that belong
+			// on the single access line below, not repeated on every inner log.
 			scoped := base.
 				With("request_id", reqID).
 				With("trace_id", traceIDOr(sc)).
 				With("method", req.Method).
 				With("path", c.Path())
-			ctx = logctx.Into(ctx, scoped)
+			ctx = logctx.With(ctx, scoped)
 			ctx = errors.PrepareAppErrorContext(ctx)
 			c.SetRequest(req.WithContext(ctx))
 
@@ -62,6 +75,8 @@ func Logging(base *logger.Logger) echo.MiddlewareFunc {
 				"status", status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"err", errMsg(err),
+				"client_ip", c.RealIP(),
+				"user_agent", req.UserAgent(),
 			}
 			if app := errors.AppErrorFromContext(ctx); app != nil {
 				fields = append(fields, "app_code", app.Code)

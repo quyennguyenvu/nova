@@ -505,6 +505,159 @@ func TestNewRejectsUnsupportedDI(t *testing.T) {
 	}
 }
 
+// TestTransportLoggerPortDecoupling pins the transport→observability.Logger
+// seam: transport-layer files must depend on the pkg/observability port, never
+// the concrete infrastructure/logger, and the DI graph must bridge the port to
+// the concrete *logger.Logger so the App bundle + infra consumers keep it.
+// Neither half is caught by the matrix's `go vet` — wire.go is build-tagged
+// (vet skips it) and fx resolves its graph at runtime (vet never calls Start) —
+// so assert on the rendered text here.
+func TestTransportLoggerPortDecoupling(t *testing.T) {
+	t.Parallel()
+
+	render := func(t *testing.T, cfg *config.ProjectConfig) string {
+		t.Helper()
+		dir := t.TempDir()
+		gen, err := New(cfg)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if genErr := gen.Generate(dir); genErr != nil {
+			t.Fatalf("Generate: %v", genErr)
+		}
+		return dir
+	}
+
+	// Transport files must reference the port and not import the concrete impl.
+	assertDecoupled := func(t *testing.T, dir string, files ...string) {
+		t.Helper()
+		for _, f := range files {
+			src := readFile(t, filepath.Join(dir, f))
+			if strings.Contains(src, "internal/infrastructure/logger") {
+				t.Errorf("%s imports the concrete logger — transport must depend on the observability.Logger port", f)
+			}
+			if !strings.Contains(src, "observability.Logger") {
+				t.Errorf("%s does not reference observability.Logger — logger port not wired through", f)
+			}
+		}
+	}
+
+	// fx matches by exact type, so the port consumers need a concrete→port
+	// caster that is both defined and registered in the infra module.
+	assertFxCaster := func(t *testing.T, dir string) {
+		t.Helper()
+		prov := readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx_provider.go"))
+		if !strings.Contains(prov, "func provideObservabilityLogger(l *logger.Logger) observability.Logger") {
+			t.Error("fx_provider.go missing provideObservabilityLogger caster — fx transport consumers fail at runtime")
+		}
+		fxSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx.go"))
+		if !strings.Contains(fxSrc, "provideObservabilityLogger,") {
+			t.Error("fx.go infraModule does not register the provideObservabilityLogger caster")
+		}
+	}
+
+	httpFiles := []string{
+		"internal/transport/http/router.go",
+		"internal/transport/http/middleware/logging.go",
+	}
+	workerFiles := []string{
+		"internal/transport/worker/worker.go",
+		"internal/transport/worker/consumer.go",
+	}
+
+	t.Run("wire_http", func(t *testing.T) {
+		t.Parallel()
+		dir := render(t, httpMatrixConfig("fiber", "postgres", "wire"))
+		assertDecoupled(t, dir, httpFiles...)
+		wireSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/di/wire.go"))
+		if !strings.Contains(wireSrc, "wire.Bind(new(observability.Logger), new(*logger.Logger))") {
+			t.Error("wire.go infraSet missing the observability.Logger → *logger.Logger bind")
+		}
+	})
+
+	t.Run("fx_http", func(t *testing.T) {
+		t.Parallel()
+		dir := render(t, httpMatrixConfig("fiber", "postgres", "fx"))
+		assertDecoupled(t, dir, httpFiles...)
+		assertFxCaster(t, dir)
+	})
+
+	t.Run("wire_worker", func(t *testing.T) {
+		t.Parallel()
+		dir := render(t, workerMatrixConfig("postgres", "kafka", "wire"))
+		assertDecoupled(t, dir, workerFiles...)
+	})
+
+	t.Run("fx_worker", func(t *testing.T) {
+		t.Parallel()
+		dir := render(t, workerMatrixConfig("postgres", "kafka", "fx"))
+		assertDecoupled(t, dir, workerFiles...)
+		assertFxCaster(t, dir)
+	})
+}
+
+// TestRequestIDInResponseEnvelope pins the request-ID correlation contract for
+// every HTTP framework: the response envelope must expose a requestId field,
+// the request-ID context plumbing must live in pkg/httputil (so httpwriter can
+// stamp it without importing transport/middleware — that would be an import
+// cycle), the writer must populate resp.RequestID, and the RequestID middleware
+// must thread the ID through httputil.WithRequestID. None of this is provable by
+// the matrix's `go vet` (it compiles fine either way), so assert on the text.
+func TestRequestIDInResponseEnvelope(t *testing.T) {
+	t.Parallel()
+
+	for _, fw := range []string{"fiber", "gin", "chi", "echo"} {
+		t.Run(fw, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			gen, err := New(httpMatrixConfig(fw, "postgres", "wire"))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if genErr := gen.Generate(dir); genErr != nil {
+				t.Fatalf("Generate: %v", genErr)
+			}
+			assertRequestIDContract(t, dir)
+		})
+	}
+}
+
+// assertRequestIDContract checks one rendered project carries the full
+// request-ID correlation seam: envelope field, httputil plumbing, writer stamp,
+// and middleware wiring.
+func assertRequestIDContract(t *testing.T, dir string) {
+	t.Helper()
+
+	// The envelope carries requestId, and httputil owns the plumbing.
+	env := readFile(t, filepath.Join(dir, "pkg/httputil/response.go"))
+	for _, want := range []string{
+		"`json:\"requestId,omitempty\"`",
+		`const RequestIDHeader = "X-Request-ID"`,
+		"func RequestIDFrom(ctx context.Context) string",
+		"func WithRequestID(ctx context.Context, id string) context.Context",
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("pkg/httputil/response.go missing %q", want)
+		}
+	}
+
+	// The writer stamps the ID onto the envelope.
+	writer := readFile(t, filepath.Join(dir, "internal/transport/http/httpwriter/writer.go"))
+	if !strings.Contains(writer, "resp.RequestID =") {
+		t.Error("writer.go does not stamp resp.RequestID — responses won't carry the ID")
+	}
+
+	// The middleware threads the ID via the shared httputil plumbing and no
+	// longer declares a local copy (which httpwriter couldn't reach).
+	rid := readFile(t, filepath.Join(dir, "internal/transport/http/middleware/requestid.go"))
+	if !strings.Contains(rid, "httputil.WithRequestID(") {
+		t.Error("requestid.go does not use httputil.WithRequestID")
+	}
+	if strings.Contains(rid, "type requestIDKey struct{}") {
+		t.Error("requestid.go still declares a local request-ID key — should use pkg/httputil")
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

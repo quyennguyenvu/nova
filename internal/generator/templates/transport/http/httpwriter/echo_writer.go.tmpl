@@ -13,7 +13,9 @@ import (
 
 // WriteJSON writes a successful JSON response wrapped in the standard envelope.
 func WriteJSON(c echo.Context, status int, data any) error {
-	return c.JSON(status, httputil.SuccessResponse(data))
+	resp := httputil.SuccessResponse(data)
+	resp.RequestID = httputil.RequestIDFrom(c.Request().Context())
+	return c.JSON(status, resp)
 }
 
 // WriteError writes an error JSON response wrapped in the standard envelope.
@@ -26,5 +28,7 @@ func WriteError(c echo.Context, app *errors.AppError) error {
 	ctx := c.Request().Context()
 	errors.StashAppError(ctx, app)
 	lang := locale.LanguageFromContext(ctx)
-	return c.JSON(app.Code, httputil.ErrorResponseFromApp(app, lang))
+	resp := httputil.ErrorResponseFromApp(app, lang)
+	resp.RequestID = httputil.RequestIDFrom(ctx)
+	return c.JSON(app.Code, resp)
 }

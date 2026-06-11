@@ -45,6 +45,7 @@ import (
 	"{{.ModuleName}}/internal/usecase/useraudit"
 {{- end}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
+	"{{.ModuleName}}/pkg/observability"
 
 	"github.com/google/wire"
 )
@@ -59,6 +60,10 @@ var infraSet = wire.NewSet(
 	config.Load,
 	wire.FieldsOf(new(*config.Config), "Log", "JWT", "Security"),
 	logger.New,
+	// Transport depends on the observability.Logger port; bind it to the
+	// concrete *logger.Logger here so the App bundle + infra consumers keep
+	// the concrete while transport stays decoupled from infrastructure/logger.
+	wire.Bind(new(observability.Logger), new(*logger.Logger)),
 	jwtsec.NewTokenService,
 	infrasec.NewBcryptHasher,
 	wire.Bind(new(domainsec.PasswordHasher), new(*infrasec.BcryptHasher)),

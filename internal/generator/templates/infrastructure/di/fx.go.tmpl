@@ -71,6 +71,7 @@ func infraModule() fx.Option {
 		provideJWTConfig,
 		provideSecurityConfig,
 		logger.New,
+		provideObservabilityLogger,
 		jwtsec.NewTokenService,
 		fx.Annotate(infrasec.NewBcryptHasher, fx.As(new(domainsec.PasswordHasher))),
 		provideValidator,

@@ -6,7 +6,7 @@ import (
 
 	"github.com/IBM/sarama"
 
-	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 // kafkaConsumer adapts sarama.ConsumerGroup to the worker.Consumer port.
@@ -17,12 +17,12 @@ import (
 // topic has more than one partition.
 type kafkaConsumer struct {
 	group sarama.ConsumerGroup
-	log   *logger.Logger
+	log   observability.Logger
 }
 
 // NewKafkaConsumer wraps the consumer group constructed in
 // infrastructure/pubsub.NewKafkaConsumerGroup.
-func NewKafkaConsumer(group sarama.ConsumerGroup, log *logger.Logger) Consumer {
+func NewKafkaConsumer(group sarama.ConsumerGroup, log observability.Logger) Consumer {
 	return &kafkaConsumer{group: group, log: log}
 }
 
@@ -55,7 +55,7 @@ func (c *kafkaConsumer) Close() error {
 // rebalance the session.
 type kafkaSessionHandler struct {
 	dispatch DispatchFunc
-	log      *logger.Logger
+	log      observability.Logger
 }
 
 func (*kafkaSessionHandler) Setup(sarama.ConsumerGroupSession) error   { return nil }

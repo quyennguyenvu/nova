@@ -6,9 +6,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/trace"
 
-	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/logctx"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 func traceIDOr(sc trace.SpanContext) string {
@@ -21,22 +22,35 @@ func traceIDOr(sc trace.SpanContext) string {
 // Logging builds a request-scoped logger (request_id + trace_id), attaches it
 // to ctx, installs an AppError stash slot (httpwriter.WriteError fills it on
 // 4xx/5xx), and emits ONE access log per request with severity by status.
-func Logging(base *logger.Logger) gin.HandlerFunc {
+func Logging(base observability.Logger) gin.HandlerFunc {
+	skipPaths := map[string]struct{}{
+		"/healthz": {},
+		"/readyz":  {},
+	}
 	return func(c *gin.Context) {
+		if _, ok := skipPaths[c.Request.URL.Path]; ok {
+			c.Next()
+			return
+		}
+
 		start := time.Now()
 		ctx := c.Request.Context()
-		reqID := RequestIDFrom(ctx)
+		reqID := httputil.RequestIDFrom(ctx)
 		sc := trace.SpanContextFromContext(ctx)
 
 		// URL.Path is path-only (no query string) — keep it that way so
 		// secrets in `?token=...` never reach structured logs. Do NOT
 		// switch to c.Request.RequestURI or URL.String().
+		// scoped is the request-scoped logger handed to inner layers via
+		// logctx: only the correlation fields belong here. client_ip/user_agent
+		// are deliberately NOT attached — they're entry-point facts that belong
+		// on the single access line below, not repeated on every inner log.
 		scoped := base.
 			With("request_id", reqID).
 			With("trace_id", traceIDOr(sc)).
 			With("method", c.Request.Method).
 			With("path", c.Request.URL.Path)
-		ctx = logctx.Into(ctx, scoped)
+		ctx = logctx.With(ctx, scoped)
 		ctx = errors.PrepareAppErrorContext(ctx)
 		c.Request = c.Request.WithContext(ctx)
 
@@ -53,6 +67,8 @@ func Logging(base *logger.Logger) gin.HandlerFunc {
 			"status", status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"err", c.Errors.String(),
+			"client_ip", c.ClientIP(),
+			"user_agent", c.Request.UserAgent(),
 		}
 		if app := errors.AppErrorFromContext(ctx); app != nil {
 			fields = append(fields, "app_code", app.Code)

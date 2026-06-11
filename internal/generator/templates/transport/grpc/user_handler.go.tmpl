@@ -9,14 +9,14 @@ package grpc
 import (
 	"context"
 
-	"{{.ModuleName}}/internal/infrastructure/logger"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 type UserHandler struct {
-	logger *logger.Logger
+	logger observability.Logger
 }
 
-func NewUserHandler(log *logger.Logger) *UserHandler {
+func NewUserHandler(log observability.Logger) *UserHandler {
 	return &UserHandler{logger: log}
 }
 

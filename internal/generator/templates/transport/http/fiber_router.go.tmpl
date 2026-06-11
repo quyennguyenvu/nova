@@ -10,9 +10,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
-	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/middleware"
+	"{{.ModuleName}}/pkg/observability"
 )
 
 // Registrar attaches a feature's routes to a router subtree. The version
@@ -37,7 +37,7 @@ type Registrar interface {
 // envelope. The check itself is cheap so the middleware overhead is fine.
 func NewRouter(
 	cfg *config.Config,
-	log *logger.Logger,
+	log observability.Logger,
 	checker *health.Checker,
 	registrars []Registrar,
 ) *fiber.App {
