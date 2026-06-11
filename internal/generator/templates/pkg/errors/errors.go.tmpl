@@ -35,6 +35,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -68,12 +69,23 @@ type Frame struct {
 }
 
 func (f Frame) String() string {
-	loc := fmt.Sprintf("%s:%d", f.File, f.Line)
+	loc := fmt.Sprintf("%s:%d", shortFile(f.File), f.Line)
 
 	if f.Msg != "" {
 		return fmt.Sprintf("%s (%s)", loc, f.Msg)
 	}
 	return loc
+}
+
+// shortFile renders a captured caller path as "package/file" (the directory
+// holding the file + the file), e.g. "user/service.go" — matching the logger's
+// caller format so a trace entry and a log "caller" field read the same way,
+// without leaking absolute build paths.
+func shortFile(file string) string {
+	if file == "" || file == "?" {
+		return file
+	}
+	return filepath.Base(filepath.Dir(file)) + "/" + filepath.Base(file)
 }
 
 // AppError is the HTTP-mappable error returned to clients at the transport
