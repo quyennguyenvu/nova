@@ -9,6 +9,8 @@ import (
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+	"{{.ModuleName}}/pkg/logctx"
 )
 
 // Handler is the HTTP boundary for user operations. It never logs — the
@@ -24,14 +26,17 @@ func NewHandler(userService *usersvc.Service, validate *validator.Validate) *Han
 }
 
 // bind parses the request body into v, then enforces struct-tag validation.
-// Validation errors are mapped to 400 with the validator's own message so
-// clients see field-by-field failures.
+// Body-parse failures return the parser's own message; validation failures are
+// logged at warn (with the validator's field-by-field detail) and mapped to a
+// generic localized 400 so clients don't see internal field names.
 func (h *Handler) bind(c *fiber.Ctx, v any) *errors.AppError {
+	log := logctx.From(c.UserContext())
 	if err := c.BodyParser(v); err != nil {
 		return errors.BadRequest(err.Error())
 	}
 	if err := h.validate.Struct(v); err != nil {
-		return errors.BadRequest(err.Error())
+		log.Warn(err.Error())
+		return errors.BadRequestL(locale.InvalidRequest)
 	}
 	return nil
 }

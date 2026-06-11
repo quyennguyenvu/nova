@@ -10,6 +10,8 @@ import (
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+	"{{.ModuleName}}/pkg/logctx"
 )
 
 // Handler is the HTTP boundary for user operations. It never logs — the
@@ -24,14 +26,18 @@ func NewHandler(userService *usersvc.Service, validate *validator.Validate) *Han
 	return &Handler{userService: userService, validate: validate}
 }
 
-// bind decodes JSON + enforces struct-tag validation. Validation errors map
-// to 400 with the validator's own message so clients see field-by-field detail.
+// bind decodes JSON + enforces struct-tag validation. Decode failures return
+// the binder's own message; validation failures are logged at warn (with the
+// validator's field-by-field detail) and mapped to a generic localized 400 so
+// clients don't see internal field names.
 func (h *Handler) bind(c *gin.Context, v any) *errors.AppError {
+	log := logctx.From(c.Request.Context())
 	if err := c.ShouldBindJSON(v); err != nil {
 		return errors.BadRequest(err.Error())
 	}
 	if err := h.validate.Struct(v); err != nil {
-		return errors.BadRequest(err.Error())
+		log.Warn(err.Error())
+		return errors.BadRequestL(locale.InvalidRequest)
 	}
 	return nil
 }
