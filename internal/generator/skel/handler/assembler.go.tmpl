@@ -1,0 +1,18 @@
+package {{.Package}}
+
+// To{{.Title}}Response projects a use-case Output into the HTTP response shape.
+// Swap the `src any` placeholder for your use case's concrete *Output once it
+// exists, then map its fields below — this layer owns the json tags (see dto.go).
+func To{{.Title}}Response(src any) *{{.Title}}Response {
+	_ = src // TODO: map fields from the use-case output
+	return &{{.Title}}Response{}
+}
+
+// To{{.Title}}ListResponse projects a slice of use-case Outputs.
+func To{{.Title}}ListResponse(srcs []any) []*{{.Title}}Response {
+	responses := make([]*{{.Title}}Response, len(srcs))
+	for i := range srcs {
+		responses[i] = To{{.Title}}Response(srcs[i])
+	}
+	return responses
+}

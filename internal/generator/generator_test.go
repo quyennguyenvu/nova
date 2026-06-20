@@ -22,7 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type DBTX interface{}
+type DBTX any
 type Queries struct{}
 
 func New(DBTX) *Queries { return &Queries{} }
@@ -82,7 +82,7 @@ import (
 	"time"
 )
 
-type DBTX interface{}
+type DBTX any
 type Queries struct{}
 
 func New(DBTX) *Queries { return &Queries{} }

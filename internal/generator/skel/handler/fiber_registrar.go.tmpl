@@ -1,0 +1,31 @@
+package {{.Package}}
+
+import (
+	"github.com/gofiber/fiber/v2"
+)
+
+// Registrar mounts the {{.Lower}} feature's HTTP routes. It satisfies the
+// transport/http.Registrar interface (Prefix + Register); the router groups
+// registrars by Prefix and mounts each under it.
+//
+// Prefix is declared locally so this scaffold drops into any layout. In a
+// nova-new project you can instead embed v1.Prefixed
+// (internal/transport/http/v1) to share the /api/v1 prefix across features
+// rather than restating it here.
+type Registrar struct {
+	handler *{{.Title}}Handler
+}
+
+func NewRegistrar(h *{{.Title}}Handler) *Registrar {
+	return &Registrar{handler: h}
+}
+
+func (*Registrar) Prefix() string { return "/api/v1" }
+
+func (r *Registrar) Register(router fiber.Router) {
+	group := router.Group("/{{.Lower}}s")
+	group.Post("/", r.handler.Create)
+	group.Get("/:id", r.handler.GetByID)
+	group.Put("/:id", r.handler.Update)
+	group.Delete("/:id", r.handler.Delete)
+}

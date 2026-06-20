@@ -62,7 +62,9 @@ func (g *ComponentGenerator) GenerateEntity(name string) error {
 	return nil
 }
 
-// GenerateUseCase creates a new use case (service + DTO + errors).
+// GenerateUseCase creates a new use case (service + DTO). Errors are not
+// scaffolded per-usecase: the canonical layout centralizes them as locale
+// codes (pkg/locale) raised via pkg/errors, mirroring `nova new`.
 func (g *ComponentGenerator) GenerateUseCase(name string) error {
 	res, err := g.target("usecase", name, "")
 	if err != nil {
@@ -72,7 +74,6 @@ func (g *ComponentGenerator) GenerateUseCase(name string) error {
 	specs := []renderSpec{
 		{"skel/usecase/service.go.tmpl", filepath.Join(res.Dir, "service.go"), false},
 		{"skel/usecase/dto.go.tmpl", filepath.Join(res.Dir, "dto.go"), false},
-		{"skel/usecase/errors.go.tmpl", filepath.Join(res.Dir, "errors.go"), false},
 	}
 	if rErr := g.renderTemplates(specs, data); rErr != nil {
 		return rErr
@@ -82,20 +83,34 @@ func (g *ComponentGenerator) GenerateUseCase(name string) error {
 	return nil
 }
 
-// GenerateHandler creates a new HTTP handler.
+// GenerateHandler creates a new HTTP handler plus its request/response DTOs,
+// assembler, and route registrar — the same file split as `nova new`
+// (handler.go + dto.go + assembler.go + registrar.go in one package). The
+// handler + registrar are rendered for the manifest's Stack.HTTPFramework
+// (fiber/gin/chi/echo); dto + assembler are framework-agnostic.
 func (g *ComponentGenerator) GenerateHandler(name string) error {
 	res, err := g.target("handler", name, "")
 	if err != nil {
 		return err
 	}
+	fw := g.manifest.Stack.HTTPFramework
+	if !supportedFrameworks[fw] {
+		return fmt.Errorf(
+			"add handler: unsupported http_framework %q in nova.yaml (valid: fiber, gin, chi, echo)",
+			fw,
+		)
+	}
 	data := tmplData{Package: res.Package, Title: toTitle(name), Lower: strings.ToLower(name)}
 	if rErr := g.renderTemplates([]renderSpec{
-		{"skel/handler/handler.go.tmpl", relOf(res, "handler.go"), false},
+		{"skel/handler/" + fw + "_handler.go.tmpl", relOf(res, "handler.go"), false},
+		{"skel/handler/dto.go.tmpl", relOf(res, "dto.go"), false},
+		{"skel/handler/assembler.go.tmpl", relOf(res, "assembler.go"), false},
+		{"skel/handler/" + fw + "_registrar.go.tmpl", relOf(res, "registrar.go"), false},
 	}, data); rErr != nil {
 		return rErr
 	}
 
-	fmt.Fprintf(os.Stdout, "✅ Generated handler: %sHandler\n", data.Title)
+	fmt.Fprintf(os.Stdout, "✅ Generated handler: %sHandler (%s)\n", data.Title, fw)
 	return nil
 }
 

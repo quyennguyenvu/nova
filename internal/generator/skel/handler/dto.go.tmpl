@@ -1,0 +1,19 @@
+package {{.Package}}
+
+import "time"
+
+type Create{{.Title}}Request struct {
+	// TODO: add request fields with validate tags, e.g.
+	// Name string `json:"name" validate:"required,min=2,max=100"`
+}
+
+type Update{{.Title}}Request struct {
+	// TODO: add request fields with validate tags
+}
+
+// {{.Title}}Response is the HTTP response body — this layer owns the json tags.
+type {{.Title}}Response struct {
+	ID        int64     `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}

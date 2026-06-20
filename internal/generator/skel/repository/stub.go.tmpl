@@ -13,17 +13,17 @@ func New{{.Title}}Repository() *{{.Title}}Repository {
 	return &{{.Title}}Repository{}
 }
 
-func (r *{{.Title}}Repository) Create(ctx context.Context, {{.Lower}} interface{}) error {
+func (r *{{.Title}}Repository) Create(ctx context.Context, {{.Lower}} any) error {
 	// TODO: implement
 	return fmt.Errorf("not implemented")
 }
 
-func (r *{{.Title}}Repository) GetByID(ctx context.Context, id int64) (interface{}, error) {
+func (r *{{.Title}}Repository) GetByID(ctx context.Context, id int64) (any, error) {
 	// TODO: implement
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (r *{{.Title}}Repository) Update(ctx context.Context, {{.Lower}} interface{}) error {
+func (r *{{.Title}}Repository) Update(ctx context.Context, {{.Lower}} any) error {
 	// TODO: implement
 	return fmt.Errorf("not implemented")
 }
@@ -33,7 +33,7 @@ func (r *{{.Title}}Repository) Delete(ctx context.Context, id int64) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (r *{{.Title}}Repository) List(ctx context.Context, limit, offset int) ([]interface{}, error) {
+func (r *{{.Title}}Repository) List(ctx context.Context, limit, offset int) ([]any, error) {
 	// TODO: implement
 	return nil, fmt.Errorf("not implemented")
 }

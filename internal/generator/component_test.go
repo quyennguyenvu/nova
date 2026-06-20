@@ -43,7 +43,7 @@ func TestGenerateUseCaseDefaultLayout(t *testing.T) {
 	if err := gen.GenerateUseCase("Order"); err != nil {
 		t.Fatalf("GenerateUseCase: %v", err)
 	}
-	for _, f := range []string{"service.go", "dto.go", "errors.go"} {
+	for _, f := range []string{"service.go", "dto.go"} {
 		assertFileContains(t, filepath.Join(dir, "internal/usecase/order", f), "package order")
 	}
 }
@@ -198,6 +198,60 @@ func TestGenerateHandlerDefaultLayout(t *testing.T) {
 	p := filepath.Join(dir, "internal/transport/http/v1/order/handler.go")
 	assertFileContains(t, p, "package order")
 	assertFileContains(t, p, "type OrderHandler struct")
+
+	// Handler ships alongside its request/response DTOs and assembler, same
+	// three-file split as `nova new`.
+	dtoPath := filepath.Join(dir, "internal/transport/http/v1/order/dto.go")
+	assertFileContains(t, dtoPath, "type CreateOrderRequest struct")
+	assertFileContains(t, dtoPath, "type OrderResponse struct")
+	asmPath := filepath.Join(dir, "internal/transport/http/v1/order/assembler.go")
+	assertFileContains(t, asmPath, "func ToOrderResponse(src any) *OrderResponse")
+	regPath := filepath.Join(dir, "internal/transport/http/v1/order/registrar.go")
+	assertFileContains(t, regPath, "func NewRegistrar(h *OrderHandler) *Registrar")
+	assertFileContains(t, regPath, "group := router.Group(\"/orders\")")
+}
+
+// TestGenerateHandlerFrameworks proves the handler + registrar track the
+// manifest's Stack.HTTPFramework: each framework gets its own router/context
+// types, while dto + assembler stay framework-agnostic.
+func TestGenerateHandlerFrameworks(t *testing.T) {
+	cases := []struct {
+		fw              string
+		handlerContains string
+		regContains     string
+	}{
+		{"fiber", "c *fiber.Ctx", "router fiber.Router"},
+		{"gin", "c *gin.Context", "router gin.IRouter"},
+		{"chi", "w http.ResponseWriter, r *http.Request", "router chi.Router"},
+		{"echo", "c echo.Context", "router *echo.Group"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.fw, func(t *testing.T) {
+			m := manifest.Default()
+			m.Stack.HTTPFramework = tc.fw
+			gen, dir := newComponentGen(t, m)
+			if err := gen.GenerateHandler("Order"); err != nil {
+				t.Fatalf("GenerateHandler(%s): %v", tc.fw, err)
+			}
+			base := "internal/transport/http/v1/order"
+			assertFileContains(t, filepath.Join(dir, base, "handler.go"), tc.handlerContains)
+			assertFileContains(t, filepath.Join(dir, base, "registrar.go"), tc.regContains)
+			// Framework-agnostic files are identical regardless of framework.
+			assertFileContains(t, filepath.Join(dir, base, "dto.go"), "type OrderResponse struct")
+			assertFileContains(t, filepath.Join(dir, base, "assembler.go"), "func ToOrderResponse")
+		})
+	}
+}
+
+// TestGenerateHandlerUnsupportedFramework rejects a manifest naming a framework
+// nova doesn't have skel templates for, rather than emitting a broken handler.
+func TestGenerateHandlerUnsupportedFramework(t *testing.T) {
+	m := manifest.Default()
+	m.Stack.HTTPFramework = "express"
+	gen, _ := newComponentGen(t, m)
+	if err := gen.GenerateHandler("Order"); err == nil {
+		t.Fatal("expected error for unsupported http_framework, got nil")
+	}
 }
 
 func TestGenerateWorkerFullTransport(t *testing.T) {

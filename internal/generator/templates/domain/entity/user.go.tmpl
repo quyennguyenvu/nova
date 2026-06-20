@@ -13,17 +13,3 @@ type User struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
-
-// NewUser builds a User from an already-hashed credential. Hashing is the
-// usecase's job (it injects security.PasswordHasher) — this constructor
-// stays free of crypto so the domain has no security deps.
-func NewUser(email, name, passwordHash string) *User {
-	now := time.Now()
-	return &User{
-		Email:        email,
-		Name:         name,
-		PasswordHash: passwordHash,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	}
-}

@@ -1,0 +1,40 @@
+package {{.Package}}
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+type {{.Title}}Handler struct {
+	// TODO: inject {{.Lower}} use case service
+}
+
+func New{{.Title}}Handler() *{{.Title}}Handler {
+	return &{{.Title}}Handler{}
+}
+
+func (h *{{.Title}}Handler) Create(w http.ResponseWriter, r *http.Request) {
+	// TODO: implement
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
+}
+
+func (h *{{.Title}}Handler) GetByID(w http.ResponseWriter, r *http.Request) {
+	// TODO: implement
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *{{.Title}}Handler) Update(w http.ResponseWriter, r *http.Request) {
+	// TODO: implement
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *{{.Title}}Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	// TODO: implement
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}

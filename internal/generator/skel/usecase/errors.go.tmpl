@@ -1,8 +1,0 @@
-package {{.Package}}
-
-import "errors"
-
-var (
-	Err{{.Title}}NotFound      = errors.New("{{.Lower}} not found")
-	Err{{.Title}}AlreadyExists = errors.New("{{.Lower}} already exists")
-)

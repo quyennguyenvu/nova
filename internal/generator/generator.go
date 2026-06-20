@@ -35,9 +35,11 @@ type Generator struct {
 	tmpl *template.Template
 }
 
-// supportedFrameworks is the whitelist for cfg.HTTPFramework. Each value must
-// have a matching `<framework>_router.go.tmpl` + middleware + handler set in
-// internal/generator/templates/. Add new frameworks here in lockstep with
+// supportedFrameworks is the whitelist for cfg.HTTPFramework (`nova new`) and
+// manifest.Stack.HTTPFramework (`nova add handler`). Each value must have a
+// matching `<framework>_router.go.tmpl` + middleware + handler set in
+// internal/generator/templates/ AND a `<framework>_{handler,registrar}.go.tmpl`
+// in internal/generator/skel/handler/. Add new frameworks here in lockstep with
 // the template files.
 //
 //nolint:gochecknoglobals // immutable validation set; treated as a const.

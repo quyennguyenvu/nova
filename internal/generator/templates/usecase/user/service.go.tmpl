@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"sync"
+	"time"
 
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
@@ -69,7 +70,14 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, e
 		return nil, errors.Wrapf(err, "register user email=%s: hash", input.Email)
 	}
 
-	user := entity.NewUser(input.Email, input.Name, hash)
+	now := time.Now()
+	user := &entity.User{
+		Email:        input.Email,
+		Name:         input.Name,
+		PasswordHash: hash,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
 	if createErr := s.userRepo.Create(ctx, user); createErr != nil {
 		return nil, errors.Wrapf(createErr, "register user email=%s", input.Email)
 	}

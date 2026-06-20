@@ -11,12 +11,12 @@ func NewService() *Service {
 	return &Service{}
 }
 
-func (s *Service) Create{{.Title}}(ctx context.Context, input Create{{.Title}}Input) (interface{}, error) {
+func (s *Service) Create{{.Title}}(ctx context.Context, input Create{{.Title}}Input) (any, error) {
 	// TODO: implement
 	return nil, nil
 }
 
-func (s *Service) Get{{.Title}}(ctx context.Context, id int64) (interface{}, error) {
+func (s *Service) Get{{.Title}}(ctx context.Context, id int64) (any, error) {
 	// TODO: implement
 	return nil, nil
 }
