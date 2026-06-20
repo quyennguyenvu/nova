@@ -80,6 +80,7 @@ Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers
 - **Config.** Secrets and per-deploy endpoints live in `.env` (see `.env.example`); everything else in `internal/infrastructure/config`. The DB config is discrete typed fields, not a single connection-string blob.
 - **Adding a feature** = copy the `user` vertical slice: entity → domain port → usecase → adapter repo{{if .HasHTTP}} → transport handler + registrar{{else if .HasWorker}} → worker handler + DTO{{end}}, then wire it in `di`. The layout matches Nova's canonical manifest, so `nova add <entity|usecase|handler|repository> <name>` scaffolds one component if Nova is installed.
 - **Formatting & lint.** `make fmt` (goimports + golines, max line 120) before committing; lint config is strict.
+- **Commits.** Don't add a `Co-Authored-By: Claude` trailer (or any Claude/Anthropic co-author attribution) to commit messages.
   {{- if .HasSQL}}
 - **Transactions.** Keep transaction boundaries in the usecase layer via `TxManager.WithinTx`; repositories operate on whatever connection the context carries.
   {{- end}}
