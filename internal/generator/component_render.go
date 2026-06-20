@@ -35,22 +35,33 @@ func (g *ComponentGenerator) renderTemplates(specs []renderSpec, data any) error
 				continue
 			}
 		}
-		raw, err := skelFS.ReadFile(s.tmpl)
+		rendered, err := renderTemplateString(s.tmpl, data)
 		if err != nil {
-			return fmt.Errorf("read template %s: %w", s.tmpl, err)
+			return err
 		}
-		tmpl, err := template.New(filepath.Base(s.tmpl)).Parse(string(raw))
-		if err != nil {
-			return fmt.Errorf("parse template %s: %w", s.tmpl, err)
-		}
-		var buf bytes.Buffer
-		if exErr := tmpl.Execute(&buf, data); exErr != nil {
-			return fmt.Errorf("execute template %s: %w", s.tmpl, exErr)
-		}
-		if wErr := writeFile(out, buf.String()); wErr != nil {
+		if wErr := writeFile(out, rendered); wErr != nil {
 			return wErr
 		}
 		fmt.Fprintf(os.Stdout, "   📄 %s\n", s.outRel)
 	}
 	return nil
+}
+
+// renderTemplateString executes a skel template against data and returns the
+// rendered source without writing it. Used by callers that post-process the
+// output (e.g. merging generated declarations into an existing file).
+func renderTemplateString(tmpl string, data any) (string, error) {
+	raw, err := skelFS.ReadFile(tmpl)
+	if err != nil {
+		return "", fmt.Errorf("read template %s: %w", tmpl, err)
+	}
+	t, err := template.New(filepath.Base(tmpl)).Parse(string(raw))
+	if err != nil {
+		return "", fmt.Errorf("parse template %s: %w", tmpl, err)
+	}
+	var buf bytes.Buffer
+	if exErr := t.Execute(&buf, data); exErr != nil {
+		return "", fmt.Errorf("execute template %s: %w", tmpl, exErr)
+	}
+	return buf.String(), nil
 }

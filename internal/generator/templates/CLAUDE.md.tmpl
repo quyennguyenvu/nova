@@ -1,0 +1,89 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Working principles
+
+Behavioral guidelines (adapted from [andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills)) to reduce common LLM mistakes. They bias toward caution over speed; for trivial tasks, use judgment.
+
+1. **Think before coding.** Don't assume, don't hide confusion, surface tradeoffs. State assumptions explicitly; if multiple interpretations exist, present them instead of picking silently; if a simpler approach exists, say so.
+2. **Simplicity first.** Minimum code that solves the problem, nothing speculative — no unrequested features, no abstractions for single-use code, no error handling for impossible cases. If a senior engineer would call it overcomplicated, rewrite it smaller.
+3. **Surgical changes.** Every changed line should trace to the request. Don't refactor or reformat adjacent code; match the surrounding style even if you'd do it differently. Remove only the imports/vars/funcs your own change orphaned; flag pre-existing dead code rather than deleting it unasked.
+4. **Goal-driven execution.** Turn the task into a verifiable goal and loop until it passes. Here that means `make lint` and `make test` stay green, new code respects the dependency rule (below), and {{if .UseWire}}any change to the DI providers is followed by `make gen` so `wire_gen.go` recompiles{{else}}any new constructor is registered in the fx module{{end}}. "Fix the bug" → write a failing test first, then make it pass.
+
+## Project
+
+{{.ProjectName}} is a Go {{if .HasHTTP}}HTTP REST API{{else if .HasGRPC}}gRPC service{{else if .HasWorker}}{{.MessageQueue}} consumer worker{{else if .HasCron}}cron service{{else}}CLI{{end}} built with Clean Architecture. Module is `{{.ModuleName}}`. Requires Go {{.GoVersion}}+.
+
+Stack:
+
+{{if .HasHTTP}}- HTTP transport: {{.HTTPFramework}}
+{{end}}{{- if .HasGRPC}}- gRPC transport
+{{end}}{{- if .HasWorker}}- Worker transport: consumes from {{.MessageQueue}}
+{{end}}{{- if .HasSQL}}- Database: {{.Database}} (driver: {{.DBDriver}}{{if eq .QueryGen "sqlc"}}, queries: sqlc{{end}})
+{{end}}{{- if .HasRedis}}- Cache: Redis (cache-aside over the repository)
+{{end}}{{- if and .HasMessageQueue (not .HasWorker)}}- Message queue: {{.MessageQueue}} (publisher)
+{{end}}- Dependency injection: {{if .UseWire}}Google Wire (compile-time, `wire_gen.go`){{else}}Uber fx (runtime){{end}}
+
+- Config: cleanenv ({{.ConfigFormat}} + `.env`)
+
+Ships a working **User CRUD** wired across every layer as the reference feature — copy that vertical slice when adding a new aggregate.
+
+## Commands
+
+```bash
+make help           # List all targets
+make test           # go test -race -cover ./...
+make test-coverage  # Coverage report → coverage.html
+make lint           # golangci-lint{{if eq .QueryGen "sqlc"}} + sqlfluff lint{{end}}
+make fmt            # golangci-lint fmt (goimports + golines){{if eq .QueryGen "sqlc"}} + sqlfluff fix{{end}}
+make vet            # go vet ./...
+{{- if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
+make gen            # Regenerate {{if .UseWire}}wire_gen{{if or (eq .QueryGen "sqlc") .HasGRPC}} + {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc dbgen{{if .HasGRPC}} + {{end}}{{end}}{{if .HasGRPC}}proto stubs{{end}}
+{{- end}}
+{{- if .HasDatabase}}
+make migrate-up     # Apply database migrations
+make migrate-down   # Roll back the last migration
+make migrate-create name=<x>  # Scaffold a new migration pair
+{{- end}}
+{{- if .IncludeDocker}}
+make docker-up      # Start infrastructure (database, cache, broker)
+make docker-down    # Stop infrastructure
+{{- end}}
+```
+
+Run the binary: `go run main.go {{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else}}api{{end}}`. Run a single test: `go test -v -run TestName ./path/to/pkg`.
+
+## Architecture
+
+Clean Architecture's **dependency rule**: source dependencies point inward only — `transport → usecase → domain` and `infrastructure → domain`. The four layers:
+
+- **`internal/domain`** (innermost) — entities, repository/security **ports** (interfaces), and value objects. Pure Go, zero dependencies on outer layers or third-party frameworks.
+- **`internal/usecase`** — application business rules. Orchestrates domain ports; one package per aggregate (e.g. `usecase/user`). Knows nothing about HTTP, SQL, or the broker.
+- **`internal/adapter`** — implements domain ports against concrete tech: `repository/{{.Database}}` (the DB){{if .HasRedis}}, `repository/redis` (cache-aside){{end}}{{if .HasMessageQueue}}, `pubsub` (the broker){{end}}.
+- **`internal/infrastructure`** (outermost) — frameworks & drivers: config, {{if .HasSQL}}database pool, {{end}}{{if .HasRedis}}cache client, {{end}}logger, jwt, tracing, server lifecycle, and the `di` wiring graph.
+
+Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers/router/middleware{{else if .HasWorker}}worker consumer + handlers{{else if .HasGRPC}}gRPC handlers{{end}}), `internal/app` (entry-point glue that boots a transport through the DI graph), `cmd` (cobra commands), and `pkg` (cross-cutting libs: `errors`, `locale`, `observability`, `logctx`{{if .HasHTTP}}, `httputil`{{end}}). See `README.md` for the full tree.
+
+**Dependency inversion is the load-bearing rule:** the domain _defines_ an interface; an outer layer _implements_ it. Never import a concrete from infrastructure into an inner layer — depend on the port (e.g. `observability.Logger`, not `infrastructure/logger`).
+
+## Conventions
+
+- **Errors (`pkg/errors`).** Wrap at each layer boundary with `errors.Wrapf(err, "context k=%v", v)` to build a caller trace — no codes on a `Wrap`. Classify **once, at the originating layer** with a typed constructor: `errors.NotFound` / `errors.Conflict` / `errors.Unauthorized` (or the locale variants `errors.ConflictL(locale.X, args...)`). Test with `errors.Is(err, errors.ErrNotFound)`.
+- **No logging in usecases.** A usecase wraps and returns; the transport boundary logs the error exactly once. Best-effort side effects (e.g. publish) are the only place a usecase logs, and they never fail the request.
+- **Localization (`pkg/locale`).** User-facing messages are `locale.Locale` codes, never literals. The `*L` error constructors carry the code + args; the transport boundary translates into the request's language.
+- **Usecase imports use the `svc` alias.** Import a usecase as `usersvc "{{.ModuleName}}/internal/usecase/user"` — never the bare `user` (it collides with the domain/transport `user` packages). The service type is `Service`, its constructor `NewService`.
+- **DI wiring (`internal/infrastructure/di`).** After adding a constructor, register it in the provider set{{if .UseWire}} and run `make gen` to regenerate `wire_gen.go`{{else}} and add it to the fx module{{end}}.{{if .HasHTTP}} A new HTTP feature also adds its `*Registrar` to `provideRegistrars`.{{end}}{{if .HasWorker}} A new worker message handler adds itself to `provideWorkerHandlers`.{{end}}
+  {{- if .HasHTTP}}
+- **Adding a route.** Each feature owns a `Registrar` (implements `transport/http.Registrar`: `Prefix()` + `Register`) in its own package and embeds `v1.Prefixed` to inherit the `/api/v1` prefix — don't restate the prefix per feature. See `README.md` § _Adding routes, sections, and versions_.
+  {{- end}}
+- **Config.** Secrets and per-deploy endpoints live in `.env` (see `.env.example`); everything else in `internal/infrastructure/config`. The DB config is discrete typed fields, not a single connection-string blob.
+- **Adding a feature** = copy the `user` vertical slice: entity → domain port → usecase → adapter repo{{if .HasHTTP}} → transport handler + registrar{{else if .HasWorker}} → worker handler + DTO{{end}}, then wire it in `di`. The layout matches Nova's canonical manifest, so `nova add <entity|usecase|handler|repository> <name>` scaffolds one component if Nova is installed.
+- **Formatting & lint.** `make fmt` (goimports + golines, max line 120) before committing; lint config is strict.
+  {{- if .HasSQL}}
+- **Transactions.** Keep transaction boundaries in the usecase layer via `TxManager.WithinTx`; repositories operate on whatever connection the context carries.
+  {{- end}}
+  {{- if eq .QueryGen "sqlc"}}
+- **SQL lint.** Any SQL you write or edit (`sqlc/query/*.sql`, `sqlc/migrations/`) is linted with **sqlfluff** ({{.Database}} dialect; config in `.sqlfluff`) via `make lint`, with auto-fixable issues corrected by `make fmt`. Write SQL that passes the enforced rules: qualify column references in multi-table queries (RF02), don't quote identifiers unnecessarily (RF06), give every derived column an explicit `AS` alias (AL03), and keep lines ≤ 80 chars including comments (LT05). Three rules are excluded by design (see `.sqlfluff`): **RF04** (domain columns are deliberately named with keywords — `type`, `version`, `text`), **AM04** (sqlc queries use `SELECT *`, which sqlc expands at codegen), and **PG01** (indexes are created alongside their table on empty data, so plain `CREATE INDEX` is correct — `CONCURRENTLY` can't run inside the multi-statement migration). Verify before finishing.
+  {{- end}}
+- **Markdown lint.** Any Markdown you write or edit (`.md`) must pass markdownlint with no warnings. Common rules: surround headings, lists, tables, and fenced code blocks with blank lines (MD022/MD031/MD032); no blank line between adjacent blockquotes — use a `>`-prefixed line to continue one (MD028); specify a language on every fenced block (MD040); single trailing newline, no trailing spaces (MD047/MD009). Verify before finishing.

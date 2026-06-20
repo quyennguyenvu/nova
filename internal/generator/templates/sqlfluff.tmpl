@@ -1,3 +1,8 @@
 [sqlfluff]
 dialect = postgres
-exclude_rules = RF02,RF04,RF06,AM04,AL03
+# RF04: domain columns are intentionally named with keywords (type, version, text).
+# AM04: sqlc queries use SELECT * by design (sqlc expands it at codegen).
+# PG01: indexes are created with their table (empty, no concurrent traffic), so
+#   plain CREATE INDEX is correct; CONCURRENTLY can't run in the multi-statement
+#   create-table migration anyway.
+exclude_rules = RF04,AM04,PG01

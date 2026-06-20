@@ -294,23 +294,49 @@ func writeDIPkg(t *testing.T, dir string, files map[string]string) {
 
 func TestGenerateWorkerScaffoldsWireDI(t *testing.T) {
 	gen, dir := newComponentGen(t, manifest.Default()) // DI defaults to wire
-	// HTTP-only di package: no WorkerApp, no InitializeWorker yet.
+	// HTTP-only di package (nova-new layout): the worker DI symbols aren't present
+	// yet, so the scaffold must merge WorkerApp into app.go, workerInfraSet +
+	// InitializeWorker into wire.go, and provideWorkerHandlers into provider.go.
 	writeDIPkg(t, dir, map[string]string{
-		"app.go":  "package di\n\ntype HTTPApp struct{}\n",
-		"wire.go": "//go:build wireinject\n\npackage di\n\nfunc InitializeHTTPServer() {}\n",
+		"app.go": "package di\n\nimport (\n" +
+			"\t\"go.opentelemetry.io/otel/trace\"\n\n" +
+			"\t\"example.com/test/internal/infrastructure/logger\"\n" +
+			"\t\"example.com/test/internal/infrastructure/server\"\n)\n\n" +
+			"type HTTPApp struct {\n\tLogger *logger.Logger\n\tServer *server.HTTPServer\n\tTracer trace.Tracer\n}\n",
+		"wire.go": "//go:build wireinject\n\npackage di\n\nimport (\n" +
+			"\t\"context\"\n\n\t\"github.com/google/wire\"\n)\n\n" +
+			"func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {\n" +
+			"\tpanic(wire.Build())\n}\n",
+		"provider.go": "package di\n\nimport \"github.com/go-playground/validator/v10\"\n\n" +
+			"func provideValidator() *validator.Validate { return validator.New() }\n",
 	})
 	if err := gen.GenerateWorker("Order"); err != nil {
 		t.Fatalf("GenerateWorker: %v", err)
 	}
 	di := "internal/infrastructure/di"
-	assertFileContains(t, filepath.Join(dir, di, "worker_app.go"), "type WorkerApp struct")
-	w := filepath.Join(dir, di, "worker_wire.go")
+	// WorkerApp merged into app.go; InitializeWorker merged into wire.go.
+	app := filepath.Join(dir, di, "app.go")
+	assertFileContains(t, app, "type HTTPApp struct")
+	assertFileContains(t, app, "type WorkerApp struct")
+	assertFileContains(t, app, "example.com/test/internal/transport/worker")
+	w := filepath.Join(dir, di, "wire.go")
 	assertFileContains(t, w, "//go:build wireinject")
+	assertFileContains(t, w, "func InitializeHTTPServer(")
 	assertFileContains(t, w, "func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error)")
 	assertFileContains(t, w, "wire.Struct(new(WorkerApp), \"*\")")
-	// fx variant must not be emitted for a wire project.
-	if _, err := os.Stat(filepath.Join(dir, di, "worker_fx.go")); err == nil {
-		t.Error("worker_fx.go should not exist for a wire project")
+	// workerInfraSet is defined (not just referenced) so the graph resolves.
+	assertFileContains(t, w, "var workerInfraSet = wire.NewSet(")
+	assertFileContains(t, w, "worker.NewKafkaConsumer")
+	assertFileContains(t, w, "orderworker.NewHandler")
+	// provideWorkerHandlers feeds the []worker.Handler slice from provider.go.
+	p := filepath.Join(dir, di, "provider.go")
+	assertFileContains(t, p, "func provideValidator()")
+	assertFileContains(t, p, "func provideWorkerHandlers(orderHandler *orderworker.Handler) []worker.Handler")
+	// No standalone worker_*.go files — everything was merged.
+	for _, f := range []string{"worker_app.go", "worker_wire.go", "worker_fx.go", "worker_provider.go"} {
+		if _, err := os.Stat(filepath.Join(dir, di, f)); err == nil {
+			t.Errorf("%s should not exist — worker DI must merge into app.go/wire.go/provider.go", f)
+		}
 	}
 }
 
@@ -318,36 +344,71 @@ func TestGenerateWorkerScaffoldsFxDI(t *testing.T) {
 	m := manifest.Default()
 	m.Stack.DI = "fx"
 	gen, dir := newComponentGen(t, m)
+	// fx layout: app.go holds the App bundles, fx.go the Initialize* injectors.
 	writeDIPkg(t, dir, map[string]string{
-		"fx.go": "package di\n\nconst stopTimeout = 0\n\nfunc InitializeHTTPServer() {}\n",
+		"app.go": "package di\n\nimport (\n" +
+			"\t\"go.opentelemetry.io/otel/trace\"\n\n" +
+			"\t\"example.com/test/internal/infrastructure/logger\"\n" +
+			"\t\"example.com/test/internal/infrastructure/server\"\n)\n\n" +
+			"type HTTPApp struct {\n\tLogger *logger.Logger\n\tServer *server.HTTPServer\n\tTracer trace.Tracer\n}\n",
+		"fx.go": "package di\n\nimport (\n\t\"context\"\n\t\"time\"\n)\n\n" +
+			"const stopTimeout = 15 * time.Second\n\n" +
+			"func InitializeHTTPServer(ctx context.Context) {}\n",
+	})
+	if err := gen.GenerateWorker("Order"); err != nil {
+		t.Fatalf("GenerateWorker: %v", err)
+	}
+	di := "internal/infrastructure/di"
+	assertFileContains(t, filepath.Join(dir, di, "app.go"), "type WorkerApp struct")
+	f := filepath.Join(dir, di, "fx.go")
+	assertFileContains(t, f, "func InitializeHTTPServer(")
+	assertFileContains(t, f, "func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error)")
+	assertFileContains(t, f, "fx.Populate(&log, &w, &tracer)")
+	// fx populates via modules (TODO in the scaffold), so no wire-style
+	// workerInfraSet/provideWorkerHandlers and no standalone worker_*.go files.
+	for _, fn := range []string{"worker_app.go", "worker_wire.go", "worker_fx.go", "worker_provider.go"} {
+		if _, err := os.Stat(filepath.Join(dir, di, fn)); err == nil {
+			t.Errorf("%s should not exist — worker DI must merge into app.go/fx.go", fn)
+		}
+	}
+}
+
+// TestGenerateWorkerDIFallsBackToStandalone covers a di package that is not laid
+// out like nova-new (none of app.go / wire.go / provider.go to merge into): the
+// scaffold degrades to standalone worker_app.go / worker_wire.go /
+// worker_provider.go files.
+func TestGenerateWorkerDIFallsBackToStandalone(t *testing.T) {
+	gen, dir := newComponentGen(t, manifest.Default())
+	// di package exists but holds none of the canonical files.
+	writeDIPkg(t, dir, map[string]string{
+		"di.go": "package di\n",
 	})
 	if err := gen.GenerateWorker("Order"); err != nil {
 		t.Fatalf("GenerateWorker: %v", err)
 	}
 	di := "internal/infrastructure/di"
 	assertFileContains(t, filepath.Join(dir, di, "worker_app.go"), "type WorkerApp struct")
-	f := filepath.Join(dir, di, "worker_fx.go")
-	assertFileContains(t, f, "func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error)")
-	assertFileContains(t, f, "fx.Populate(&log, &w, &tracer)")
-	if _, err := os.Stat(filepath.Join(dir, di, "worker_wire.go")); err == nil {
-		t.Error("worker_wire.go should not exist for an fx project")
-	}
+	assertFileContains(t, filepath.Join(dir, di, "worker_wire.go"),
+		"func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error)")
+	assertFileContains(t, filepath.Join(dir, di, "worker_provider.go"),
+		"func provideWorkerHandlers(orderHandler *orderworker.Handler) []worker.Handler")
 }
 
 func TestGenerateWorkerSkipsExistingWorkerDI(t *testing.T) {
 	gen, dir := newComponentGen(t, manifest.Default())
-	// Project already generated WITH the worker — WorkerApp + InitializeWorker
-	// exist. Scaffolding must not duplicate either symbol.
+	// Project already generated WITH the worker — WorkerApp, InitializeWorker,
+	// and provideWorkerHandlers all exist. Scaffolding must not duplicate any.
 	writeDIPkg(t, dir, map[string]string{
 		"app.go": "package di\n\ntype WorkerApp struct{}\n",
 		"wire.go": "//go:build wireinject\n\npackage di\n\n" +
 			"func InitializeWorker() {}\n",
+		"provider.go": "package di\n\nfunc provideWorkerHandlers() {}\n",
 	})
 	if err := gen.GenerateWorker("Order"); err != nil {
 		t.Fatalf("GenerateWorker: %v", err)
 	}
 	di := filepath.Join(dir, "internal/infrastructure/di")
-	for _, f := range []string{"worker_app.go", "worker_wire.go", "worker_fx.go"} {
+	for _, f := range []string{"worker_app.go", "worker_wire.go", "worker_fx.go", "worker_provider.go"} {
 		if _, err := os.Stat(filepath.Join(di, f)); err == nil {
 			t.Errorf("%s should not be written when worker DI already exists", f)
 		}

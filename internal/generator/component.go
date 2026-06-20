@@ -2,7 +2,10 @@ package generator
 
 import (
 	"fmt"
+	"go/ast"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +107,7 @@ type tmplData struct {
 	Title         string // PascalCase aggregate name, e.g. Order
 	Lower         string // lowercase, e.g. order
 	Topic         string // worker: the event topic, e.g. order.event
+	MessageQueue  string // worker: the broker ("kafka"/"rabbitmq") — picks the DI providers
 	PortPkg       string // entity: the repository-interface package (domain)
 	EntityImport  string // entity: import path of the entity package
 	FeatureImport string // worker: import path of the feature handler package
@@ -127,16 +131,18 @@ func (g *ComponentGenerator) GenerateWorker(name string) error {
 	root := filepath.Dir(filepath.Dir(res.Dir))
 
 	lower := strings.ToLower(name)
+	broker := g.detectMessageQueue()
 	data := tmplData{
 		ModuleName:    g.manifest.Module,
 		Package:       res.Package,
 		Title:         toTitle(name),
 		Lower:         lower,
 		Topic:         lower + ".event",
+		MessageQueue:  broker,
 		FeatureImport: g.manifest.Module + "/" + res.Dir,
 	}
 
-	rabbit := g.manifest.Stack.MessageQueue == rabbitmq
+	rabbit := broker == rabbitmq
 	consumer := pick(rabbit, "skel/worker/rabbitmq_consumer.go.tmpl", "skel/worker/kafka_consumer.go.tmpl")
 
 	specs := []renderSpec{
@@ -214,10 +220,13 @@ func (g *ComponentGenerator) registerWorkerCommand() error {
 // (internal/infrastructure/di): the WorkerApp bundle plus a minimal
 // InitializeWorker injector for the project's DI engine (Stack.DI). The
 // injector is a scaffold — it builds only WorkerApp; the user adds the provider
-// sets the worker needs. Each symbol is written only when the package does not
-// already declare it, so a project generated with the worker enabled is left
-// untouched and a re-run never duplicates. When there is no di package (not a
-// nova-new layout) it degrades to a printed hint.
+// sets the worker needs. To match the nova-new layout, the WorkerApp struct is
+// merged into the existing app.go and InitializeWorker into wire.go (or fx.go)
+// rather than dropped in separate files; when that canonical file is absent it
+// falls back to a standalone worker_*.go. Each symbol is written only when the
+// package does not already declare it, so a project generated with the worker
+// enabled is left untouched and a re-run never duplicates. When there is no di
+// package (not a nova-new layout) it degrades to a printed hint.
 func (g *ComponentGenerator) scaffoldWorkerDI(data tmplData) error {
 	const diDir = "internal/infrastructure/di"
 	abs := filepath.Join(g.baseDir, diDir)
@@ -230,32 +239,88 @@ func (g *ComponentGenerator) scaffoldWorkerDI(data tmplData) error {
 		return nil //nolint:nilerr // absence is tolerated; the hint covers it
 	}
 
-	var specs []renderSpec
+	// Detect the DI engine from the package layout: a nova-new fx project ships
+	// fx.go, a wire project ships wire.go. This is more reliable than the
+	// manifest's Stack.DI, which defaults to "wire" for any project lacking a
+	// nova.yaml — so an fx project would otherwise get the wrong scaffold.
+	useFx := fileExists(filepath.Join(abs, "fx.go")) && !fileExists(filepath.Join(abs, "wire.go"))
+	if !useFx && !fileExists(filepath.Join(abs, "wire.go")) {
+		useFx = g.manifest.Stack.DI == "fx" // no canonical injector file — trust the manifest
+	}
+
+	wrote := false
 	if !g.diPkgDeclares(abs, "type WorkerApp struct") {
-		specs = append(
-			specs,
-			renderSpec{"skel/worker/di_worker_app.go.tmpl", filepath.Join(diDir, "worker_app.go"), true},
-		)
+		if err := g.mergeOrWriteDI(
+			"skel/worker/di_worker_app.go.tmpl",
+			filepath.Join(diDir, "app.go"),
+			filepath.Join(diDir, "worker_app.go"),
+			data,
+		); err != nil {
+			return err
+		}
+		wrote = true
 	}
 	if !g.diPkgDeclares(abs, "func InitializeWorker(") {
-		tmpl, out := "skel/worker/di_worker_wire.go.tmpl", "worker_wire.go"
-		if g.manifest.Stack.DI == "fx" {
-			tmpl, out = "skel/worker/di_worker_fx.go.tmpl", "worker_fx.go"
+		tmpl, target, fallback := "skel/worker/di_worker_wire.go.tmpl", "wire.go", "worker_wire.go"
+		if useFx {
+			tmpl, target, fallback = "skel/worker/di_worker_fx.go.tmpl", "fx.go", "worker_fx.go"
 		}
-		specs = append(specs, renderSpec{tmpl, filepath.Join(diDir, out), true})
+		if err := g.mergeOrWriteDI(
+			tmpl, filepath.Join(diDir, target), filepath.Join(diDir, fallback), data,
+		); err != nil {
+			return err
+		}
+		wrote = true
 	}
-	if len(specs) == 0 {
+	// provideWorkerHandlers feeds workerInfraSet the []worker.Handler slice; it
+	// lives in the non-build-tagged provider file so wire_gen.go can call it.
+	// Wire's workerInfraSet (wireinject only) is broker-aware, so this provider
+	// is — for fx the modules carry the providers, so it isn't needed there.
+	if !useFx && !g.diPkgDeclares(abs, "func provideWorkerHandlers(") {
+		if err := g.mergeOrWriteDI(
+			"skel/worker/di_worker_provider.go.tmpl",
+			filepath.Join(diDir, "provider.go"),
+			filepath.Join(diDir, "worker_provider.go"),
+			data,
+		); err != nil {
+			return err
+		}
+		wrote = true
+	}
+	if !wrote {
 		return nil // worker DI already present
 	}
-	if err := g.renderTemplates(specs, data); err != nil {
-		return err
-	}
-	if g.manifest.Stack.DI != "fx" {
+	if !useFx {
 		fmt.Fprintf(
 			os.Stdout,
 			"   ▶ wire scaffold written — add provider sets to InitializeWorker, then run `wire ./...`\n",
 		)
 	}
+	return nil
+}
+
+// mergeOrWriteDI renders the scaffold template and merges its declarations into
+// the existing targetRel file (the nova-new canonical home — app.go/wire.go/
+// fx.go), injecting any imports the target lacks. When targetRel does not exist
+// (a project that isn't laid out like nova-new) it writes the scaffold verbatim
+// to the standalone fallbackRel instead.
+func (g *ComponentGenerator) mergeOrWriteDI(tmpl, targetRel, fallbackRel string, data tmplData) error {
+	src, err := renderTemplateString(tmpl, data)
+	if err != nil {
+		return err
+	}
+	targetAbs := filepath.Join(g.baseDir, targetRel)
+	if _, statErr := os.Stat(targetAbs); statErr != nil {
+		if wErr := writeFile(filepath.Join(g.baseDir, fallbackRel), src); wErr != nil {
+			return wErr
+		}
+		fmt.Fprintf(os.Stdout, "   📄 %s\n", fallbackRel)
+		return nil
+	}
+	if mErr := mergeGoDecls(targetAbs, src); mErr != nil {
+		return fmt.Errorf("merge worker DI into %s: %w", targetRel, mErr)
+	}
+	fmt.Fprintf(os.Stdout, "   ✏️  merged worker DI into %s\n", targetRel)
 	return nil
 }
 
@@ -351,6 +416,164 @@ func (g *ComponentGenerator) path(r manifest.Resolved, fallbackFile string) stri
 		file = fallbackFile
 	}
 	return filepath.Join(g.baseDir, r.Dir, file)
+}
+
+// mergeGoDecls splices the declarations rendered into scaffoldSrc onto the end
+// of the existing Go file at absPath: every top-level declaration after the
+// scaffold's import block is appended, and any import the scaffold needs but
+// the file lacks is injected into the file's import group (a fresh group is
+// created when the file has none). The merged source is gofmt'd before writing.
+// Both inputs must already parse.
+func mergeGoDecls(absPath, scaffoldSrc string) error {
+	target, err := os.ReadFile(absPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", absPath, err)
+	}
+
+	declBlock, scaffoldImports, err := splitGoScaffold(scaffoldSrc)
+	if err != nil {
+		return err
+	}
+	if declBlock == "" {
+		return nil // nothing to merge
+	}
+
+	merged, err := injectImports(string(target), absPath, scaffoldImports)
+	if err != nil {
+		return err
+	}
+	merged = strings.TrimRight(merged, "\n") + "\n\n" + declBlock
+	if !strings.HasSuffix(merged, "\n") {
+		merged += "\n"
+	}
+	formatted, err := format.Source([]byte(merged))
+	if err != nil {
+		return fmt.Errorf("format merged %s: %w", absPath, err)
+	}
+	//nolint:gosec // absPath = baseDir + fixed di file name; not user-tainted.
+	if wErr := os.WriteFile(absPath, formatted, 0o600); wErr != nil {
+		return fmt.Errorf("write %s: %w", absPath, wErr)
+	}
+	return nil
+}
+
+// splitGoScaffold parses rendered Go source and returns (1) the text of every
+// top-level declaration that is not the import block — from the first such
+// declaration (including its doc comment) to EOF — and (2) the imports those
+// declarations bring along.
+func splitGoScaffold(src string) (string, []*ast.ImportSpec, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "scaffold.go", src, parser.ParseComments)
+	if err != nil {
+		return "", nil, fmt.Errorf("parse scaffold: %w", err)
+	}
+	start := -1
+	for _, d := range f.Decls {
+		if gd, ok := d.(*ast.GenDecl); ok && gd.Tok == token.IMPORT {
+			continue
+		}
+		pos := d.Pos()
+		if doc := declDoc(d); doc != nil {
+			pos = doc.Pos()
+		}
+		if off := fset.Position(pos).Offset; start == -1 || off < start {
+			start = off
+		}
+	}
+	if start == -1 {
+		return "", nil, nil
+	}
+	return src[start:], f.Imports, nil
+}
+
+// declDoc returns the doc comment group attached to a top-level declaration, or
+// nil when it has none.
+func declDoc(d ast.Decl) *ast.CommentGroup {
+	switch decl := d.(type) {
+	case *ast.GenDecl:
+		return decl.Doc
+	case *ast.FuncDecl:
+		return decl.Doc
+	default:
+		return nil
+	}
+}
+
+// injectImports adds every import in want that src does not already declare,
+// returning the updated source. Missing imports go into the file's existing
+// parenthesised import group; if the file has none, a new group is inserted
+// after the package clause. gofmt (run by the caller) re-sorts the result.
+func injectImports(src, name string, want []*ast.ImportSpec) (string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, parser.ParseComments)
+	if err != nil {
+		return "", fmt.Errorf("parse %s: %w", name, err)
+	}
+
+	have := make(map[string]bool, len(f.Imports))
+	for _, imp := range f.Imports {
+		have[importPath(imp)] = true
+	}
+	var lines []string
+	for _, imp := range want {
+		if have[importPath(imp)] {
+			continue
+		}
+		spec := imp.Path.Value
+		if imp.Name != nil {
+			spec = imp.Name.Name + " " + spec
+		}
+		lines = append(lines, "\t"+spec)
+		have[importPath(imp)] = true
+	}
+	if len(lines) == 0 {
+		return src, nil
+	}
+	block := strings.Join(lines, "\n")
+
+	if grp := importGroup(f); grp != nil && grp.Lparen.IsValid() {
+		at := fset.Position(grp.Rparen).Offset
+		return src[:at] + block + "\n" + src[at:], nil
+	}
+	at := fset.Position(f.Name.End()).Offset
+	return src[:at] + "\n\nimport (\n" + block + "\n)" + src[at:], nil
+}
+
+// importGroup returns the file's import declaration, or nil when it has none.
+func importGroup(f *ast.File) *ast.GenDecl {
+	for _, d := range f.Decls {
+		if gd, ok := d.(*ast.GenDecl); ok && gd.Tok == token.IMPORT {
+			return gd
+		}
+	}
+	return nil
+}
+
+// importPath returns an import spec's unquoted path, the key used to dedupe.
+func importPath(imp *ast.ImportSpec) string {
+	return strings.Trim(imp.Path.Value, `"`)
+}
+
+// fileExists reports whether path names an existing file or directory.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// detectMessageQueue infers the project's broker from its infrastructure/pubsub
+// files (kafka.go vs rabbitmq.go) rather than the manifest, whose Stack is only
+// a default when the project has no nova.yaml — so the consumer + DI providers
+// match the project even on a plain `nova new` layout. Falls back to the
+// manifest's declared queue when neither file is present.
+func (g *ComponentGenerator) detectMessageQueue() string {
+	pubsub := filepath.Join(g.baseDir, "internal/infrastructure/pubsub")
+	if fileExists(filepath.Join(pubsub, "rabbitmq.go")) {
+		return rabbitmq
+	}
+	if fileExists(filepath.Join(pubsub, "kafka.go")) {
+		return kafka
+	}
+	return g.manifest.Stack.MessageQueue
 }
 
 // Helper functions

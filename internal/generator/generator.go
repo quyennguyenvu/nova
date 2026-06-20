@@ -209,6 +209,7 @@ func (g *Generator) rootFiles() []templateFile {
 		{"templates/main.go.tmpl", "main.go", true},
 		{"templates/env.example.tmpl", ".env.example", true},
 		{"templates/README.md.tmpl", "README.md", true},
+		{"templates/CLAUDE.md.tmpl", "CLAUDE.md", true},
 	}
 }
 

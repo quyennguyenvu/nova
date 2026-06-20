@@ -658,6 +658,93 @@ func assertRequestIDContract(t *testing.T, dir string) {
 	}
 }
 
+// TestClaudeMDGenerated pins the generated CLAUDE.md: it must render for every
+// transport, inherit the working principles, and carry transport-specific
+// guidance (the matrix only proves the template parses; this asserts content).
+func TestClaudeMDGenerated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("http_wire", func(t *testing.T) {
+		t.Parallel()
+		src := renderClaudeMD(t, httpMatrixConfig("fiber", "postgres", "wire"))
+		mustContainAll(t, src,
+			"## Working principles",
+			"## Architecture",
+			"## Conventions",
+			"matrixtest", // ModuleName threaded through
+			"dependency rule",
+			"`wire_gen.go`",                  // wire-specific verification loop
+			"provideRegistrars",              // HTTP-specific routing guidance
+			"TxManager.WithinTx",             // transaction convention (SQL project)
+			"**sqlfluff** (postgres dialect", // SQL-lint convention, parameterized dialect
+			"markdownlint",                   // markdown convention (always present)
+			// Pins the by-design exclusions .sqlfluff encodes
+			// (exclude_rules = RF04,AM04,PG01). RF02/RF06/AL03 appear too, as
+			// enforced rules — not exclusions.
+			"Three rules are excluded by design",
+			"**PG01**",
+		)
+		mustNotContain(t, src, "fx module") // wire project must not leak the fx variant
+	})
+
+	// no_sql proves the transaction + SQL-lint bullets are gated out when the
+	// project has no SQL backend, while the markdown convention still renders.
+	t.Run("no_sql", func(t *testing.T) {
+		t.Parallel()
+		cfg := httpMatrixConfig("fiber", "postgres", "wire")
+		cfg.Database = "none"
+		cfg.QueryGen = "none"
+		src := renderClaudeMD(t, cfg)
+		mustContainAll(t, src, "markdownlint")                   // always present
+		mustNotContain(t, src, "TxManager.WithinTx", "sqlfluff") // gated on a SQL/sqlc backend
+	})
+
+	t.Run("worker_fx", func(t *testing.T) {
+		t.Parallel()
+		src := renderClaudeMD(t, workerMatrixConfig("postgres", "kafka", "fx"))
+		mustContainAll(t, src,
+			"kafka consumer worker", // worker project type line
+			"fx module",             // fx-specific verification loop
+			"provideWorkerHandlers", // worker-specific DI guidance
+		)
+		mustNotContain(t, src, "provideRegistrars") // worker must not leak HTTP routing
+	})
+}
+
+// renderClaudeMD generates a project from cfg and returns its CLAUDE.md text.
+func renderClaudeMD(t *testing.T, cfg *config.ProjectConfig) string {
+	t.Helper()
+	dir := t.TempDir()
+	gen, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if genErr := gen.Generate(dir); genErr != nil {
+		t.Fatalf("Generate: %v", genErr)
+	}
+	return readFile(t, filepath.Join(dir, "CLAUDE.md"))
+}
+
+// mustContainAll fails the (sub)test for every substring missing from src.
+func mustContainAll(t *testing.T, src string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(src, want) {
+			t.Errorf("CLAUDE.md missing %q", want)
+		}
+	}
+}
+
+// mustNotContain fails the (sub)test for any substring that leaks into src.
+func mustNotContain(t *testing.T, src string, banned ...string) {
+	t.Helper()
+	for _, b := range banned {
+		if strings.Contains(src, b) {
+			t.Errorf("CLAUDE.md unexpectedly contains %q", b)
+		}
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

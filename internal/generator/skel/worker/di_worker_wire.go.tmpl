@@ -6,16 +6,40 @@ package di
 import (
 	"context"
 
+	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
+	"{{.ModuleName}}/internal/transport/worker"
+	{{.Lower}}worker "{{.FeatureImport}}"
+
 	"github.com/google/wire"
 )
 
-// InitializeWorker is a wire scaffold for the consumer worker: it builds only
-// the WorkerApp struct. Add the provider sets the worker needs — infraSet,
-// workerInfraSet (the broker consumer + worker.NewWorker), adapterSet,
-// usecaseSet, and a set providing your worker.Handler slice — to wire.Build,
-// then run `wire ./...` to (re)generate wire_gen.go.
+// workerInfraSet provides the broker consumer, the Worker orchestrator, and the
+// feature handlers it dispatches. The Consumer port (transport/worker.Consumer)
+// is bound to the {{if eq .MessageQueue "rabbitmq"}}RabbitMQ{{else}}Kafka{{end}} implementation for this project's message
+// queue. Add new feature handler constructors here as they appear.
+var workerInfraSet = wire.NewSet(
+{{- if eq .MessageQueue "rabbitmq"}}
+	infraPubsub.NewRabbitMQChannel,
+	provideRabbitMQConsumer,
+{{- else}}
+	infraPubsub.NewKafkaConsumerGroup,
+	worker.NewKafkaConsumer,
+{{- end}}
+	worker.NewWorker,
+	provideWorkerHandlers,
+	{{.Lower}}worker.NewHandler,
+)
+
+// InitializeWorker builds the WorkerApp bundle for the consumer worker entry
+// point. infraSet supplies config/logger/tracing/{{if eq .MessageQueue "rabbitmq"}}RabbitMQ{{else}}Kafka{{end}} config; workerInfraSet
+// supplies the broker consumer, worker.NewWorker, and the worker.Handler slice.
+// When a handler starts delegating to a usecase, add adapterSet/usecaseSet here
+// too (wire rejects a provider set that contributes nothing to the graph).
+// Re-run `make wire-gen` after editing.
 func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	panic(wire.Build(
+		infraSet,
+		workerInfraSet,
 		wire.Struct(new(WorkerApp), "*"),
 	))
 }

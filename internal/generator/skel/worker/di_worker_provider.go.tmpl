@@ -1,0 +1,29 @@
+package di
+
+import (
+{{- if eq .MessageQueue "rabbitmq"}}
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	"{{.ModuleName}}/internal/infrastructure/logger"
+{{- end}}
+	"{{.ModuleName}}/internal/transport/worker"
+	{{.Lower}}worker "{{.FeatureImport}}"
+)
+
+// provideWorkerHandlers assembles every worker-side message handler into a
+// slice. Each Handler advertises its own Topic() — the Worker dispatches by
+// topic at runtime. Add new feature handlers here as they appear.
+func provideWorkerHandlers({{.Lower}}Handler *{{.Lower}}worker.Handler) []worker.Handler {
+	return []worker.Handler{
+		{{.Lower}}Handler,
+	}
+}
+{{- if eq .MessageQueue "rabbitmq"}}
+
+// provideRabbitMQConsumer constructs the worker consumer over the AMQP channel.
+// The exchange/queue are scaffold defaults derived from the feature name — set
+// them to match your broker topology.
+func provideRabbitMQConsumer(ch *amqp.Channel, log *logger.Logger) worker.Consumer {
+	return worker.NewRabbitMQConsumer(ch, "{{.Lower}}.exchange", "{{.Lower}}.queue", log)
+}
+{{- end}}
