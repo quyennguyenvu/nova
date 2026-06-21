@@ -1,4 +1,4 @@
-.PHONY: build run clean gen gen-api gen-worker verify-gen diff-gen rebuild test lint fmt vet help
+.PHONY: build run clean gen gen-api gen-grpc gen-worker verify-gen diff-gen rebuild test lint fmt vet help
 
 # Binary
 BINARY    := bin/nova
@@ -58,6 +58,24 @@ gen-worker: build ## Generate a worker (consumer) service: Kafka + Postgres + sq
 		--docker \
 		--ci=github
 	mv testworker $(TEST_DIR)
+	@echo ""
+	@echo "✅ Output at $(TEST_DIR)"
+
+gen-grpc: build ## Generate a gRPC service: Postgres + sqlc + Wire
+	rm -rf $(TEST_DIR)
+	./$(BINARY) new testgrpc \
+		--module=nova/testgrpc \
+		--transport=grpc \
+		--database=postgres \
+		--db-driver=pgx \
+		--query=sqlc \
+		--cache=redis \
+		--queue=kafka \
+		--config=yaml \
+		--di=wire \
+		--docker \
+		--ci=github
+	mv testgrpc $(TEST_DIR)
 	@echo ""
 	@echo "✅ Output at $(TEST_DIR)"
 

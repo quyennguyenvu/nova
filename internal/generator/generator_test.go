@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/quyennguyenvu/nova/internal/config"
+	"github.com/quyennguyenvu/nova/internal/manifest"
 )
 
 // postgresDBGenStub is written into the rendered postgres adapter so go vet
@@ -296,6 +297,83 @@ func baseMatrixConfig(database, di string) *config.ProjectConfig {
 		cfg.DBDriver = "database/sql"
 	}
 	return cfg
+}
+
+// TestNovaYAMLRecordsStack pins the nova.yaml emitted by `nova new`: it must
+// parse back through manifest.Load and record the project's ACTUAL stack, so
+// `nova add` resolves the real {db}/DI/framework instead of falling back to
+// manifest.Default() (fiber/postgres/redis/wire). Without the file, Load() only
+// fills Module from go.mod and leaves Stack at the defaults — silently wrong for
+// any non-default project.
+func TestNovaYAMLRecordsStack(t *testing.T) {
+	t.Parallel()
+	cfg := httpMatrixConfig("gin", "mysql", "fx")
+	cfg.ModuleName = "example.com/shop"
+	dir := t.TempDir()
+	gen, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if genErr := gen.Generate(dir); genErr != nil {
+		t.Fatalf("Generate: %v", genErr)
+	}
+
+	m, err := manifest.Load(dir)
+	if err != nil {
+		t.Fatalf("manifest.Load: %v", err)
+	}
+	if m.Module != "example.com/shop" {
+		t.Errorf("module = %q, want example.com/shop", m.Module)
+	}
+	if m.Stack.Database != "mysql" {
+		t.Errorf("stack.database = %q, want mysql (nova.yaml not read?)", m.Stack.Database)
+	}
+	if m.Stack.HTTPFramework != "gin" {
+		t.Errorf("stack.http_framework = %q, want gin", m.Stack.HTTPFramework)
+	}
+	if m.Stack.DI != "fx" {
+		t.Errorf("stack.di = %q, want fx", m.Stack.DI)
+	}
+
+	// The {db} placeholder must resolve to the recorded engine.
+	r, ok := m.Resolve("repository", "Order", "")
+	if !ok {
+		t.Fatal("repository missing from resolved layout")
+	}
+	if r.Dir != "internal/adapter/repository/mysql" {
+		t.Errorf("repository dir = %q, want internal/adapter/repository/mysql", r.Dir)
+	}
+}
+
+// TestNovaYAMLMessageQueueNone pins the none-fallback: a project with no cache
+// or queue must still emit valid, parseable YAML (the `{{ if }}` guards render
+// "none", not an empty value that breaks Resolve or the YAML scalar).
+func TestNovaYAMLMessageQueueNone(t *testing.T) {
+	t.Parallel()
+	cfg := workerMatrixConfig("postgres", "kafka", "wire")
+	cfg.Cache = "none"
+	dir := t.TempDir()
+	gen, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if genErr := gen.Generate(dir); genErr != nil {
+		t.Fatalf("Generate: %v", genErr)
+	}
+
+	m, err := manifest.Load(dir)
+	if err != nil {
+		t.Fatalf("manifest.Load: %v", err)
+	}
+	if m.Stack.Cache != "none" {
+		t.Errorf("stack.cache = %q, want none", m.Stack.Cache)
+	}
+	if m.Stack.HTTPFramework != "none" {
+		t.Errorf("stack.http_framework = %q, want none (worker has no framework)", m.Stack.HTTPFramework)
+	}
+	if m.Stack.MessageQueue != "kafka" {
+		t.Errorf("stack.message_queue = %q, want kafka", m.Stack.MessageQueue)
+	}
 }
 
 // TestRegistrarEmbedsSectionPrefix pins the embedded-base routing layout: the
