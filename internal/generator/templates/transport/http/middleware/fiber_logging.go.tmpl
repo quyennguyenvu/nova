@@ -27,10 +27,15 @@ func errMsg(err error) string {
 	return err.Error()
 }
 
-// Logging builds a request-scoped logger (enriched with request_id + trace_id),
-// attaches it to ctx so inner layers can retrieve it via logctx.From, installs
-// an AppError stash slot (httpwriter.WriteError fills it on 4xx/5xx), and emits
-// exactly ONE access log at the end of the request.
+// Logging builds a request-scoped logger (enriched with request_id + trace_id)
+// used for the single access log, installs an AppError stash slot (handlers
+// fill it on 4xx/5xx), and emits exactly ONE access log at the end of the
+// request.
+//
+// Liveness/readiness probes are skipped: k8s hits them every few seconds, so an
+// access line per probe drowns out real traffic. They still run through the
+// rest of the stack (RequestID, Recovery) so panics during a readiness check
+// stay contained — we only suppress the log line, not the safety net.
 func Logging(base observability.Logger) fiber.Handler {
 	skipPaths := map[string]struct{}{
 		"/healthz": {},
@@ -84,8 +89,14 @@ func Logging(base observability.Logger) fiber.Handler {
 			if app.Locale != 0 {
 				fields = append(fields, "app_locale", int(app.Locale))
 			}
-			if err != nil || status >= http.StatusInternalServerError {
-				fields = append(fields, "app_trace", app.Trace())
+			// Surface the inner cause + trace whenever there's something to
+			// diagnose: a server fault (5xx), or any error that wrapped an
+			// underlying cause — e.g. a 4xx that failed decoding input or a
+			// downstream call. A plain validation 4xx carries no inner Err, so
+			// its line stays lean (app_code already names the client mistake)
+			// and error-rate alerts stay free of client-driven noise.
+			if err != nil || app.Err != nil || status >= http.StatusInternalServerError {
+				fields = append(fields, "app_err", app.Error(), "app_trace", app.Trace())
 			}
 		}
 		ev("request", fields...)

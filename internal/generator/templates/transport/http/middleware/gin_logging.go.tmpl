@@ -75,8 +75,13 @@ func Logging(base observability.Logger) gin.HandlerFunc {
 			if app.Locale != 0 {
 				fields = append(fields, "app_locale", int(app.Locale))
 			}
-			if status >= 500 {
-				fields = append(fields, "app_trace", app.Trace())
+			// Surface the inner cause + trace whenever there's something to
+			// diagnose: a server fault (5xx), or any error that wrapped an
+			// underlying cause. A plain validation 4xx carries no inner Err, so
+			// its line stays lean (app_code already names the client mistake)
+			// and error-rate alerts stay free of client-driven noise.
+			if app.Err != nil || status >= 500 {
+				fields = append(fields, "app_err", app.Error(), "app_trace", app.Trace())
 			}
 		}
 		ev("request", fields...)

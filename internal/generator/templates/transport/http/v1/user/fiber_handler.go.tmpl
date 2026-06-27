@@ -1,21 +1,18 @@
 package user
 
 import (
-	"strconv"
-
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/errors"
-	"{{.ModuleName}}/pkg/locale"
-	"{{.ModuleName}}/pkg/logctx"
 )
 
 // Handler is the HTTP boundary for user operations. It never logs — the
 // Logging middleware reads the AppError back from ctx via the WriteError
-// stash and emits one access log per request.
+// stash and emits one access log per request. Request binding and path-param
+// parsing are shared via httpwriter.Bind / httpwriter.ParseID.
 type Handler struct {
 	userService *usersvc.Service
 	validate    *validator.Validate
@@ -25,25 +22,9 @@ func NewHandler(userService *usersvc.Service, validate *validator.Validate) *Han
 	return &Handler{userService: userService, validate: validate}
 }
 
-// bind parses the request body into v, then enforces struct-tag validation.
-// Body-parse failures return the parser's own message; validation failures are
-// logged at warn (with the validator's field-by-field detail) and mapped to a
-// generic localized 400 so clients don't see internal field names.
-func (h *Handler) bind(c *fiber.Ctx, v any) *errors.AppError {
-	log := logctx.From(c.UserContext())
-	if err := c.BodyParser(v); err != nil {
-		return errors.BadRequest(err.Error())
-	}
-	if err := h.validate.Struct(v); err != nil {
-		log.Warn(err.Error())
-		return errors.BadRequestL(locale.InvalidRequest)
-	}
-	return nil
-}
-
 func (h *Handler) Create(c *fiber.Ctx) error {
-	var req CreateUserRequest
-	if appErr := h.bind(c, &req); appErr != nil {
+	req, appErr := httpwriter.Bind[CreateUserRequest](c, h.validate)
+	if appErr != nil {
 		return httpwriter.WriteError(c, appErr)
 	}
 	user, err := h.userService.Register(c.UserContext(), usersvc.RegisterInput{
@@ -58,8 +39,8 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 }
 
 func (h *Handler) Login(c *fiber.Ctx) error {
-	var req LoginRequest
-	if appErr := h.bind(c, &req); appErr != nil {
+	req, appErr := httpwriter.Bind[LoginRequest](c, h.validate)
+	if appErr != nil {
 		return httpwriter.WriteError(c, appErr)
 	}
 	out, err := h.userService.Login(c.UserContext(), usersvc.LoginInput{
@@ -73,9 +54,9 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 }
 
 func (h *Handler) GetByID(c *fiber.Ctx) error {
-	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
-	if err != nil {
-		return httpwriter.WriteError(c, errors.BadRequest("invalid id"))
+	id, appErr := httpwriter.ParseID(c, "id")
+	if appErr != nil {
+		return httpwriter.WriteError(c, appErr)
 	}
 	user, err := h.userService.Get(c.UserContext(), id)
 	if err != nil {
@@ -85,12 +66,12 @@ func (h *Handler) GetByID(c *fiber.Ctx) error {
 }
 
 func (h *Handler) Update(c *fiber.Ctx) error {
-	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
-	if err != nil {
-		return httpwriter.WriteError(c, errors.BadRequest("invalid id"))
+	id, appErr := httpwriter.ParseID(c, "id")
+	if appErr != nil {
+		return httpwriter.WriteError(c, appErr)
 	}
-	var req UpdateUserRequest
-	if appErr := h.bind(c, &req); appErr != nil {
+	req, appErr := httpwriter.Bind[UpdateUserRequest](c, h.validate)
+	if appErr != nil {
 		return httpwriter.WriteError(c, appErr)
 	}
 	user, err := h.userService.Update(c.UserContext(), id, usersvc.UpdateInput{Name: req.Name})
@@ -101,9 +82,9 @@ func (h *Handler) Update(c *fiber.Ctx) error {
 }
 
 func (h *Handler) Delete(c *fiber.Ctx) error {
-	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
-	if err != nil {
-		return httpwriter.WriteError(c, errors.BadRequest("invalid id"))
+	id, appErr := httpwriter.ParseID(c, "id")
+	if appErr != nil {
+		return httpwriter.WriteError(c, appErr)
 	}
 	if delErr := h.userService.Delete(c.UserContext(), id); delErr != nil {
 		return httpwriter.WriteError(c, errors.ToAppError(delErr))
@@ -112,11 +93,15 @@ func (h *Handler) Delete(c *fiber.Ctx) error {
 }
 
 func (h *Handler) List(c *fiber.Ctx) error {
-	input := usersvc.ListInput{
-		Limit:  c.QueryInt("limit", 10),
-		Offset: c.QueryInt("offset", 0),
+	q, appErr := httpwriter.BindQuery[ListQuery](c, h.validate)
+	if appErr != nil {
+		return httpwriter.WriteError(c, appErr)
 	}
-	users, err := h.userService.List(c.UserContext(), input)
+	users, err := h.userService.List(c.UserContext(), usersvc.ListInput{
+		Email:  q.Email,
+		Limit:  q.Limit,
+		Offset: q.Offset,
+	})
 	if err != nil {
 		return httpwriter.WriteError(c, errors.ToAppError(err))
 	}

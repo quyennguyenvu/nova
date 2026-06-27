@@ -1,9 +1,13 @@
-// Package httpwriter is the framework-specific HTTP response writer. It lives
-// under internal/transport/http (not pkg/) because it is bound to a single
-// framework — the envelope it serializes is in pkg/httputil (framework-free).
+// Package httpwriter holds the framework-specific HTTP request-binding and
+// response-writing helpers. It lives under internal/transport/http (not pkg/)
+// because it is bound to a single framework — the envelope it serializes is in
+// pkg/httputil (framework-free).
 package httpwriter
 
 import (
+	"strconv"
+
+	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
 
 	"{{.ModuleName}}/pkg/errors"
@@ -31,4 +35,45 @@ func WriteError(c echo.Context, app *errors.AppError) error {
 	resp := httputil.ErrorResponseFromApp(app, lang)
 	resp.RequestID = httputil.RequestIDFrom(ctx)
 	return c.JSON(app.Code, resp)
+}
+
+// Bind decodes the request body into a fresh T and runs struct-tag validation.
+// A parse failure and a validation failure both map to the same generic
+// localized 400 — clients never see binder internals or field names — while the
+// underlying cause rides along via WithCause so it surfaces in the access log's
+// app_err/app_trace, traceable by request_id.
+func Bind[T any](c echo.Context, validate *validator.Validate) (T, *errors.AppError) {
+	var v T
+	if err := c.Bind(&v); err != nil {
+		return v, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	if err := validate.Struct(&v); err != nil {
+		return v, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	return v, nil
+}
+
+// ParseID reads path parameter name as an int64, mapping a missing or malformed
+// value to the same generic localized 400 as Bind.
+func ParseID(c echo.Context, name string) (int64, *errors.AppError) {
+	id, err := strconv.ParseInt(c.Param(name), 10, 64)
+	if err != nil {
+		return 0, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	return id, nil
+}
+
+// BindQuery decodes the request query string into a fresh T (struct tags:
+// `query:"..."`) and runs struct-tag validation, with the same generic 400
+// mapping as Bind. Pagination bounds stay in the usecase, so a query DTO
+// typically validates only shape (formats, enums), not magnitude.
+func BindQuery[T any](c echo.Context, validate *validator.Validate) (T, *errors.AppError) {
+	var v T
+	if err := (&echo.DefaultBinder{}).BindQueryParams(c, &v); err != nil {
+		return v, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	if err := validate.Struct(&v); err != nil {
+		return v, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	return v, nil
 }

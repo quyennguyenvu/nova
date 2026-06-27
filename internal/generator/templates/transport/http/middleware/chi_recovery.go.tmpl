@@ -6,6 +6,7 @@ import (
 
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
@@ -47,7 +48,7 @@ func Recovery(next http.Handler) http.Handler {
 			if rw.wroteHeader {
 				return
 			}
-			httpwriter.WriteError(rw, r, errors.InternalServer("internal server error"))
+			httpwriter.WriteError(rw, r, errors.L(locale.InternalError))
 		}()
 		next.ServeHTTP(rw, r)
 	})

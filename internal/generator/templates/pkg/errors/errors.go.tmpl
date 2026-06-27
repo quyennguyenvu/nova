@@ -6,10 +6,11 @@
 // outermost layer can log a single line that points to where the error came
 // from and the path it took to get out — without dumping a full stack.
 //
-// For i18n, the usecase layer can attach a locale.Locale (+ args) to the
-// AppError using the *L constructors (NotFoundL, ConflictL, …). The transport
-// boundary resolves the language from request context and substitutes args
-// into the translated template — so business code never names a language.
+// For i18n, the usecase layer attaches a locale.Locale (+ args) to the AppError
+// with the L constructor; the HTTP status is derived from the code itself (see
+// localeHTTPStatus). The transport boundary resolves the language from request
+// context and substitutes args into the translated template — so business code
+// never names a language.
 //
 //	// repository
 //	if err := db.Exec(...); err != nil {
@@ -18,7 +19,7 @@
 //
 //	// usecase — locale-aware
 //	if existing != nil {
-//	    return errors.ConflictL(locale.UserEmailExists, input.Email)
+//	    return errors.L(locale.UserEmailExists, input.Email)
 //	}
 //
 //	// transport — log ONCE; translate at write time
@@ -104,13 +105,33 @@ type AppError struct {
 }
 
 func (e *AppError) Error() string {
-	if e.Err != nil {
+	switch {
+	case e.Err != nil && e.Message == "":
+		// Locale-coded errors carry their user-facing text out of band (it's
+		// translated at the transport boundary), so Message is empty here —
+		// return the inner cause alone instead of a stray leading ": ".
+		return e.Err.Error()
+	case e.Err != nil:
 		return fmt.Sprintf("%s: %v", e.Message, e.Err)
+	default:
+		return e.Message
 	}
-	return e.Message
 }
 
 func (e *AppError) Unwrap() error { return e.Err }
+
+// WithCause attaches an inner diagnostic cause to e without altering its
+// client-facing classification (Code/Locale/Message). The cause is never
+// rendered to the client — it surfaces only in the access log's
+// app_err/app_trace, so an otherwise-opaque 4xx (a body-parse or validation
+// failure mapped to a generic locale message) stays traceable by request_id.
+// Returns e for chaining; a nil cause or nil receiver is a no-op.
+func (e *AppError) WithCause(err error) *AppError {
+	if e != nil && err != nil {
+		e.Err = err
+	}
+	return e
+}
 
 // Frames returns the caller-info trail, innermost first.
 func (e *AppError) Frames() []Frame { return e.frames }
@@ -123,9 +144,8 @@ func (e *AppError) Origin() Frame {
 	return e.frames[0]
 }
 
-// Trace returns a compact one-line trail "func file:line(msg) → func file:line(msg)"
-// suitable for a single structured log field at the transport boundary. The
-// package-qualified func name disambiguates same-named files across packages.
+// Trace returns a compact one-line trail "file:line(msg) → file:line(msg)"
+// suitable for a single structured log field at the transport boundary.
 func (e *AppError) Trace() string {
 	if len(e.frames) == 0 {
 		return ""
@@ -144,15 +164,6 @@ func captureFrame(skip int, msg string) Frame {
 	}
 
 	return Frame{File: file, Line: line, Msg: msg}
-}
-
-// New creates a new AppError and captures the call site as the first frame.
-func New(code int, message string) *AppError {
-	return &AppError{
-		Code:    code,
-		Message: message,
-		frames:  []Frame{captureFrame(1, "")},
-	}
 }
 
 // Wrap attaches a caller frame (with an optional context message) to err.
@@ -198,28 +209,85 @@ func wrapAt(err error, message string, skip int) *AppError {
 	return base
 }
 
-// httpStatusForLocale maps a locale code to its HTTP status. Add cases as new
-// locale codes are introduced; defaults to 500.
-func httpStatusForLocale(code locale.Locale) int {
-	switch code {
-	case locale.RecordNotFound, locale.UserNotFound:
-		return http.StatusNotFound
-	case locale.Unauthorized, locale.InvalidCredentials:
-		return http.StatusUnauthorized
-	case locale.InvalidRequest:
-		return http.StatusBadRequest
-	case locale.UserEmailExists:
-		return http.StatusConflict
-	default:
-		return http.StatusInternalServerError
-	}
+// localeHTTPStatus is the single source of truth mapping every HTTP-facing
+// locale code to its response status. Both error-construction paths read it via
+// httpStatusForLocale: L() (the usecase-facing constructor) and classify() (the
+// bare locale.Locale path that reaches the transport boundary). Holding the
+// mapping in one table — instead of duplicating it across per-status
+// constructors and a parallel switch — means a code has exactly one status, so
+// the two paths cannot drift. A code absent from the table resolves to 500; add
+// new codes here as you introduce them.
+var localeHTTPStatus = map[locale.Locale]int{
+	// 400 Bad Request — malformed or invalid client input.
+	locale.InvalidRequest: http.StatusBadRequest,
+
+	// 401 Unauthorized — missing or invalid authentication.
+	locale.Unauthorized:       http.StatusUnauthorized,
+	locale.InvalidCredentials: http.StatusUnauthorized,
+
+	// 403 Forbidden — authenticated but not permitted.
+	locale.Forbidden: http.StatusForbidden,
+
+	// 404 Not Found.
+	locale.RecordNotFound: http.StatusNotFound,
+	locale.UserNotFound:   http.StatusNotFound,
+
+	// 405 Method Not Allowed.
+	locale.MethodNotAllowed: http.StatusMethodNotAllowed,
+
+	// 408 Request Timeout.
+	locale.RequestTimeout: http.StatusRequestTimeout,
+
+	// 409 Conflict — state, version, or limit conflicts.
+	locale.UserEmailExists: http.StatusConflict,
+	locale.Conflict:        http.StatusConflict,
+
+	// 413 Content Too Large.
+	locale.PayloadTooLarge: http.StatusRequestEntityTooLarge,
+
+	// 415 Unsupported Media Type.
+	locale.UnsupportedMediaType: http.StatusUnsupportedMediaType,
+
+	// 422 Unprocessable Entity — semantic validation failure.
+	locale.ValidationFailed: http.StatusUnprocessableEntity,
+
+	// 429 Too Many Requests — rate limited.
+	locale.TooManyRequests: http.StatusTooManyRequests,
+
+	// 500 Internal Server Error.
+	locale.InternalError: http.StatusInternalServerError,
+
+	// 501 Not Implemented — stubbed/unfinished feature.
+	locale.Unimplemented: http.StatusNotImplemented,
+
+	// 502 Bad Gateway — invalid response from an upstream dependency.
+	locale.BadGateway: http.StatusBadGateway,
+
+	// 503 Service Unavailable — overloaded or down for maintenance.
+	locale.ServiceUnavailable: http.StatusServiceUnavailable,
+
+	// 504 Gateway Timeout — upstream dependency timed out.
+	locale.GatewayTimeout: http.StatusGatewayTimeout,
 }
 
-// classify maps a non-AppError into an *AppError. Recognises:
-//   - *locale.LocaleError → HTTP status from httpStatusForLocale; Locale + Args
-//     travel to the transport boundary for translation.
-//   - the package sentinel errors → mapped to their HTTP equivalents.
-//   - anything else → 500.
+// httpStatusForLocale returns the HTTP status for a locale code, defaulting to
+// 500 for any code not present in localeHTTPStatus.
+func httpStatusForLocale(code locale.Locale) int {
+	if status, ok := localeHTTPStatus[code]; ok {
+		return status
+	}
+	return http.StatusInternalServerError
+}
+
+// classify maps a non-AppError into an *AppError, always locale-coded so the
+// transport boundary can translate the client-facing message — no bare strings
+// leak out. Recognises:
+//   - *locale.LocaleError → its own Locale + Args.
+//   - the package sentinel errors → their canonical locale code.
+//   - anything else → InternalError (500).
+//
+// The original error stays reachable as the AppError's cause (set by the
+// caller), so its text still surfaces in the access log's app_err/app_trace.
 func classify(err error) *AppError {
 	var le *locale.LocaleError
 	if As(err, &le) {
@@ -231,17 +299,17 @@ func classify(err error) *AppError {
 	}
 	switch {
 	case Is(err, ErrNotFound):
-		return &AppError{Code: http.StatusNotFound, Message: err.Error()}
+		return &AppError{Code: http.StatusNotFound, Locale: locale.RecordNotFound}
 	case Is(err, ErrAlreadyExists), Is(err, ErrConflict):
-		return &AppError{Code: http.StatusConflict, Message: err.Error()}
+		return &AppError{Code: http.StatusConflict, Locale: locale.Conflict}
 	case Is(err, ErrInvalid):
-		return &AppError{Code: http.StatusBadRequest, Message: err.Error()}
+		return &AppError{Code: http.StatusBadRequest, Locale: locale.InvalidRequest}
 	case Is(err, ErrUnauthorized):
-		return &AppError{Code: http.StatusUnauthorized, Message: err.Error()}
+		return &AppError{Code: http.StatusUnauthorized, Locale: locale.Unauthorized}
 	case Is(err, ErrForbidden):
-		return &AppError{Code: http.StatusForbidden, Message: err.Error()}
+		return &AppError{Code: http.StatusForbidden, Locale: locale.Forbidden}
 	default:
-		return &AppError{Code: http.StatusInternalServerError, Message: "internal server error"}
+		return &AppError{Code: http.StatusInternalServerError, Locale: locale.InternalError}
 	}
 }
 
@@ -260,50 +328,38 @@ func ToAppError(err error) *AppError {
 	return base
 }
 
-// BadRequest and the sibling constructors below build AppErrors with a plain
-// string message — each captures a stack frame at its call site. Use these
-// when the message is a fixed internal/debug string; for user-facing messages
-// that need translation use the locale-coded constructors further down.
-func BadRequest(msg string) *AppError     { return newAt(http.StatusBadRequest, msg) }
-func NotFound(msg string) *AppError       { return newAt(http.StatusNotFound, msg) }
-func Unauthorized(msg string) *AppError   { return newAt(http.StatusUnauthorized, msg) }
-func Forbidden(msg string) *AppError      { return newAt(http.StatusForbidden, msg) }
-func InternalServer(msg string) *AppError { return newAt(http.StatusInternalServerError, msg) }
-func Conflict(msg string) *AppError       { return newAt(http.StatusConflict, msg) }
-
-func newAt(code int, msg string) *AppError {
-	return &AppError{
-		Code:    code,
-		Message: msg,
-		frames:  []Frame{captureFrame(2, "")},
+// LogFields renders err as structured log key/values for a single diagnostic
+// log line, using the SAME field names the HTTP access log emits (app_code,
+// app_err, app_trace, app_locale) so an error reads identically whether it
+// surfaced from an HTTP request or a worker. Returns nil for a nil error.
+//
+// Use it anywhere outside the HTTP access-log path that owns its own error
+// line — chiefly the Kafka workers, which have no transport middleware to fold
+// the cause + trace in for them:
+//
+//	log.Error("kafka: handle message", errors.LogFields(err)...)
+func LogFields(err error) []any {
+	if err == nil {
+		return nil
 	}
+	app := ToAppError(err)
+	fields := []any{"app_code", app.Code, "app_err", app.Error()}
+	if app.Locale != 0 {
+		fields = append(fields, "app_locale", int(app.Locale))
+	}
+	if trace := app.Trace(); trace != "" {
+		fields = append(fields, "app_trace", trace)
+	}
+	return fields
 }
 
-// NewL and the sibling locale-coded constructors below build AppErrors whose
-// message is translated at the transport boundary via the request's
-// Accept-Language. Args are substituted into the translated template via
-// fmt.Sprintf. The HTTP status is derived from code.HTTPStatus() — pass an
-// explicit status to NewL only when you want to override that mapping.
-func NewL(httpCode int, code locale.Locale, args ...any) *AppError {
-	return newAtL(httpCode, code, args)
-}
-func BadRequestL(code locale.Locale, args ...any) *AppError {
-	return newAtL(http.StatusBadRequest, code, args)
-}
-func NotFoundL(code locale.Locale, args ...any) *AppError {
-	return newAtL(http.StatusNotFound, code, args)
-}
-func UnauthorizedL(code locale.Locale, args ...any) *AppError {
-	return newAtL(http.StatusUnauthorized, code, args)
-}
-func ForbiddenL(code locale.Locale, args ...any) *AppError {
-	return newAtL(http.StatusForbidden, code, args)
-}
-func ConflictL(code locale.Locale, args ...any) *AppError {
-	return newAtL(http.StatusConflict, code, args)
-}
-func InternalServerL(code locale.Locale, args ...any) *AppError {
-	return newAtL(http.StatusInternalServerError, code, args)
+// L builds a locale-coded AppError whose message is translated at the transport
+// boundary via the request's Accept-Language; Args are substituted into the
+// translated template via fmt.Sprintf. The HTTP status is derived from the code
+// through localeHTTPStatus — the single source of truth — so callers never
+// restate it and a code maps to exactly one status everywhere it is raised.
+func L(code locale.Locale, args ...any) *AppError {
+	return newAtL(httpStatusForLocale(code), code, args)
 }
 
 func newAtL(httpCode int, code locale.Locale, args []any) *AppError {
@@ -318,10 +374,10 @@ func newAtL(httpCode int, code locale.Locale, args []any) *AppError {
 // --- AppError context stash --------------------------------------------------
 //
 // The Logging middleware needs to log the AppError that the handler emitted,
-// but the response writer is called after the middleware's outbound ctx has
+// but the response is written after the middleware's outbound ctx has
 // already been observed — and contexts are immutable, so we can't replumb
-// ctx upward. PrepareAppErrorContext installs a mutable slot in ctx; the
-// writer (httpwriter.WriteError) calls StashAppError into that slot; the
+// ctx upward. PrepareAppErrorContext installs a mutable slot in ctx; a
+// handler or error writer calls StashAppError into that slot; the
 // middleware reads it via AppErrorFromContext once the handler returns.
 
 type appErrSlot struct{ err *AppError }

@@ -5,15 +5,19 @@ import (
 {{- if or (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
 	"encoding/json"
 {{- end}}
-	"fmt"
-{{ if eq .MessageQueue "kafka" }}
+{{- if eq .MessageQueue "kafka"}}
+
 	"github.com/IBM/sarama"
-{{- end -}}
-{{- if eq .MessageQueue "rabbitmq" }}
+{{- else if eq .MessageQueue "rabbitmq"}}
+
 	amqp "github.com/rabbitmq/amqp091-go"
-{{- end }}
+{{- end}}
 
 	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/pkg/errors"
+{{- if eq .MessageQueue "nats"}}
+	"{{.ModuleName}}/pkg/locale"
+{{- end}}
 )
 
 {{- if eq .MessageQueue "kafka"}}
@@ -32,11 +36,11 @@ var _ domain.UserPublisher = (*Publisher)(nil)
 
 func (p *Publisher) publish(ctx context.Context, topic string, payload any) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return errors.Wrapf(err, "publish to %s: context done", topic)
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
+		return errors.Wrapf(err, "publish to %s: marshal event", topic)
 	}
 
 	_, _, err = p.producer.SendMessage(&sarama.ProducerMessage{
@@ -44,7 +48,7 @@ func (p *Publisher) publish(ctx context.Context, topic string, payload any) erro
 		Value: sarama.ByteEncoder(data),
 	})
 	if err != nil {
-		return fmt.Errorf("publish to %s: %w", topic, err)
+		return errors.Wrapf(err, "publish to %s", topic)
 	}
 	return nil
 }
@@ -68,11 +72,11 @@ type Publisher struct {
 func NewPublisher(conn *amqp.Connection) (*Publisher, error) {
 	ch, err := conn.Channel()
 	if err != nil {
-		return nil, fmt.Errorf("open rabbitmq channel: %w", err)
+		return nil, errors.Wrap(err, "open rabbitmq channel")
 	}
 	if err := ch.ExchangeDeclare(rabbitmqExchange, "topic", true, false, false, false, nil); err != nil {
 		_ = ch.Close()
-		return nil, fmt.Errorf("declare exchange: %w", err)
+		return nil, errors.Wrap(err, "declare exchange")
 	}
 	return &Publisher{conn: conn, ch: ch}, nil
 }
@@ -83,13 +87,13 @@ var _ domain.UserPublisher = (*Publisher)(nil)
 func (p *Publisher) publish(ctx context.Context, routingKey string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
+		return errors.Wrapf(err, "publish to %s: marshal event", routingKey)
 	}
 	if err := p.ch.PublishWithContext(ctx, rabbitmqExchange, routingKey, false, false, amqp.Publishing{
 		ContentType: "application/json",
 		Body:        data,
 	}); err != nil {
-		return fmt.Errorf("publish to %s: %w", routingKey, err)
+		return errors.Wrapf(err, "publish to %s", routingKey)
 	}
 	return nil
 }
@@ -116,7 +120,7 @@ func NewPublisher() *Publisher {
 var _ domain.UserPublisher = (*Publisher)(nil)
 
 func (p *Publisher) publish(ctx context.Context, subject string, payload any) error {
-	return fmt.Errorf("nats publisher not implemented")
+	return errors.L(locale.Unimplemented)
 }
 
 func (p *Publisher) Close() error { return nil }

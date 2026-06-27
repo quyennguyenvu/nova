@@ -15,4 +15,8 @@ UPDATE users SET name = ?, updated_at = NOW() WHERE id = ?;
 DELETE FROM users WHERE id = ?;
 
 -- name: ListUsers :many
-SELECT * FROM users ORDER BY id LIMIT ? OFFSET ?;
+SELECT *
+FROM users
+WHERE (sqlc.arg('email') = '' OR email = sqlc.arg('email'))
+ORDER BY id
+LIMIT ? OFFSET ?;

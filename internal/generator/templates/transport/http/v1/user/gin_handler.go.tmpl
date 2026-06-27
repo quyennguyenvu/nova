@@ -2,7 +2,6 @@ package user
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -10,13 +9,12 @@ import (
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/errors"
-	"{{.ModuleName}}/pkg/locale"
-	"{{.ModuleName}}/pkg/logctx"
 )
 
 // Handler is the HTTP boundary for user operations. It never logs — the
 // Logging middleware reads the AppError back from ctx via the WriteError
-// stash and emits one access log per request.
+// stash and emits one access log per request. Request binding and path-param
+// parsing are shared via httpwriter.Bind / httpwriter.ParseID.
 type Handler struct {
 	userService *usersvc.Service
 	validate    *validator.Validate
@@ -26,25 +24,9 @@ func NewHandler(userService *usersvc.Service, validate *validator.Validate) *Han
 	return &Handler{userService: userService, validate: validate}
 }
 
-// bind decodes JSON + enforces struct-tag validation. Decode failures return
-// the binder's own message; validation failures are logged at warn (with the
-// validator's field-by-field detail) and mapped to a generic localized 400 so
-// clients don't see internal field names.
-func (h *Handler) bind(c *gin.Context, v any) *errors.AppError {
-	log := logctx.From(c.Request.Context())
-	if err := c.ShouldBindJSON(v); err != nil {
-		return errors.BadRequest(err.Error())
-	}
-	if err := h.validate.Struct(v); err != nil {
-		log.Warn(err.Error())
-		return errors.BadRequestL(locale.InvalidRequest)
-	}
-	return nil
-}
-
 func (h *Handler) Create(c *gin.Context) {
-	var req CreateUserRequest
-	if appErr := h.bind(c, &req); appErr != nil {
+	req, appErr := httpwriter.Bind[CreateUserRequest](c, h.validate)
+	if appErr != nil {
 		httpwriter.WriteError(c, appErr)
 		return
 	}
@@ -61,8 +43,8 @@ func (h *Handler) Create(c *gin.Context) {
 }
 
 func (h *Handler) Login(c *gin.Context) {
-	var req LoginRequest
-	if appErr := h.bind(c, &req); appErr != nil {
+	req, appErr := httpwriter.Bind[LoginRequest](c, h.validate)
+	if appErr != nil {
 		httpwriter.WriteError(c, appErr)
 		return
 	}
@@ -78,9 +60,9 @@ func (h *Handler) Login(c *gin.Context) {
 }
 
 func (h *Handler) GetByID(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		httpwriter.WriteError(c, errors.BadRequest("invalid id"))
+	id, appErr := httpwriter.ParseID(c, "id")
+	if appErr != nil {
+		httpwriter.WriteError(c, appErr)
 		return
 	}
 	user, err := h.userService.Get(c.Request.Context(), id)
@@ -92,13 +74,13 @@ func (h *Handler) GetByID(c *gin.Context) {
 }
 
 func (h *Handler) Update(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		httpwriter.WriteError(c, errors.BadRequest("invalid id"))
+	id, appErr := httpwriter.ParseID(c, "id")
+	if appErr != nil {
+		httpwriter.WriteError(c, appErr)
 		return
 	}
-	var req UpdateUserRequest
-	if appErr := h.bind(c, &req); appErr != nil {
+	req, appErr := httpwriter.Bind[UpdateUserRequest](c, h.validate)
+	if appErr != nil {
 		httpwriter.WriteError(c, appErr)
 		return
 	}
@@ -111,9 +93,9 @@ func (h *Handler) Update(c *gin.Context) {
 }
 
 func (h *Handler) Delete(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		httpwriter.WriteError(c, errors.BadRequest("invalid id"))
+	id, appErr := httpwriter.ParseID(c, "id")
+	if appErr != nil {
+		httpwriter.WriteError(c, appErr)
 		return
 	}
 	if delErr := h.userService.Delete(c.Request.Context(), id); delErr != nil {
@@ -124,9 +106,16 @@ func (h *Handler) Delete(c *gin.Context) {
 }
 
 func (h *Handler) List(c *gin.Context) {
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	users, err := h.userService.List(c.Request.Context(), usersvc.ListInput{Limit: limit, Offset: offset})
+	q, appErr := httpwriter.BindQuery[ListQuery](c, h.validate)
+	if appErr != nil {
+		httpwriter.WriteError(c, appErr)
+		return
+	}
+	users, err := h.userService.List(c.Request.Context(), usersvc.ListInput{
+		Email:  q.Email,
+		Limit:  q.Limit,
+		Offset: q.Offset,
+	})
 	if err != nil {
 		httpwriter.WriteError(c, errors.ToAppError(err))
 		return

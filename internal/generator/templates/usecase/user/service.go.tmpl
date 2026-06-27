@@ -60,7 +60,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, e
 	case err == nil && existing != nil:
 		// Locale-coded error: transport translates UserEmailExists with input.Email
 		// substituted into the user's language (e.g. "Email foo@bar already exists").
-		return nil, errors.ConflictL(locale.UserEmailExists, input.Email)
+		return nil, errors.L(locale.UserEmailExists, input.Email)
 	case err != nil && !errors.Is(err, errors.ErrNotFound):
 		return nil, errors.Wrapf(err, "register user email=%s: lookup", input.Email)
 	}
@@ -151,6 +151,7 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]*Output, error) 
 		offset = 0
 	}
 	filter := domain.UserFilter{
+		Email:  input.Email,
 		Limit:  int32(limit),
 		Offset: int32(offset),
 	}
@@ -196,13 +197,13 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*LoginOutput, er
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			_ = s.hasher.Verify(dummyHash, input.Password)
-			return nil, errors.UnauthorizedL(locale.InvalidCredentials)
+			return nil, errors.L(locale.InvalidCredentials)
 		}
 		return nil, errors.Wrapf(err, "login email=%s: lookup", input.Email)
 	}
 
 	if verifyErr := s.hasher.Verify(user.PasswordHash, input.Password); verifyErr != nil {
-		return nil, errors.UnauthorizedL(locale.InvalidCredentials)
+		return nil, errors.L(locale.InvalidCredentials)
 	}
 
 	principal := &identity.UserPrincipal{

@@ -1,6 +1,6 @@
 // Package logctx carries a request-scoped logger through context.Context so any
 // inner layer (usecase, adapter, repository) can log with the request's
-// correlation fields (request_id, trace_id, …) already attached — without
+// correlation fields (request_id, method, path, …) already attached — without
 // taking the logger as a constructor dependency or re-deriving the IDs on every
 // call.
 //

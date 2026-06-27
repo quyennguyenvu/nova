@@ -20,6 +20,7 @@ import (
 	"{{.ModuleName}}/internal/domain/identity"
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
@@ -73,9 +74,7 @@ func (s *TokenService) AccessTokenTTL() time.Duration { return s.accessTokenTTL 
 // an error on verify-only services (no private key configured).
 func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 	if s.privateKey == nil {
-		return "", errors.InternalServer(
-			"jwt: signing not configured — this service is verify-only (no private key)",
-		)
+		return "", errors.L(locale.InternalError)
 	}
 	now := time.Now()
 	claims := AccessTokenClaims{
@@ -106,9 +105,9 @@ func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 // ParseAndVerifyAccessToken validates tokenStr against the public key and
 // projects its claims into a UserPrincipal. Returns *AppError(401) on any
 // verification failure so the transport boundary can pass the error straight
-// to httpwriter.WriteError. The client always gets a generic "invalid access
-// token" — the specific reason is logged server-side, never returned. ctx is
-// used only to reach the request-scoped logger via logctx.From.
+// to httpwriter.WriteError. The client always gets a generic localized 401
+// (locale.Unauthorized) — the specific reason is logged server-side, never
+// returned. ctx is used only to reach the request-scoped logger via logctx.From.
 func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr string) (*identity.UserPrincipal, error) {
 	log := logctx.From(ctx)
 	var claims AccessTokenClaims
@@ -117,7 +116,7 @@ func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr s
 		&claims,
 		func(t *jwt.Token) (any, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, errors.Unauthorized("unexpected signing method")
+				return nil, errors.L(locale.Unauthorized)
 			}
 			return s.publicKey, nil
 		},
@@ -125,21 +124,21 @@ func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr s
 	)
 	if err != nil {
 		logVerifyFailure(ctx, err)
-		return nil, errors.Unauthorized("invalid access token")
+		return nil, errors.L(locale.Unauthorized)
 	}
 	if !tkn.Valid {
-		return nil, errors.Unauthorized("invalid access token")
+		return nil, errors.L(locale.Unauthorized)
 	}
 	// A token whose signature checked out against our key but carries the wrong
 	// issuer/audience is suspicious (cross-environment replay or misconfig), not
 	// routine — log it at Warn even though the client still gets a generic 401.
 	if s.issuer != "" && !claims.VerifyIssuer(s.issuer, true) {
 		log.Warn("jwt verification anomaly", "reason", "bad_issuer")
-		return nil, errors.Unauthorized("invalid access token")
+		return nil, errors.L(locale.Unauthorized)
 	}
 	if s.audience != "" && !claims.VerifyAudience(s.audience, true) {
 		log.Warn("jwt verification anomaly", "reason", "bad_audience")
-		return nil, errors.Unauthorized("invalid access token")
+		return nil, errors.L(locale.Unauthorized)
 	}
 
 	return &identity.UserPrincipal{

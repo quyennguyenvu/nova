@@ -10,6 +10,7 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 )
 
 type ipLimiter struct {
@@ -70,7 +71,7 @@ func LoginRateLimit(cfg config.LoginRateLimitConfig) func(http.Handler) http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !l.allow(clientIP(r)) {
-				httpwriter.WriteError(w, r, errors.New(http.StatusTooManyRequests, "too many login attempts"))
+				httpwriter.WriteError(w, r, errors.L(locale.TooManyRequests))
 				return
 			}
 			next.ServeHTTP(w, r)

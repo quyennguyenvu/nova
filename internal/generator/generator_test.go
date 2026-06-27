@@ -43,6 +43,7 @@ type UpdateUserParams struct {
 	Name string
 }
 type ListUsersParams struct {
+	Email         string
 	Limit, Offset int32
 }
 
@@ -103,6 +104,7 @@ type UpdateUserParams struct {
 	Name string
 }
 type ListUsersParams struct {
+	Email         string
 	Limit, Offset int32
 }
 

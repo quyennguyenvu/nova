@@ -9,6 +9,7 @@ import (
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 )
 
 // Auth verifies the bearer token via the JWT verifier and attaches the
@@ -17,7 +18,7 @@ func Auth(tokenSvc *jwtsec.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := bearerToken(c.GetHeader("Authorization"))
 		if token == "" {
-			httpwriter.WriteError(c, errors.Unauthorized("missing bearer token"))
+			httpwriter.WriteError(c, errors.L(locale.Unauthorized))
 			c.Abort()
 			return
 		}

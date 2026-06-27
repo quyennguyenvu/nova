@@ -1,11 +1,16 @@
-// Package httpwriter is the framework-specific HTTP response writer. It lives
-// under internal/transport/http (not pkg/) because it is bound to a single
-// framework — the envelope it serializes is in pkg/httputil (framework-free).
+// Package httpwriter holds the framework-specific HTTP request-binding and
+// response-writing helpers. It lives under internal/transport/http (not pkg/)
+// because it is bound to a single framework — the envelope it serializes is in
+// pkg/httputil (framework-free).
 package httpwriter
 
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
 
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/httputil"
@@ -38,4 +43,57 @@ func WriteError(w http.ResponseWriter, r *http.Request, app *errors.AppError) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(app.Code)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// Bind decodes the request body into a fresh T and runs struct-tag validation.
+// A parse failure and a validation failure both map to the same generic
+// localized 400 — clients never see binder internals or field names — while the
+// underlying cause rides along via WithCause so it surfaces in the access log's
+// app_err/app_trace, traceable by request_id.
+func Bind[T any](r *http.Request, validate *validator.Validate) (T, *errors.AppError) {
+	var v T
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		return v, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	if err := validate.Struct(&v); err != nil {
+		return v, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	return v, nil
+}
+
+// ParseID reads path parameter name as an int64, mapping a missing or malformed
+// value to the same generic localized 400 as Bind.
+func ParseID(r *http.Request, name string) (int64, *errors.AppError) {
+	id, err := strconv.ParseInt(chi.URLParam(r, name), 10, 64)
+	if err != nil {
+		return 0, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	return id, nil
+}
+
+// QueryInt reads query parameter name as an int. An absent value yields 0 (the
+// usecase applies pagination defaults); a present-but-malformed value maps to
+// the same generic localized 400 as Bind. chi has no struct query binder, so
+// query DTOs are assembled field-by-field with this helper.
+func QueryInt(r *http.Request, name string) (int, *errors.AppError) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	return n, nil
+}
+
+// ValidateQuery runs struct-tag validation on a query DTO the caller assembled
+// (chi has no struct query binder, so the handler fills the struct from QueryInt
+// / r.URL.Query() and validates here), mapping a failure to the same generic
+// localized 400 as Bind.
+func ValidateQuery(validate *validator.Validate, v any) *errors.AppError {
+	if err := validate.Struct(v); err != nil {
+		return errors.L(locale.InvalidRequest).WithCause(err)
+	}
+	return nil
 }

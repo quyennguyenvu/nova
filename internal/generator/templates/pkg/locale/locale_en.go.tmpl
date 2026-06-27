@@ -2,12 +2,24 @@ package locale
 
 func enMapping() {
 	translations[LangEn] = Mapping{
-		InternalError:      "Internal server error",
-		InvalidRequest:     "Invalid request",
-		Unauthorized:       "Unauthorized",
-		RecordNotFound:     "Record not found",
-		UserNotFound:       "User not found",
-		UserEmailExists:    "Email %s already exists",
-		InvalidCredentials: "Invalid email or password",
+		InternalError:        "Internal server error",
+		InvalidRequest:       "Invalid request",
+		Unauthorized:         "Unauthorized",
+		RecordNotFound:       "Record not found",
+		Forbidden:            "Forbidden",
+		Conflict:             "Conflict",
+		TooManyRequests:      "Too many requests",
+		Unimplemented:        "Not implemented",
+		MethodNotAllowed:     "Method not allowed",
+		RequestTimeout:       "Request timeout",
+		PayloadTooLarge:      "Payload too large",
+		UnsupportedMediaType: "Unsupported media type",
+		ValidationFailed:     "Validation failed",
+		BadGateway:           "Bad gateway",
+		ServiceUnavailable:   "Service unavailable",
+		GatewayTimeout:       "Gateway timeout",
+		UserNotFound:         "User not found",
+		UserEmailExists:      "Email %s already exists",
+		InvalidCredentials:   "Invalid email or password",
 	}
 }

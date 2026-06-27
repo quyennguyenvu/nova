@@ -2,12 +2,24 @@ package locale
 
 func viMapping() {
 	translations[LangVi] = Mapping{
-		InternalError:      "Lỗi hệ thống",
-		InvalidRequest:     "Yêu cầu không hợp lệ",
-		Unauthorized:       "Chưa đăng nhập",
-		RecordNotFound:     "Không tìm thấy bản ghi",
-		UserNotFound:       "Không tìm thấy người dùng",
-		UserEmailExists:    "Email %s đã tồn tại",
-		InvalidCredentials: "Email hoặc mật khẩu không đúng",
+		InternalError:        "Lỗi hệ thống",
+		InvalidRequest:       "Yêu cầu không hợp lệ",
+		Unauthorized:         "Chưa đăng nhập",
+		RecordNotFound:       "Không tìm thấy bản ghi",
+		Forbidden:            "Không có quyền truy cập",
+		Conflict:             "Dữ liệu xung đột",
+		TooManyRequests:      "Quá nhiều yêu cầu",
+		Unimplemented:        "Chưa được triển khai",
+		MethodNotAllowed:     "Phương thức không được phép",
+		RequestTimeout:       "Yêu cầu hết thời gian chờ",
+		PayloadTooLarge:      "Dữ liệu quá lớn",
+		UnsupportedMediaType: "Định dạng không được hỗ trợ",
+		ValidationFailed:     "Dữ liệu không hợp lệ",
+		BadGateway:           "Lỗi cổng kết nối",
+		ServiceUnavailable:   "Dịch vụ tạm thời không khả dụng",
+		GatewayTimeout:       "Cổng kết nối hết thời gian chờ",
+		UserNotFound:         "Không tìm thấy người dùng",
+		UserEmailExists:      "Email %s đã tồn tại",
+		InvalidCredentials:   "Email hoặc mật khẩu không đúng",
 	}
 }

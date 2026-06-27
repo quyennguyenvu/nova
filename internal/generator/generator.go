@@ -27,6 +27,7 @@ const (
 	toml     = "toml"
 	kafka    = "kafka"
 	rabbitmq = "rabbitmq"
+	sqlc     = "sqlc"
 )
 
 // Generator creates a new project from templates.
@@ -163,7 +164,7 @@ func sqlcEngineAlias(db string) string {
 	case postgres:
 		return "pg"
 	case mysql:
-		return "mysql"
+		return mysql
 	default:
 		return ""
 	}
@@ -175,7 +176,7 @@ func sqlcEngineAlias(db string) string {
 // names: sqlc/sqlc.yaml, sqlc/query/user.sql.
 func (g *Generator) sqlcFiles() []templateFile {
 	cfg := g.cfg
-	if cfg.QueryGen != "sqlc" || !cfg.HasSQL() {
+	if cfg.QueryGen != sqlc || !cfg.HasSQL() {
 		return nil
 	}
 	engine := sqlcEngineAlias(cfg.Database)
@@ -615,7 +616,7 @@ func (g *Generator) migrationFiles() []templateFile {
 
 	now := time.Now().Format("20060102150405")
 	dir := "migrations"
-	if cfg.QueryGen == "sqlc" {
+	if cfg.QueryGen == sqlc {
 		dir = "sqlc/migrations"
 	}
 

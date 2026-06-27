@@ -27,10 +27,22 @@ type Locale int
 //	User:     -1100 to -1199
 const (
 	// General errors
-	InternalError  Locale = -1000
-	InvalidRequest Locale = -1001
-	Unauthorized   Locale = -1002
-	RecordNotFound Locale = -1003
+	InternalError        Locale = -1000
+	InvalidRequest       Locale = -1001
+	Unauthorized         Locale = -1002
+	RecordNotFound       Locale = -1003
+	Forbidden            Locale = -1004
+	Conflict             Locale = -1005
+	TooManyRequests      Locale = -1006
+	Unimplemented        Locale = -1007
+	MethodNotAllowed     Locale = -1008
+	RequestTimeout       Locale = -1009
+	PayloadTooLarge      Locale = -1010
+	UnsupportedMediaType Locale = -1011
+	ValidationFailed     Locale = -1012
+	BadGateway           Locale = -1013
+	ServiceUnavailable   Locale = -1014
+	GatewayTimeout       Locale = -1015
 
 	// User errors
 	UserNotFound       Locale = -1100

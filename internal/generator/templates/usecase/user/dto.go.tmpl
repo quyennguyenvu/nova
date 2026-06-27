@@ -16,9 +16,11 @@ type UpdateInput struct {
 }
 
 // ListInput is the use case's read-side filter shape. Transport hands raw
-// ints in; the service converts to domain.UserFilter internally so transport
-// never imports the domain package.
+// filter values in; the service converts to domain.UserFilter internally so
+// transport never imports the domain package. Email is an optional exact-match
+// filter — empty means "no email filter".
 type ListInput struct {
+	Email  string
 	Limit  int
 	Offset int
 }

@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"net/http"
 	"sync"
 
 	"github.com/labstack/echo/v4"
@@ -10,6 +9,7 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 )
 
 type ipLimiter struct {
@@ -49,7 +49,7 @@ func LoginRateLimit(cfg config.LoginRateLimitConfig) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if !l.allow(c.RealIP()) {
-				return httpwriter.WriteError(c, errors.New(http.StatusTooManyRequests, "too many login attempts"))
+				return httpwriter.WriteError(c, errors.L(locale.TooManyRequests))
 			}
 			return next(c)
 		}

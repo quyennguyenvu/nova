@@ -7,6 +7,7 @@ import (
 
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
@@ -26,7 +27,7 @@ func Recovery() fiber.Handler {
 					"panic", r,
 					"stack", string(debug.Stack()),
 				)
-				err = httpwriter.WriteError(c, errors.InternalServer("internal server error"))
+				err = httpwriter.WriteError(c, errors.L(locale.InternalError))
 			}
 		}()
 		return c.Next()

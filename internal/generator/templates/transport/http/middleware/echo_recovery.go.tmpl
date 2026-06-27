@@ -7,6 +7,7 @@ import (
 
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 	"{{.ModuleName}}/pkg/logctx"
 )
 
@@ -31,7 +32,7 @@ func Recovery() echo.MiddlewareFunc {
 				if committed {
 					return
 				}
-				err = httpwriter.WriteError(c, errors.InternalServer("internal server error"))
+				err = httpwriter.WriteError(c, errors.L(locale.InternalError))
 			}()
 			return next(c)
 		}

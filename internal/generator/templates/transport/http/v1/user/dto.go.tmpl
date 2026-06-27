@@ -12,6 +12,17 @@ type UpdateUserRequest struct {
 	Name string `json:"name" validate:"omitempty,min=2,max=100"`
 }
 
+// ListQuery is the pagination input for GET /api/v1/users, bound from the query
+// string. It carries both `query:` (fiber, echo) and `form:` (gin) tags so this
+// one shared DTO works with every framework's native query binder. There is no
+// min/max here on purpose — limit/offset bounds are the usecase's policy (so
+// gRPC/CLI inherit the same caps); this layer only parses.
+type ListQuery struct {
+	Email  string `query:"email"  form:"email"  validate:"omitempty,email"`
+	Limit  int    `query:"limit"  form:"limit"`
+	Offset int    `query:"offset" form:"offset"`
+}
+
 // LoginRequest is the credential payload for POST /api/v1/login.
 type LoginRequest struct {
 	Email    string `json:"email"    validate:"required,email"`

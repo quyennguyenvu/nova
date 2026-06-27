@@ -71,6 +71,7 @@ func (r *UserRepository) Delete(ctx context.Context, id int64) error {
 
 func (r *UserRepository) List(ctx context.Context, filter domain.UserFilter) ([]*entity.User, error) {
 	rows, err := r.qx.Q(ctx).ListUsers(ctx, dbgen.ListUsersParams{
+		Email:  filter.Email,
 		Limit:  int32(filter.Limit),
 		Offset: int32(filter.Offset),
 	})

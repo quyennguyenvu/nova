@@ -22,5 +22,6 @@ WHERE id = $1;
 -- name: ListUsers :many
 SELECT *
 FROM users
+WHERE (sqlc.arg('email')::text = '' OR email = sqlc.arg('email')::text)
 ORDER BY id
 LIMIT sqlc.arg('limit')::int OFFSET sqlc.arg('offset')::int;

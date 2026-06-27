@@ -57,7 +57,7 @@ func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.Us
 
 	user, err := r.repo.GetByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "user cache: load id=%d", id)
 	}
 
 	// Best-effort write — log the miss but don't fail the read.
@@ -75,7 +75,7 @@ func (r *UserCacheRepository) GetByEmail(ctx context.Context, email string) (*en
 
 func (r *UserCacheRepository) Update(ctx context.Context, user *entity.User) error {
 	if err := r.repo.Update(ctx, user); err != nil {
-		return err
+		return errors.Wrapf(err, "user cache: update id=%d", user.ID)
 	}
 	if delErr := r.cache.Del(ctx, userKey(user.ID)).Err(); delErr != nil {
 		return errors.Wrapf(delErr, "user cache: invalidate after update id=%d", user.ID)
@@ -85,7 +85,7 @@ func (r *UserCacheRepository) Update(ctx context.Context, user *entity.User) err
 
 func (r *UserCacheRepository) Delete(ctx context.Context, id int64) error {
 	if err := r.repo.Delete(ctx, id); err != nil {
-		return err
+		return errors.Wrapf(err, "user cache: delete id=%d", id)
 	}
 	if delErr := r.cache.Del(ctx, userKey(id)).Err(); delErr != nil {
 		return errors.Wrapf(delErr, "user cache: invalidate after delete id=%d", id)
