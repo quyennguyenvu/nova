@@ -15,14 +15,52 @@ type UpdateInput struct {
 	Name string
 }
 
-// ListInput is the use case's read-side filter shape. Transport hands raw
-// filter values in; the service converts to domain.UserFilter internally so
-// transport never imports the domain package. Email is an optional exact-match
-// filter — empty means "no email filter".
+// ListInput is the use case's read-side filter shape (admin/page-based form).
+// Transport hands raw filter values in; the service converts to
+// domain.UserFilter internally so transport never imports the domain package.
+// Email is an optional exact-match filter — empty means "no email filter".
+// Page is 1-based; the service clamps Page/PerPage and derives the SQL offset.
 type ListInput struct {
-	Email  string
+	Email   string
+	Page    int
+	PerPage int
+}
+
+// ListOutput is the paginated result Service.List returns: the page of items
+// plus the totals an admin UI needs. Page/PerPage echo the clamped values the
+// service actually used (not the raw request), so the projected page meta is
+// honest. For a user-facing (cursor) list, return a different output carrying
+// the next cursor + a has-more flag instead.
+type ListOutput struct {
+	Items       []*Output
+	Page        int
+	PerPage     int
+	TotalRecord int64
+}
+
+// PublicListInput is the read-side shape for the public (cursor-based) list.
+// Cursor is the opaque token the previous page returned; empty means "from the
+// start". The service clamps Limit with the same caps as the admin list.
+type PublicListInput struct {
+	Cursor string
 	Limit  int
-	Offset int
+}
+
+// PublicListOutput is the public list result: a page of trimmed-down users
+// plus the cursor seam. NextCursor is the opaque token for the following page
+// and is empty once HasMore is false.
+type PublicListOutput struct {
+	Items      []*PublicOutput
+	NextCursor string
+	HasMore    bool
+}
+
+// PublicOutput is the public projection of a user — email + name only. The
+// public list deliberately omits id/timestamps so an unauthenticated caller
+// learns nothing beyond the directory fields.
+type PublicOutput struct {
+	Email string
+	Name  string
 }
 
 // Output is the use-case's return shape — the transport layer projects it

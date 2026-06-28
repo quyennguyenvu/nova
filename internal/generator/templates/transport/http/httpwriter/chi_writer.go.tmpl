@@ -28,6 +28,18 @@ func WriteJSON(w http.ResponseWriter, status int, data any) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// WriteListJSON writes a paginated list response: the standard success envelope
+// with data plus pagination meta (a httputil.CursorMeta for the user-facing
+// cursor form, or a httputil.PageMeta for the admin offset form). Like
+// WriteJSON it reads the correlation ID back from the response header.
+func WriteListJSON(w http.ResponseWriter, status int, data, meta any) {
+	resp := httputil.SuccessListResponse(data, meta)
+	resp.RequestID = w.Header().Get(httputil.RequestIDHeader)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 // WriteError writes an error JSON response wrapped in the standard envelope.
 // The HTTP status is taken from app.Code. The message is translated using the
 // language carried in r's context (set by the Locale middleware) when app

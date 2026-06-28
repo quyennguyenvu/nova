@@ -46,13 +46,19 @@ type ListUsersParams struct {
 	Email         string
 	Limit, Offset int32
 }
+type ListUsersAfterParams struct {
+	Cursor int64
+	Limit  int32
+}
 
-func (*Queries) CreateUser(context.Context, CreateUserParams) (User, error)   { return User{}, nil }
-func (*Queries) GetUserByID(context.Context, int64) (User, error)             { return User{}, nil }
-func (*Queries) GetUserByEmail(context.Context, string) (User, error)         { return User{}, nil }
-func (*Queries) UpdateUser(context.Context, UpdateUserParams) error           { return nil }
-func (*Queries) DeleteUser(context.Context, int64) error                      { return nil }
-func (*Queries) ListUsers(context.Context, ListUsersParams) ([]User, error)   { return nil, nil }
+func (*Queries) CreateUser(context.Context, CreateUserParams) (User, error)             { return User{}, nil }
+func (*Queries) GetUserByID(context.Context, int64) (User, error)                       { return User{}, nil }
+func (*Queries) GetUserByEmail(context.Context, string) (User, error)                   { return User{}, nil }
+func (*Queries) UpdateUser(context.Context, UpdateUserParams) error                     { return nil }
+func (*Queries) DeleteUser(context.Context, int64) error                                { return nil }
+func (*Queries) ListUsers(context.Context, ListUsersParams) ([]User, error)             { return nil, nil }
+func (*Queries) CountUsers(context.Context, string) (int64, error)                      { return 0, nil }
+func (*Queries) ListUsersAfter(context.Context, ListUsersAfterParams) ([]User, error)   { return nil, nil }
 
 // user_audit_log
 type UserAuditLog struct {
@@ -107,13 +113,25 @@ type ListUsersParams struct {
 	Email         string
 	Limit, Offset int32
 }
+type ListUsersAfterParams struct {
+	Cursor int64
+	Limit  int32
+}
 
-func (*Queries) CreateUser(context.Context, CreateUserParams) (int64, error)  { return 0, nil }
-func (*Queries) GetUserByID(context.Context, int64) (User, error)             { return User{}, nil }
-func (*Queries) GetUserByEmail(context.Context, string) (User, error)         { return User{}, nil }
-func (*Queries) UpdateUser(context.Context, UpdateUserParams) error           { return nil }
-func (*Queries) DeleteUser(context.Context, int64) error                      { return nil }
-func (*Queries) ListUsers(context.Context, ListUsersParams) ([]User, error)   { return nil, nil }
+// MySQL's sqlc wraps CountUsers in a Params struct (the named arg appears twice
+// in positional ? form); Postgres collapses the repeated $1 to a scalar string.
+type CountUsersParams struct {
+	Email string
+}
+
+func (*Queries) CreateUser(context.Context, CreateUserParams) (int64, error)            { return 0, nil }
+func (*Queries) GetUserByID(context.Context, int64) (User, error)                       { return User{}, nil }
+func (*Queries) GetUserByEmail(context.Context, string) (User, error)                   { return User{}, nil }
+func (*Queries) UpdateUser(context.Context, UpdateUserParams) error                     { return nil }
+func (*Queries) DeleteUser(context.Context, int64) error                                { return nil }
+func (*Queries) ListUsers(context.Context, ListUsersParams) ([]User, error)             { return nil, nil }
+func (*Queries) CountUsers(context.Context, CountUsersParams) (int64, error)            { return 0, nil }
+func (*Queries) ListUsersAfter(context.Context, ListUsersAfterParams) ([]User, error)   { return nil, nil }
 
 // user_audit_log
 type UserAuditLog struct {
@@ -735,6 +753,153 @@ func assertRequestIDContract(t *testing.T, dir string) {
 	}
 	if strings.Contains(rid, "type requestIDKey struct{}") {
 		t.Error("requestid.go still declares a local request-ID key — should use pkg/httputil")
+	}
+}
+
+// TestPaginationResponseEnvelope pins the two reusable list-pagination forms in
+// the response envelope: the user-facing cursor form (hasMore + nextCursor) and
+// the admin offset form (page + totalPage + totalRecord), plus the writer helper
+// that serializes either. The matrix's `go vet` only proves these compile (the
+// helpers are unused in the scaffold); this asserts the contract is present.
+func TestPaginationResponseEnvelope(t *testing.T) {
+	t.Parallel()
+
+	for _, fw := range []string{"fiber", "gin", "chi", "echo"} {
+		t.Run(fw, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			gen, err := New(httpMatrixConfig(fw, "postgres", "wire"))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if genErr := gen.Generate(dir); genErr != nil {
+				t.Fatalf("Generate: %v", genErr)
+			}
+
+			env := readFile(t, filepath.Join(dir, "pkg/httputil/response.go"))
+			for _, want := range []string{
+				"type CursorMeta struct",
+				"`json:\"hasMore\"`",
+				"`json:\"nextCursor,omitempty\"`",
+				"type PageMeta struct",
+				"`json:\"totalPage\"`",
+				"`json:\"totalRecord\"`",
+				"func NewPageMeta(page, perPage int, totalRecord int64) PageMeta",
+				"func SuccessListResponse(data, meta any) Response",
+			} {
+				if !strings.Contains(env, want) {
+					t.Errorf("pkg/httputil/response.go missing %q", want)
+				}
+			}
+
+			writer := readFile(t, filepath.Join(dir, "internal/transport/http/httpwriter/writer.go"))
+			if !strings.Contains(writer, "func WriteListJSON(") {
+				t.Error("writer.go missing WriteListJSON — paginated lists can't be written")
+			}
+			if !strings.Contains(writer, "httputil.SuccessListResponse(") {
+				t.Error("writer.go WriteListJSON does not call httputil.SuccessListResponse")
+			}
+		})
+	}
+}
+
+// TestUserListAdminPagination pins the reference User List endpoint to the admin
+// page form end to end: the sqlc COUNT query, the domain Count port, the
+// service returning ListOutput, the assembler projecting page meta, and the
+// handler writing data + meta via WriteListJSON. The matrix's `go vet` proves it
+// compiles; this proves the layers are actually wired (a handler that dropped
+// the meta would still vet).
+func TestUserListAdminPagination(t *testing.T) {
+	t.Parallel()
+
+	for _, fw := range []string{"fiber", "gin", "chi", "echo"} {
+		t.Run(fw, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			gen, err := New(httpMatrixConfig(fw, "postgres", "wire"))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if genErr := gen.Generate(dir); genErr != nil {
+				t.Fatalf("Generate: %v", genErr)
+			}
+
+			checks := []struct{ file, want string }{
+				{"sqlc/query/user.sql", "-- name: CountUsers :one"},
+				{"internal/domain/user.go", "Count(ctx context.Context, filter UserFilter) (int64, error)"},
+				{"internal/adapter/repository/postgres/user_repository.go", "func (r *UserRepository) Count("},
+				{"internal/usecase/user/dto.go", "type ListOutput struct"},
+				{"internal/usecase/user/service.go", ") (*ListOutput, error) {"},
+				{"internal/usecase/user/service.go", "s.userRepo.Count(ctx, filter)"},
+				{"internal/transport/http/v1/user/assembler.go", "httputil.NewPageMeta(out.Page"},
+				{"internal/transport/http/v1/user/handler.go", "WriteListJSON("},
+				{"internal/transport/http/v1/user/handler.go", "ToUserListMeta(out)"},
+			}
+			for _, c := range checks {
+				body := readFile(t, filepath.Join(dir, c.file))
+				if !strings.Contains(body, c.want) {
+					t.Errorf("%s missing %q", c.file, c.want)
+				}
+			}
+		})
+	}
+}
+
+// TestUserPublicListCursorPagination pins the public, cursor-paginated User
+// directory end to end: the keyset sqlc query, the domain ListAfter port, the
+// service producing a cursor page (encodeCursor + limit+1 probe), the email+name
+// public projection, the cursor meta, the handler, and — crucially — that the
+// route is mounted on a NO-AUTH group (the user asked for no auth). The matrix's
+// `go vet` proves it compiles; this proves it's wired and unauthenticated.
+func TestUserPublicListCursorPagination(t *testing.T) {
+	t.Parallel()
+
+	// Exact public mount per framework — proves PublicList sits on the no-auth
+	// group/route, never the Auth-gated /users subgroup.
+	publicMount := map[string]string{
+		"fiber": `pub.Get("/users", r.handler.PublicList)`,
+		"gin":   `pub.GET("/users", r.handler.PublicList)`,
+		"echo":  `pub.GET("/users", r.handler.PublicList)`,
+		"chi":   `router.Get("/public/users", r.handler.PublicList)`,
+	}
+
+	for _, fw := range []string{"fiber", "gin", "chi", "echo"} {
+		t.Run(fw, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			gen, err := New(httpMatrixConfig(fw, "postgres", "wire"))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if genErr := gen.Generate(dir); genErr != nil {
+				t.Fatalf("Generate: %v", genErr)
+			}
+
+			checks := []struct{ file, want string }{
+				{"sqlc/query/user.sql", "-- name: ListUsersAfter :many"},
+				{"internal/domain/user.go", "ListAfter(ctx context.Context, cursor int64, limit int32)"},
+				{"internal/adapter/repository/postgres/user_repository.go", ") ListAfter("},
+				{"internal/usecase/user/dto.go", "type PublicListOutput struct"},
+				{"internal/usecase/user/dto.go", "type PublicOutput struct"},
+				{"internal/usecase/user/service.go", "func (s *Service) PublicList("},
+				{"internal/usecase/user/service.go", "encodeCursor("},
+				{"internal/transport/http/v1/user/dto.go", "type PublicUserResponse struct"},
+				{"internal/transport/http/v1/user/assembler.go", "httputil.CursorMeta{"},
+				{"internal/transport/http/v1/user/handler.go", "func (h *Handler) PublicList("},
+				{"internal/transport/http/v1/user/handler.go", "ToPublicUserListMeta(out)"},
+			}
+			for _, c := range checks {
+				body := readFile(t, filepath.Join(dir, c.file))
+				if !strings.Contains(body, c.want) {
+					t.Errorf("%s missing %q", c.file, c.want)
+				}
+			}
+
+			reg := readFile(t, filepath.Join(dir, "internal/transport/http/v1/user/registrar.go"))
+			if !strings.Contains(reg, publicMount[fw]) {
+				t.Errorf("registrar.go missing public (no-auth) mount %q", publicMount[fw])
+			}
+		})
 	}
 }
 

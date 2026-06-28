@@ -111,14 +111,31 @@ func (h *Handler) List(c *gin.Context) {
 		httpwriter.WriteError(c, appErr)
 		return
 	}
-	users, err := h.userService.List(c.Request.Context(), usersvc.ListInput{
-		Email:  q.Email,
-		Limit:  q.Limit,
-		Offset: q.Offset,
+	out, err := h.userService.List(c.Request.Context(), usersvc.ListInput{
+		Email:   q.Email,
+		Page:    q.Page,
+		PerPage: q.PerPage,
 	})
 	if err != nil {
 		httpwriter.WriteError(c, errors.ToAppError(err))
 		return
 	}
-	httpwriter.WriteJSON(c, http.StatusOK, ToUserListResponse(users))
+	httpwriter.WriteListJSON(c, http.StatusOK, ToUserListResponse(out), ToUserListMeta(out))
+}
+
+func (h *Handler) PublicList(c *gin.Context) {
+	q, appErr := httpwriter.BindQuery[PublicListQuery](c, h.validate)
+	if appErr != nil {
+		httpwriter.WriteError(c, appErr)
+		return
+	}
+	out, err := h.userService.PublicList(c.Request.Context(), usersvc.PublicListInput{
+		Cursor: q.Cursor,
+		Limit:  q.Limit,
+	})
+	if err != nil {
+		httpwriter.WriteError(c, errors.ToAppError(err))
+		return
+	}
+	httpwriter.WriteListJSON(c, http.StatusOK, ToPublicUserListResponse(out), ToPublicUserListMeta(out))
 }

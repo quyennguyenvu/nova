@@ -2,6 +2,7 @@ package user
 
 import (
 	usersvc "{{.ModuleName}}/internal/usecase/user"
+	"{{.ModuleName}}/pkg/httputil"
 )
 
 // ToUserResponse projects a use-case Output into the HTTP response shape.
@@ -15,13 +16,37 @@ func ToUserResponse(out *usersvc.Output) *UserResponse {
 	}
 }
 
-// ToUserListResponse projects a list of use-case Outputs into HTTP response shapes.
-func ToUserListResponse(outs []*usersvc.Output) []*UserResponse {
-	responses := make([]*UserResponse, len(outs))
-	for i, out := range outs {
-		responses[i] = ToUserResponse(out)
+// ToUserListResponse projects the items of a use-case ListOutput into HTTP
+// response shapes — the envelope's `data` payload.
+func ToUserListResponse(out *usersvc.ListOutput) []*UserResponse {
+	responses := make([]*UserResponse, len(out.Items))
+	for i, item := range out.Items {
+		responses[i] = ToUserResponse(item)
 	}
 	return responses
+}
+
+// ToUserListMeta projects a use-case ListOutput's pagination into the admin
+// page meta (page + perPage + totalPage + totalRecord) — the envelope's `meta`.
+// NewPageMeta derives totalPage from totalRecord/perPage.
+func ToUserListMeta(out *usersvc.ListOutput) httputil.PageMeta {
+	return httputil.NewPageMeta(out.Page, out.PerPage, out.TotalRecord)
+}
+
+// ToPublicUserListResponse projects the items of a public list into the
+// email+name wire shape — the envelope's `data` payload.
+func ToPublicUserListResponse(out *usersvc.PublicListOutput) []*PublicUserResponse {
+	responses := make([]*PublicUserResponse, len(out.Items))
+	for i, item := range out.Items {
+		responses[i] = &PublicUserResponse{Email: item.Email, Name: item.Name}
+	}
+	return responses
+}
+
+// ToPublicUserListMeta projects a public list's cursor seam into the user-facing
+// cursor meta (hasMore + nextCursor) — the envelope's `meta`.
+func ToPublicUserListMeta(out *usersvc.PublicListOutput) httputil.CursorMeta {
+	return httputil.CursorMeta{HasMore: out.HasMore, NextCursor: out.NextCursor}
 }
 
 // ToLoginResponse projects a use-case LoginOutput into the wire response.

@@ -140,18 +140,61 @@ End-to-end demo:
 
 ### API Endpoints
 
-| Method | Endpoint          | Auth   | Description                                |
-| ------ | ----------------- | ------ | ------------------------------------------ |
-| POST   | /api/v1/login     | public | Exchange email/password for a bearer token |
-| POST   | /api/v1/users     | public | Register a new user                        |
-| GET    | /api/v1/users     | bearer | List users (paginated)                     |
-| GET    | /api/v1/users/:id | bearer | Get user by ID                             |
-| PUT    | /api/v1/users/:id | bearer | Update a user                              |
-| DELETE | /api/v1/users/:id | bearer | Delete a user                              |
-| GET    | /healthz          | public | Liveness check (always 200)                |
-| GET    | /readyz           | public | Readiness check (200 / 503)                |
+| Method | Endpoint             | Auth   | Description                                |
+| ------ | -------------------- | ------ | ------------------------------------------ |
+| POST   | /api/v1/login        | public | Exchange email/password for a bearer token |
+| POST   | /api/v1/users        | public | Register a new user                        |
+| GET    | /api/v1/public/users | public | Public user directory (email+name, cursor) |
+| GET    | /api/v1/users        | bearer | List users (admin, page-paginated)         |
+| GET    | /api/v1/users/:id    | bearer | Get user by ID                             |
+| PUT    | /api/v1/users/:id    | bearer | Update a user                              |
+| DELETE | /api/v1/users/:id    | bearer | Delete a user                              |
+| GET    | /healthz             | public | Liveness check (always 200)                |
+| GET    | /readyz              | public | Readiness check (200 / 503)                |
 
 **Authenticated requests** carry `Authorization: Bearer <accessToken>` where the token comes from `POST /api/v1/login`.
+
+#### Pagination
+
+List endpoints return the standard envelope with a `meta` block. Two reusable forms ship in
+`pkg/httputil` — pick one per audience.
+
+**Admin (page-based)** — what `GET /api/v1/users` uses. Query `?page=1&perPage=20` (1-based;
+bounds are clamped in the usecase). The response exposes absolute position and totals:
+
+```json
+{
+  "success": true,
+  "data": [{ "id": 1, "email": "a@b.co", "name": "A", "createdAt": "...", "updatedAt": "..." }],
+  "meta": { "page": 1, "perPage": 20, "totalPage": 5, "totalRecord": 92 },
+  "requestId": "..."
+}
+```
+
+The User feature is the worked reference end to end: a `CountUsers` sqlc query + `Count` on the
+domain repo, `Service.List` returning `ListOutput` (items + `page/perPage/totalRecord`), the
+assembler mapping totals via `httputil.NewPageMeta`, and the handler writing both halves with
+`httpwriter.WriteListJSON(c, status, data, meta)`. Copy that shape for new admin lists.
+
+**User-facing (cursor-based)** — what `GET /api/v1/public/users` uses (public, no auth; email +
+name only). For feeds where absolute page/total don't matter but stability under concurrent
+inserts and cheap deep paging do. Query `?limit=20&cursor=<opaque>` — omit `cursor` for the first
+page. The response:
+
+```json
+{
+  "success": true,
+  "data": [{ "email": "a@b.co", "name": "A" }],
+  "meta": { "hasMore": true, "nextCursor": "NDI" },
+  "requestId": "..."
+}
+```
+
+The client echoes `nextCursor` back as `?cursor=...` and stops when `hasMore` is false. The User
+feature is the worked reference: a keyset `ListUsersAfter` query (`id > cursor`) + a `ListAfter`
+repo port, `Service.PublicList` reading `limit+1` rows to detect `hasMore` and encoding the last
+id as the opaque `nextCursor`, the assembler building `httputil.CursorMeta`, and the handler
+writing both halves via `httpwriter.WriteListJSON`. Copy that shape for new public feeds.
 
 #### Adding routes, sections, and versions
 

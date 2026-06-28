@@ -20,4 +20,11 @@ type UserRepository interface {
 	Update(ctx context.Context, user *entity.User) error
 	Delete(ctx context.Context, id int64) error
 	List(ctx context.Context, filter UserFilter) ([]*entity.User, error)
+	// Count returns the total rows matching filter, ignoring its Limit/Offset.
+	// The admin (page-based) List needs it to compute total pages/records.
+	Count(ctx context.Context, filter UserFilter) (int64, error)
+	// ListAfter returns up to limit users with id greater than cursor, ordered
+	// by id — the keyset read behind the public (cursor-based) list. cursor 0
+	// starts from the beginning. Pass limit+1 to detect whether more remain.
+	ListAfter(ctx context.Context, cursor int64, limit int32) ([]*entity.User, error)
 }

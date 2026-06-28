@@ -22,6 +22,15 @@ func WriteJSON(c *gin.Context, status int, data any) {
 	c.JSON(status, resp)
 }
 
+// WriteListJSON writes a paginated list response: the standard success envelope
+// with data plus pagination meta (a httputil.CursorMeta for the user-facing
+// cursor form, or a httputil.PageMeta for the admin offset form).
+func WriteListJSON(c *gin.Context, status int, data, meta any) {
+	resp := httputil.SuccessListResponse(data, meta)
+	resp.RequestID = httputil.RequestIDFrom(c.Request.Context())
+	c.JSON(status, resp)
+}
+
 // WriteError writes an error JSON response wrapped in the standard envelope.
 // The HTTP status is taken from app.Code. The message is translated using the
 // language carried in the request context (set by the Locale middleware) when

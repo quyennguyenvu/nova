@@ -80,3 +80,22 @@ func (r *UserRepository) List(ctx context.Context, filter domain.UserFilter) ([]
 	}
 	return mapper.UsersToEntities(rows), nil
 }
+
+func (r *UserRepository) Count(ctx context.Context, filter domain.UserFilter) (int64, error) {
+	total, err := r.qx.Q(ctx).CountUsers(ctx, dbgen.CountUsersParams{Email: filter.Email})
+	if err != nil {
+		return 0, errors.Wrapf(err, "user repo: count")
+	}
+	return total, nil
+}
+
+func (r *UserRepository) ListAfter(ctx context.Context, cursor int64, limit int32) ([]*entity.User, error) {
+	rows, err := r.qx.Q(ctx).ListUsersAfter(ctx, dbgen.ListUsersAfterParams{
+		Cursor: cursor,
+		Limit:  limit,
+	})
+	if err != nil {
+		return nil, errors.Wrapf(err, "user repo: list after cursor=%d", cursor)
+	}
+	return mapper.UsersToEntities(rows), nil
+}

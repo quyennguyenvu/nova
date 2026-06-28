@@ -12,15 +12,32 @@ type UpdateUserRequest struct {
 	Name string `json:"name" validate:"omitempty,min=2,max=100"`
 }
 
-// ListQuery is the pagination input for GET /api/v1/users, bound from the query
-// string. It carries both `query:` (fiber, echo) and `form:` (gin) tags so this
-// one shared DTO works with every framework's native query binder. There is no
-// min/max here on purpose — limit/offset bounds are the usecase's policy (so
-// gRPC/CLI inherit the same caps); this layer only parses.
+// ListQuery is the pagination input for GET /api/v1/users (admin/page-based
+// form), bound from the query string. Page is 1-based. It carries both `query:`
+// (fiber, echo) and `form:` (gin) tags so this one shared DTO works with every
+// framework's native query binder. There is no min/max here on purpose —
+// page/perPage bounds are the usecase's policy (so gRPC/CLI inherit the same
+// caps); this layer only parses.
 type ListQuery struct {
-	Email  string `query:"email"  form:"email"  validate:"omitempty,email"`
+	Email   string `query:"email"   form:"email"   validate:"omitempty,email"`
+	Page    int    `query:"page"    form:"page"`
+	PerPage int    `query:"perPage" form:"perPage"`
+}
+
+// PublicListQuery is the input for GET /api/v1/public/users (public, cursor
+// form). Cursor is the opaque token from the previous page (empty for the first
+// page); Limit is clamped by the usecase. Carries both `query:` (fiber, echo)
+// and `form:` (gin) tags so one DTO works with every framework's query binder.
+type PublicListQuery struct {
+	Cursor string `query:"cursor" form:"cursor"`
 	Limit  int    `query:"limit"  form:"limit"`
-	Offset int    `query:"offset" form:"offset"`
+}
+
+// PublicUserResponse is the public projection of a user — email + name only.
+// The public list is unauthenticated, so it exposes nothing else.
+type PublicUserResponse struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
 }
 
 // LoginRequest is the credential payload for POST /api/v1/login.

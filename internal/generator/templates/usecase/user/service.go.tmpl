@@ -2,6 +2,8 @@ package user
 
 import (
 	"context"
+	"encoding/base64"
+	"strconv"
 	"sync"
 	"time"
 
@@ -137,33 +139,100 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 // CLI) inherits the same policy. Transport hands raw ints in; we clamp before
 // they ever reach the repo.
 const (
-	listDefaultLimit = 10
-	listMaxLimit     = 500
+	listDefaultPerPage = 10
+	listMaxPerPage     = 500
 )
 
-func (s *Service) List(ctx context.Context, input ListInput) ([]*Output, error) {
-	limit := input.Limit
-	if limit <= 0 || limit > listMaxLimit {
-		limit = listDefaultLimit
+// List returns one admin (page-based) page of users plus the totals needed to
+// render "page N of M". It runs the page query and a COUNT against the same
+// filter; the COUNT ignores Limit/Offset. Page/PerPage in the result are the
+// clamped values, so the caller's page meta matches what was actually queried.
+func (s *Service) List(ctx context.Context, input ListInput) (*ListOutput, error) {
+	perPage := input.PerPage
+	if perPage <= 0 || perPage > listMaxPerPage {
+		perPage = listDefaultPerPage
 	}
-	offset := input.Offset
-	if offset < 0 {
-		offset = 0
+	page := input.Page
+	if page <= 0 {
+		page = 1
 	}
 	filter := domain.UserFilter{
 		Email:  input.Email,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(perPage),
+		Offset: int32((page - 1) * perPage),
 	}
 	users, err := s.userRepo.List(ctx, filter)
 	if err != nil {
-		return nil, errors.Wrapf(err, "list users limit=%d offset=%d", filter.Limit, filter.Offset)
+		return nil, errors.Wrapf(err, "list users page=%d perPage=%d", page, perPage)
 	}
-	outs := make([]*Output, len(users))
+	total, err := s.userRepo.Count(ctx, filter)
+	if err != nil {
+		return nil, errors.Wrapf(err, "count users email=%s", input.Email)
+	}
+	items := make([]*Output, len(users))
 	for i, u := range users {
-		outs[i] = toOutput(u)
+		items[i] = toOutput(u)
 	}
-	return outs, nil
+	return &ListOutput{
+		Items:       items,
+		Page:        page,
+		PerPage:     perPage,
+		TotalRecord: total,
+	}, nil
+}
+
+// PublicList returns one cursor-paginated page of the public user directory
+// (email + name), for unauthenticated callers. It reads limit+1 rows so it can
+// report HasMore without a second query, trims the extra, and encodes the last
+// kept id as the next opaque cursor. Keyset paging (id > cursor) stays stable
+// under concurrent inserts and avoids deep-OFFSET scans.
+func (s *Service) PublicList(ctx context.Context, input PublicListInput) (*PublicListOutput, error) {
+	limit := input.Limit
+	if limit <= 0 || limit > listMaxPerPage {
+		limit = listDefaultPerPage
+	}
+	cursor, err := decodeCursor(input.Cursor)
+	if err != nil {
+		// Opaque token the client got from us; a malformed one is a bad request.
+		return nil, errors.L(locale.InvalidRequest).WithCause(err)
+	}
+
+	users, err := s.userRepo.ListAfter(ctx, cursor, int32(limit+1))
+	if err != nil {
+		return nil, errors.Wrapf(err, "public list users cursor=%d limit=%d", cursor, limit)
+	}
+
+	hasMore := len(users) > limit
+	if hasMore {
+		users = users[:limit]
+	}
+	items := make([]*PublicOutput, len(users))
+	for i, u := range users {
+		items[i] = &PublicOutput{Email: u.Email, Name: u.Name}
+	}
+	var next string
+	if hasMore && len(users) > 0 {
+		next = encodeCursor(users[len(users)-1].ID)
+	}
+	return &PublicListOutput{Items: items, NextCursor: next, HasMore: hasMore}, nil
+}
+
+// encodeCursor turns a row id into the opaque token clients echo back as the
+// next cursor. It is base64(id) — not encryption, just an opaque handle so
+// clients can't forge offsets. decodeCursor reverses it; "" means start.
+func encodeCursor(id int64) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(id, 10)))
+}
+
+func decodeCursor(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(string(raw), 10, 64)
 }
 
 // dummyHash + dummyHashOnce — used to blunt the timing oracle that would

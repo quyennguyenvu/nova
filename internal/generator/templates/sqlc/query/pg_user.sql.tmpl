@@ -25,3 +25,15 @@ FROM users
 WHERE (sqlc.arg('email')::text = '' OR email = sqlc.arg('email')::text)
 ORDER BY id
 LIMIT sqlc.arg('limit')::int OFFSET sqlc.arg('offset')::int;
+
+-- name: CountUsers :one
+SELECT COUNT(*)
+FROM users
+WHERE (sqlc.arg('email')::text = '' OR email = sqlc.arg('email')::text);
+
+-- name: ListUsersAfter :many
+SELECT *
+FROM users
+WHERE id > sqlc.arg('cursor')
+ORDER BY id
+LIMIT sqlc.arg('limit')::int;

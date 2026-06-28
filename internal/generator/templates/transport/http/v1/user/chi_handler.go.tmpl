@@ -108,11 +108,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	// chi has no struct query binder, so assemble + validate ListQuery here.
 	q := ListQuery{Email: r.URL.Query().Get("email")}
 	var appErr *errors.AppError
-	if q.Limit, appErr = httpwriter.QueryInt(r, "limit"); appErr != nil {
+	if q.Page, appErr = httpwriter.QueryInt(r, "page"); appErr != nil {
 		httpwriter.WriteError(w, r, appErr)
 		return
 	}
-	if q.Offset, appErr = httpwriter.QueryInt(r, "offset"); appErr != nil {
+	if q.PerPage, appErr = httpwriter.QueryInt(r, "perPage"); appErr != nil {
 		httpwriter.WriteError(w, r, appErr)
 		return
 	}
@@ -120,14 +120,34 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		httpwriter.WriteError(w, r, appErr)
 		return
 	}
-	users, err := h.userService.List(r.Context(), usersvc.ListInput{
-		Email:  q.Email,
-		Limit:  q.Limit,
-		Offset: q.Offset,
+	out, err := h.userService.List(r.Context(), usersvc.ListInput{
+		Email:   q.Email,
+		Page:    q.Page,
+		PerPage: q.PerPage,
 	})
 	if err != nil {
 		httpwriter.WriteError(w, r, errors.ToAppError(err))
 		return
 	}
-	httpwriter.WriteJSON(w, http.StatusOK, ToUserListResponse(users))
+	httpwriter.WriteListJSON(w, http.StatusOK, ToUserListResponse(out), ToUserListMeta(out))
+}
+
+func (h *Handler) PublicList(w http.ResponseWriter, r *http.Request) {
+	// chi has no struct query binder, so assemble PublicListQuery here. It has
+	// no validation tags (cursor is opaque), so there's nothing to validate.
+	q := PublicListQuery{Cursor: r.URL.Query().Get("cursor")}
+	var appErr *errors.AppError
+	if q.Limit, appErr = httpwriter.QueryInt(r, "limit"); appErr != nil {
+		httpwriter.WriteError(w, r, appErr)
+		return
+	}
+	out, err := h.userService.PublicList(r.Context(), usersvc.PublicListInput{
+		Cursor: q.Cursor,
+		Limit:  q.Limit,
+	})
+	if err != nil {
+		httpwriter.WriteError(w, r, errors.ToAppError(err))
+		return
+	}
+	httpwriter.WriteListJSON(w, http.StatusOK, ToPublicUserListResponse(out), ToPublicUserListMeta(out))
 }

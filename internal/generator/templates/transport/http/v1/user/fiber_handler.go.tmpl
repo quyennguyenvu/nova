@@ -97,13 +97,28 @@ func (h *Handler) List(c *fiber.Ctx) error {
 	if appErr != nil {
 		return httpwriter.WriteError(c, appErr)
 	}
-	users, err := h.userService.List(c.UserContext(), usersvc.ListInput{
-		Email:  q.Email,
-		Limit:  q.Limit,
-		Offset: q.Offset,
+	out, err := h.userService.List(c.UserContext(), usersvc.ListInput{
+		Email:   q.Email,
+		Page:    q.Page,
+		PerPage: q.PerPage,
 	})
 	if err != nil {
 		return httpwriter.WriteError(c, errors.ToAppError(err))
 	}
-	return httpwriter.WriteJSON(c, fiber.StatusOK, ToUserListResponse(users))
+	return httpwriter.WriteListJSON(c, fiber.StatusOK, ToUserListResponse(out), ToUserListMeta(out))
+}
+
+func (h *Handler) PublicList(c *fiber.Ctx) error {
+	q, appErr := httpwriter.BindQuery[PublicListQuery](c, h.validate)
+	if appErr != nil {
+		return httpwriter.WriteError(c, appErr)
+	}
+	out, err := h.userService.PublicList(c.UserContext(), usersvc.PublicListInput{
+		Cursor: q.Cursor,
+		Limit:  q.Limit,
+	})
+	if err != nil {
+		return httpwriter.WriteError(c, errors.ToAppError(err))
+	}
+	return httpwriter.WriteListJSON(c, fiber.StatusOK, ToPublicUserListResponse(out), ToPublicUserListMeta(out))
 }

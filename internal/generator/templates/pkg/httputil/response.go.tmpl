@@ -6,7 +6,7 @@
 //	  "success":   true|false,
 //	  "data":      <payload>,           // present on success
 //	  "error":     { "code": int, "message": string }, // present on error
-//	  "meta":      { "page": int, "per_page": int, "total": int }, // optional pagination
+//	  "meta":      <CursorMeta|PageMeta>, // optional pagination (see below)
 //	  "requestId": string               // correlation ID, mirrors the X-Request-ID header
 //	}
 //
@@ -53,7 +53,7 @@ type Response struct {
 	Success   bool       `json:"success"`
 	Data      any        `json:"data,omitempty"`
 	Error     *ErrorBody `json:"error,omitempty"`
-	Meta      *Meta      `json:"meta,omitempty"`
+	Meta      any        `json:"meta,omitempty"`
 	RequestID string     `json:"requestId,omitempty"`
 }
 
@@ -66,16 +66,53 @@ type ErrorBody struct {
 	Message string `json:"message"`
 }
 
-// Meta holds pagination metadata.
-type Meta struct {
-	Page    int `json:"page,omitempty"`
-	PerPage int `json:"perPage,omitempty"`
-	Total   int `json:"total,omitempty"`
+// CursorMeta is the pagination metadata for the user-facing, cursor (keyset)
+// form. The client passes NextCursor back on the next request and stops once
+// HasMore is false. Cursor paging is stable under concurrent inserts and stays
+// cheap at depth (no OFFSET scan), so it's the default for end-user feeds. It
+// deliberately exposes no totals — counting every match defeats the point.
+type CursorMeta struct {
+	HasMore    bool   `json:"hasMore"`
+	NextCursor string `json:"nextCursor,omitempty"`
+}
+
+// PageMeta is the pagination metadata for the admin-facing, offset/page form.
+// It exposes the absolute position and totals an admin table needs to render
+// "page 3 of 42" and a record count. TotalPage/TotalRecord require a COUNT
+// query, so reserve this for back-office lists rather than hot user paths.
+type PageMeta struct {
+	Page        int   `json:"page"`
+	PerPage     int   `json:"perPage"`
+	TotalPage   int   `json:"totalPage"`
+	TotalRecord int64 `json:"totalRecord"`
+}
+
+// NewPageMeta builds a PageMeta, deriving TotalPage from totalRecord and perPage
+// (ceil division). A non-positive perPage yields TotalPage 0 instead of
+// dividing by zero.
+func NewPageMeta(page, perPage int, totalRecord int64) PageMeta {
+	totalPage := 0
+	if perPage > 0 {
+		totalPage = int((totalRecord + int64(perPage) - 1) / int64(perPage))
+	}
+	return PageMeta{
+		Page:        page,
+		PerPage:     perPage,
+		TotalPage:   totalPage,
+		TotalRecord: totalRecord,
+	}
 }
 
 // SuccessResponse builds a success envelope around data.
 func SuccessResponse(data any) Response {
 	return Response{Success: true, Data: data}
+}
+
+// SuccessListResponse builds a success envelope around a list payload plus its
+// pagination metadata. Pass a CursorMeta (user-facing) or a PageMeta (admin) as
+// meta; both serialize under the envelope's "meta" key.
+func SuccessListResponse(data, meta any) Response {
+	return Response{Success: true, Data: data, Meta: meta}
 }
 
 // ErrorResponseFromApp builds an error envelope from an *errors.AppError,
