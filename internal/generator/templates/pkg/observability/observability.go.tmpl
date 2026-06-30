@@ -13,6 +13,11 @@ package observability
 // kv arguments are alternating string keys and any values; odd-length input is
 // dropped by the implementation. With returns a child logger so inner layers
 // can attach extra structured fields without touching the concrete impl.
+//
+// The human-readable text is the msg argument — never also pass it as a
+// "message" kv key, and avoid the reserved field names the implementation adds
+// automatically ("time", "level", "caller"); reusing any of them emits a
+// duplicate field in the output.
 type Logger interface {
 	Debug(msg string, kv ...any)
 	Info(msg string, kv ...any)

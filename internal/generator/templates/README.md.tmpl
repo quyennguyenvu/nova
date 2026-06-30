@@ -242,6 +242,16 @@ The project follows Clean Architecture principles:
 2. **Dependency Inversion**: Domain defines repository/security ports; adapters and infrastructure implement them
 3. **Separation of Concerns**: Each layer has a single, well-defined responsibility
 
+## Logging
+
+Structured logging goes through `observability.Logger` (zerolog-backed). The transport boundary forks the base logger with the request's correlation fields and stashes it in the context; inner layers retrieve it with `logctx.From(ctx)` and never take a logger as a constructor dependency:
+
+```go
+logctx.From(ctx).Error("publish user.created failed", "user_id", id, "err", err.Error())
+```
+
+The first argument is the message; everything after is `key, value` pairs. **Never pass `message`, `time`, `level`, or `caller` as a field key** — zerolog populates those itself, so reusing one emits a duplicate key in the JSON line. Put your text in the message argument and name extra fields distinctly (`detail`, `reason`, `err`, …).
+
 ## License
 
 MIT

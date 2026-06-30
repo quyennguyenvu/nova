@@ -76,7 +76,10 @@ func (l *Logger) Info(msg string, kv ...any)  { emit(l.zl.Info(), msg, kv) }
 func (l *Logger) Warn(msg string, kv ...any)  { emit(l.zl.Warn(), msg, kv) }
 func (l *Logger) Error(msg string, kv ...any) { emit(l.zl.Error(), msg, kv) }
 
-// emit writes (key, value) pairs as structured fields. Odd-length input is ignored silently.
+// emit writes (key, value) pairs as structured fields. Odd-length input is
+// ignored silently. Callers must not pass a key zerolog populates itself —
+// "message" (the msg arg), "time", "level", or "caller" — doing so emits a
+// duplicate field in the JSON line.
 func emit(ev *zerolog.Event, msg string, kv []any) {
 	ev = ev.Caller(callerSkip)
 	if len(kv)%2 != 0 {
