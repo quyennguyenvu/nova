@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -36,7 +37,9 @@ func Logging(base observability.Logger) echo.MiddlewareFunc {
 	}
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if _, ok := skipPaths[c.Path()]; ok {
+			// Skip health probes and CORS preflight (OPTIONS) — neither carries
+			// app signal and both would drown out real traffic in the logs.
+			if _, ok := skipPaths[c.Path()]; ok || c.Request().Method == http.MethodOptions {
 				return next(c)
 			}
 

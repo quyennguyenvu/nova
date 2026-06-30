@@ -42,7 +42,9 @@ func Logging(base observability.Logger) fiber.Handler {
 		"/readyz":  {},
 	}
 	return func(c *fiber.Ctx) error {
-		if _, ok := skipPaths[c.Path()]; ok {
+		// Skip health probes and CORS preflight (OPTIONS) — neither carries
+		// app signal and both would drown out real traffic in the logs.
+		if _, ok := skipPaths[c.Path()]; ok || c.Method() == http.MethodOptions {
 			return c.Next()
 		}
 

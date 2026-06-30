@@ -39,7 +39,9 @@ func Logging(base observability.Logger) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := skipPaths[r.URL.Path]; ok {
+			// Skip health probes and CORS preflight (OPTIONS) — neither carries
+			// app signal and both would drown out real traffic in the logs.
+			if _, ok := skipPaths[r.URL.Path]; ok || r.Method == http.MethodOptions {
 				next.ServeHTTP(w, r)
 				return
 			}
