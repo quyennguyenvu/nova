@@ -25,7 +25,10 @@ internal/
 │       ├── mysql/          # sqlc-backed UserRepository + TxManager + mapper
 {{- end}}
 {{- if .HasRedis}}
-│       └── redis/          # Cache-aside decorator over UserRepository
+│       {{if .HasElasticsearch}}├──{{else}}└──{{end}} redis/          # Cache-aside decorator over UserRepository (standalone)
+{{- end}}
+{{- if .HasElasticsearch}}
+│       └── elasticsearch/  # User search index — Index/Delete/Search (standalone)
 {{- end}}
 │
 ├── transport/              # Inbound transport (HTTP/gRPC)
@@ -45,6 +48,9 @@ internal/
     ├── database/           # {{.Database}} connection pool
     {{- if .HasRedis}}
     ├── cache/              # Redis client factory (single/sentinel/cluster)
+    {{- end}}
+    {{- if .HasElasticsearch}}
+    ├── search/             # Elasticsearch client factory (ping on construct)
     {{- end}}
     ├── jwt/                # TokenService (RS256 sign + verify)
     ├── logger/             # zerolog implementation of observability.Logger
@@ -67,6 +73,9 @@ internal/
   {{- end}}
   {{- if .HasRedis}}
 - Redis 7+
+  {{- end}}
+  {{- if .HasElasticsearch}}
+- Elasticsearch 8+
   {{- end}}
   {{- if .IncludeDocker}}
 - Docker & Docker Compose
@@ -241,6 +250,33 @@ The project follows Clean Architecture principles:
 1. **Dependency Rule**: Source code dependencies point inward only (`transport → usecase → domain`)
 2. **Dependency Inversion**: Domain defines repository/security ports; adapters and infrastructure implement them
 3. **Separation of Concerns**: Each layer has a single, well-defined responsibility
+{{- if or .HasRedis .HasElasticsearch}}
+
+## Cache & search adapters
+
+{{if and .HasRedis .HasElasticsearch}}The cache and search integrations follow{{else if .HasRedis}}The cache integration follows{{else}}The search integration follows{{end}} the same convention on purpose:
+
+- The **infrastructure client** is constructed and provided by the DI container ({{if .UseWire}}`infraSet` in `wire.go`{{else}}`infraModule` in `fx.go`{{end}}), so it is ready to inject.
+- The **adapter** built on that client is a **standalone reference implementation** — it is deliberately **not** wired into the graph by default.
+
+This is intentional: the scaffold ships a correct, compiling adapter but leaves the decision of *where* to apply it to you, since that is a domain choice the generator cannot make. Plug each adapter into the usecase where you actually need it.
+{{- if .HasRedis}}
+
+### Redis (cache-aside)
+
+- Client: `infrastructure/cache` — `New` returns a `*Client` (single/sentinel/cluster).
+- Adapter: `adapter/repository/redis.UserCacheRepository` — a cache-aside **decorator** that satisfies `domain.UserRepository`.
+- To enable it, bind `domain.UserRepository` to `NewUserCacheRepository(<concrete {{.Database}} repo>, cache)` in `infrastructure/di` so the usecase transparently reads through the cache. Credentials are never cached; `GetByEmail` bypasses it.
+{{- end}}
+{{- if .HasElasticsearch}}
+
+### Elasticsearch (search index)
+
+- Client: `infrastructure/search` — `New` pings on construct and returns a `*Client`.
+- Adapter: `adapter/repository/elasticsearch.UserSearchRepository` — `Index`, `Delete`, and `Search` over a derived read model; the SQL repository stays the system of record.
+- To enable it, provide `NewUserSearchRepository` in `infrastructure/di`, inject it into the usecase, and call `Index`/`Delete` on every user write so the index stays in sync. `Search` returns matching IDs — hydrate them through the SQL repository.
+{{- end}}
+{{- end}}
 
 ## Logging
 
