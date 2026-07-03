@@ -1,0 +1,67 @@
+// Package search wraps the Elasticsearch client so callers depend on this
+// package's type rather than the vendored client directly. It is the search
+// counterpart to infrastructure/cache (Redis): a thin, DI-provided handle
+// whose connectivity is verified with a ping at construction.
+package search
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+
+	"github.com/elastic/go-elasticsearch/v8"
+)
+
+// Client is a thin wrapper around the Elasticsearch client so callers depend on
+// this package, not go-elasticsearch directly.
+type Client struct {
+	*elasticsearch.Client
+}
+
+// New constructs the Elasticsearch client, verifies connectivity with a ping,
+// and returns a cleanup hook for the DI container to run on shutdown.
+func New(cfg config.ElasticsearchConfig, log *logger.Logger) (*Client, func(), error) {
+	es, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses:  cfg.Addresses,
+		Username:   cfg.Username,
+		Password:   cfg.Password,
+		APIKey:     cfg.APIKey,
+		MaxRetries: cfg.MaxRetries,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("elasticsearch: new client: %w", err)
+	}
+
+	if pingErr := ping(es, cfg.PingTimeout); pingErr != nil {
+		return nil, nil, fmt.Errorf("elasticsearch: ping failed: %w", pingErr)
+	}
+	log.Info("elasticsearch: connected", "addresses", cfg.Addresses)
+
+	// The client is HTTP-based with a pooled transport; there is no connection
+	// to close. The hook exists so the provider keeps the (T, func(), error)
+	// shape every other infra factory uses.
+	cleanup := func() {
+		log.Debug("elasticsearch: client shutdown")
+	}
+
+	return &Client{es}, cleanup, nil
+}
+
+func ping(es *elasticsearch.Client, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	res, err := es.Ping(es.Ping.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.IsError() {
+		return fmt.Errorf("ping status: %s", res.Status())
+	}
+	return nil
+}

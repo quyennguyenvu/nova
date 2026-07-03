@@ -5,7 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
-{{- if or .HasHTTP .HasGRPC .HasDatabase .HasRedis .HasMessageQueue}}
+{{- if or .HasHTTP .HasGRPC .HasDatabase .HasRedis .HasElasticsearch .HasMessageQueue}}
 	"time"
 {{- end}}
 
@@ -47,6 +47,9 @@ type Config struct {
 {{- end}}
 {{- if .HasRedis}}
 	Redis      RedisConfig    `{{.ConfigFormat}}:"redis"`
+{{- end}}
+{{- if .HasElasticsearch}}
+	Elasticsearch ElasticsearchConfig `{{.ConfigFormat}}:"elasticsearch"`
 {{- end}}
 {{- if eq .MessageQueue "kafka"}}
 	Kafka      KafkaConfig    `{{.ConfigFormat}}:"kafka"`
@@ -192,6 +195,23 @@ type RedisConfig struct {
 	ReadTimeout  time.Duration `{{.ConfigFormat}}:"read_timeout"  env:"REDIS_READ_TIMEOUT"`
 	WriteTimeout time.Duration `{{.ConfigFormat}}:"write_timeout" env:"REDIS_WRITE_TIMEOUT"`
 	PingTimeout  time.Duration `{{.ConfigFormat}}:"ping_timeout"  env:"REDIS_PING_TIMEOUT"`
+}
+{{- end}}
+{{- if .HasElasticsearch}}
+
+// ElasticsearchConfig holds Elasticsearch connection configuration.
+//
+// Username/Password (basic auth) and APIKey are alternatives — set whichever
+// your cluster uses; both empty targets an unsecured local node.
+type ElasticsearchConfig struct {
+	Addresses []string `{{.ConfigFormat}}:"addresses" env:"ELASTICSEARCH_ADDRESSES" env-separator:","`
+	Username  string   `env:"ELASTICSEARCH_USERNAME"`
+	Password  string   `env:"ELASTICSEARCH_PASSWORD"`
+	APIKey    string   `env:"ELASTICSEARCH_API_KEY"`
+
+	// Connection tuning.
+	MaxRetries  int           `{{.ConfigFormat}}:"max_retries"  env:"ELASTICSEARCH_MAX_RETRIES"`
+	PingTimeout time.Duration `{{.ConfigFormat}}:"ping_timeout" env:"ELASTICSEARCH_PING_TIMEOUT"`
 }
 {{- end}}
 {{- if eq .MessageQueue "kafka"}}

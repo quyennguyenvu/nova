@@ -1,0 +1,148 @@
+// Package elasticsearch is the full-text search index over users, backed by
+// Elasticsearch. It is a standalone read/write adapter: the SQL UserRepository
+// stays the system of record while this index is derived state you keep in sync
+// on writes. Wire it into the usecase where search is needed (provide
+// NewUserSearchRepository in the DI container).
+//
+// Credentials are never indexed — only the fields a query matches on are
+// projected into the document.
+package elasticsearch
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"strconv"
+
+	"github.com/elastic/go-elasticsearch/v8/esapi"
+
+	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/internal/infrastructure/search"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+// userIndex is the Elasticsearch index users are stored under.
+const userIndex = "users"
+
+// defaultSearchSize caps how many hits a query returns when the caller passes a
+// non-positive limit.
+const defaultSearchSize = 20
+
+// userDoc is the indexed projection of entity.User — only the fields a search
+// query matches on, never credentials.
+type userDoc struct {
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// UserSearchRepository indexes users in Elasticsearch and runs full-text
+// queries against them.
+type UserSearchRepository struct {
+	client *search.Client
+}
+
+// NewUserSearchRepository builds the search adapter over the shared client.
+func NewUserSearchRepository(client *search.Client) *UserSearchRepository {
+	return &UserSearchRepository{client: client}
+}
+
+// Index upserts a user document keyed by the user's ID. Refresh=true makes the
+// write immediately searchable — drop it for high-throughput bulk indexing.
+func (r *UserSearchRepository) Index(ctx context.Context, user *entity.User) error {
+	body, err := json.Marshal(userDoc{ID: user.ID, Name: user.Name, Email: user.Email})
+	if err != nil {
+		return errors.Wrapf(err, "user search: marshal id=%d", user.ID)
+	}
+
+	req := esapi.IndexRequest{
+		Index:      userIndex,
+		DocumentID: strconv.FormatInt(user.ID, 10),
+		Body:       bytes.NewReader(body),
+		Refresh:    "true",
+	}
+	res, err := req.Do(ctx, r.client)
+	if err != nil {
+		return errors.Wrapf(err, "user search: index id=%d", user.ID)
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.IsError() {
+		return errors.Wrapf(errors.ErrInternal, "user search: index id=%d: %s", user.ID, res.Status())
+	}
+	return nil
+}
+
+// Delete removes a user document by ID. A missing document (404) is not an error
+// — the index is eventually consistent with the store of record.
+func (r *UserSearchRepository) Delete(ctx context.Context, id int64) error {
+	req := esapi.DeleteRequest{
+		Index:      userIndex,
+		DocumentID: strconv.FormatInt(id, 10),
+		Refresh:    "true",
+	}
+	res, err := req.Do(ctx, r.client)
+	if err != nil {
+		return errors.Wrapf(err, "user search: delete id=%d", id)
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.IsError() && res.StatusCode != http.StatusNotFound {
+		return errors.Wrapf(errors.ErrInternal, "user search: delete id=%d: %s", id, res.Status())
+	}
+	return nil
+}
+
+// Search runs a multi_match query over name and email and returns the matching
+// user IDs, most-relevant first. Resolve the IDs through the SQL repository to
+// hydrate full entities.
+func (r *UserSearchRepository) Search(ctx context.Context, query string, limit int) ([]int64, error) {
+	if limit <= 0 {
+		limit = defaultSearchSize
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"size": limit,
+		"query": map[string]any{
+			"multi_match": map[string]any{
+				"query":  query,
+				"fields": []string{"name", "email"},
+			},
+		},
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "user search: marshal query")
+	}
+
+	req := esapi.SearchRequest{
+		Index: []string{userIndex},
+		Body:  bytes.NewReader(body),
+	}
+	res, err := req.Do(ctx, r.client)
+	if err != nil {
+		return nil, errors.Wrap(err, "user search: search")
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.IsError() {
+		return nil, errors.Wrapf(errors.ErrInternal, "user search: search: %s", res.Status())
+	}
+
+	var envelope struct {
+		Hits struct {
+			Hits []struct {
+				Source userDoc `json:"_source"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+	if decodeErr := json.NewDecoder(res.Body).Decode(&envelope); decodeErr != nil {
+		return nil, errors.Wrap(decodeErr, "user search: decode response")
+	}
+
+	ids := make([]int64, 0, len(envelope.Hits.Hits))
+	for _, h := range envelope.Hits.Hits {
+		ids = append(ids, h.Source.ID)
+	}
+	return ids, nil
+}

@@ -12,6 +12,9 @@ import (
 {{- if .HasRedis}}
 	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
 {{- end}}
+{{- if .HasElasticsearch}}
+	infraSearch "{{.ModuleName}}/internal/infrastructure/search"
+{{- end}}
 	"{{.ModuleName}}/internal/infrastructure/config"
 {{- if .HasDatabase}}
 	"{{.ModuleName}}/internal/infrastructure/database"
@@ -76,6 +79,9 @@ func provideDatabaseConfig(c *config.Config) config.DatabaseConfig { return c.Da
 {{- if .HasRedis}}
 func provideRedisConfig(c *config.Config) config.RedisConfig { return c.Redis }
 {{- end}}
+{{- if .HasElasticsearch}}
+func provideElasticsearchConfig(c *config.Config) config.ElasticsearchConfig { return c.Elasticsearch }
+{{- end}}
 {{- if .HasHTTP}}
 func provideHTTPConfig(c *config.Config) config.HTTPConfig { return c.HTTP }
 
@@ -138,6 +144,17 @@ func provideMySQLDB(lc fx.Lifecycle, cfg config.DatabaseConfig, log *logger.Logg
 
 func provideRedisCache(lc fx.Lifecycle, cfg config.RedisConfig, log *logger.Logger) (*infraCache.Client, error) {
 	client, cleanup, err := infraCache.New(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return client, nil
+}
+{{- end}}
+{{- if .HasElasticsearch}}
+
+func provideElasticsearch(lc fx.Lifecycle, cfg config.ElasticsearchConfig, log *logger.Logger) (*infraSearch.Client, error) {
+	client, cleanup, err := infraSearch.New(cfg, log)
 	if err != nil {
 		return nil, err
 	}

@@ -26,6 +26,9 @@ type ProjectConfig struct {
 	// Cache
 	Cache string `json:"cache"` // "redis", "bigcache", "none"
 
+	// Search
+	Search string `json:"search"` // "elasticsearch", "none"
+
 	// Message Queue
 	MessageQueue string `json:"message_queue"` // "kafka", "rabbitmq", "nats", "none"
 
@@ -92,6 +95,16 @@ func (c *ProjectConfig) HasRedis() bool {
 	return c.Cache == "redis"
 }
 
+// HasSearch returns true if a search backend is selected.
+func (c *ProjectConfig) HasSearch() bool {
+	return c.Search != noneStr && c.Search != ""
+}
+
+// HasElasticsearch returns true if Elasticsearch is selected.
+func (c *ProjectConfig) HasElasticsearch() bool {
+	return c.Search == "elasticsearch"
+}
+
 // UseWire returns true if Google Wire DI is selected.
 func (c *ProjectConfig) UseWire() bool {
 	return c.DI == "wire"
@@ -113,6 +126,7 @@ func DefaultConfig() *ProjectConfig {
 		DBDriver:      "pgx",
 		QueryGen:      "sqlc",
 		Cache:         "redis",
+		Search:        noneStr,
 		MessageQueue:  noneStr,
 		ConfigFormat:  "yaml",
 		DI:            "wire",

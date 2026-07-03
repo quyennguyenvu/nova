@@ -38,6 +38,7 @@ Examples:
 	f.String("db-driver", "", "Database driver: pgx, sqlx, gorm, database/sql")
 	f.String("query", "", "Query generation: sqlc, raw, gorm")
 	f.String("cache", "", "Cache: redis, bigcache, none")
+	f.String("search", "", "Search engine: elasticsearch, none")
 	f.String("queue", "", "Message queue: kafka, rabbitmq, nats, none")
 	f.String("config", "", "Configuration format: yaml, toml, env")
 	f.String("di", "", "Dependency injection: wire, fx")
@@ -86,6 +87,9 @@ func runNew(cmd *cobra.Command, args []string) error {
 	}
 	if cfg.HasCache() {
 		fmt.Fprintf(os.Stdout, "   Cache: %s\n", cfg.Cache)
+	}
+	if cfg.HasSearch() {
+		fmt.Fprintf(os.Stdout, "   Search: %s\n", cfg.Search)
 	}
 	fmt.Fprintln(os.Stdout)
 
@@ -138,6 +142,9 @@ func applyFlags(cmd *cobra.Command, cfg *config.ProjectConfig) {
 	}
 	if v, _ := cmd.Flags().GetString("cache"); v != "" {
 		cfg.Cache = v
+	}
+	if v, _ := cmd.Flags().GetString("search"); v != "" {
+		cfg.Search = v
 	}
 	if v, _ := cmd.Flags().GetString("queue"); v != "" {
 		cfg.MessageQueue = v

@@ -23,6 +23,9 @@ import (
 {{- if .HasRedis}}
 	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
 {{- end}}
+{{- if .HasElasticsearch}}
+	infraSearch "{{.ModuleName}}/internal/infrastructure/search"
+{{- end}}
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/infrastructure/logger"
 	infrasec "{{.ModuleName}}/internal/infrastructure/security"
@@ -82,6 +85,10 @@ var infraSet = wire.NewSet(
 {{- if .HasRedis}}
 	wire.FieldsOf(new(*config.Config), "Redis"),
 	infraCache.New,
+{{- end}}
+{{- if .HasElasticsearch}}
+	wire.FieldsOf(new(*config.Config), "Elasticsearch"),
+	infraSearch.New,
 {{- end}}
 {{- if .HasMessageQueue}}
 {{- if eq .MessageQueue "kafka"}}

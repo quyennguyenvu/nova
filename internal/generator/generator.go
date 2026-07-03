@@ -343,6 +343,13 @@ func (g *Generator) adapterFiles() []templateFile {
 			"internal/adapter/repository/redis/mapper/user.go",
 			cfg.HasRedis(),
 		},
+		// Search — elasticsearch. Standalone reference adapter (a derived read
+		// model over entity.User); not wired into the DI graph by default.
+		{
+			"templates/adapter/repository/elasticsearch/user_search.go.tmpl",
+			"internal/adapter/repository/elasticsearch/user_search.go",
+			cfg.HasElasticsearch(),
+		},
 	}
 }
 
@@ -493,6 +500,11 @@ func (g *Generator) infrastructureFiles() []templateFile {
 			cfg.Database == mysql,
 		},
 		{"templates/infrastructure/cache/redis.go.tmpl", "internal/infrastructure/cache/redis.go", cfg.HasRedis()},
+		{
+			"templates/infrastructure/search/elasticsearch.go.tmpl",
+			"internal/infrastructure/search/elasticsearch.go",
+			cfg.HasElasticsearch(),
+		},
 		{
 			"templates/infrastructure/pubsub/kafka.go.tmpl",
 			"internal/infrastructure/pubsub/kafka.go",

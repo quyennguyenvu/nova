@@ -286,6 +286,7 @@ func httpMatrixConfig(framework, database, di string) *config.ProjectConfig {
 	cfg.Transport = "http"
 	cfg.HTTPFramework = framework
 	cfg.Cache = "redis"
+	cfg.Search = "elasticsearch"
 	cfg.MessageQueue = "none"
 	return cfg
 }

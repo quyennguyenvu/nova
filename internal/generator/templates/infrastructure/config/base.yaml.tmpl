@@ -108,6 +108,15 @@ redis:
   ping_timeout: 5s
 {{- end}}
 
+{{- if .HasElasticsearch}}
+
+elasticsearch:
+  addresses:
+    - "http://localhost:9200"
+  max_retries: 3
+  ping_timeout: 5s
+{{- end}}
+
 {{- if eq .MessageQueue "kafka"}}
 
 kafka:

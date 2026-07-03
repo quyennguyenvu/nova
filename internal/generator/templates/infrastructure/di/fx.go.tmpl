@@ -90,6 +90,10 @@ func infraModule() fx.Option {
 		provideRedisConfig,
 		provideRedisCache,
 {{- end}}
+{{- if .HasElasticsearch}}
+		provideElasticsearchConfig,
+		provideElasticsearch,
+{{- end}}
 {{- if eq .MessageQueue "kafka"}}
 		provideKafkaConfig,
 		provideKafkaProducer,

@@ -31,6 +31,9 @@ func RunInteractive(cfg *config.ProjectConfig) error {
 	if err := promptCache(cfg); err != nil {
 		return err
 	}
+	if err := promptSearch(cfg); err != nil {
+		return err
+	}
 	if err := promptMessageQueue(cfg); err != nil {
 		return err
 	}
@@ -141,6 +144,17 @@ func promptCache(cfg *config.ProjectConfig) error {
 		Options: []string{"redis", "bigcache", "none"},
 		Default: "redis",
 	}, &cfg.Cache); err != nil {
+		return err
+	}
+	return nil
+}
+
+func promptSearch(cfg *config.ProjectConfig) error {
+	if err := survey.AskOne(&survey.Select{
+		Message: "Search engine:",
+		Options: []string{"elasticsearch", "none"},
+		Default: "none",
+	}, &cfg.Search); err != nil {
 		return err
 	}
 	return nil
