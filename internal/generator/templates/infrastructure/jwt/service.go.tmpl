@@ -74,7 +74,7 @@ func (s *TokenService) AccessTokenTTL() time.Duration { return s.accessTokenTTL 
 // an error on verify-only services (no private key configured).
 func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 	if s.privateKey == nil {
-		return "", errors.L(locale.InternalError)
+		return "", errors.L(locale.InternalError).WithCause(errors.New("no signing key configured (verify-only service)"))
 	}
 	now := time.Now()
 	claims := AccessTokenClaims{
@@ -116,7 +116,7 @@ func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr s
 		&claims,
 		func(t *jwt.Token) (any, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, errors.L(locale.Unauthorized)
+				return nil, errors.L(locale.Unauthorized).WithCause(errors.New("unexpected signing method"))
 			}
 			return s.publicKey, nil
 		},
@@ -124,21 +124,21 @@ func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr s
 	)
 	if err != nil {
 		logVerifyFailure(ctx, err)
-		return nil, errors.L(locale.Unauthorized)
+		return nil, errors.L(locale.Unauthorized).WithCause(err)
 	}
-	if !tkn.Valid {
-		return nil, errors.L(locale.Unauthorized)
+	if tkn == nil || !tkn.Valid {
+		return nil, errors.L(locale.Unauthorized).WithCause(errors.New("token invalid"))
 	}
 	// A token whose signature checked out against our key but carries the wrong
 	// issuer/audience is suspicious (cross-environment replay or misconfig), not
 	// routine — log it at Warn even though the client still gets a generic 401.
 	if s.issuer != "" && !claims.VerifyIssuer(s.issuer, true) {
 		log.Warn("jwt verification anomaly", "reason", "bad_issuer")
-		return nil, errors.L(locale.Unauthorized)
+		return nil, errors.L(locale.Unauthorized).WithCause(errors.New("issuer mismatch"))
 	}
 	if s.audience != "" && !claims.VerifyAudience(s.audience, true) {
 		log.Warn("jwt verification anomaly", "reason", "bad_audience")
-		return nil, errors.L(locale.Unauthorized)
+		return nil, errors.L(locale.Unauthorized).WithCause(errors.New("audience mismatch"))
 	}
 
 	return &identity.UserPrincipal{

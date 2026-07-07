@@ -71,7 +71,7 @@ func LoginRateLimit(cfg config.LoginRateLimitConfig) func(http.Handler) http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !l.allow(clientIP(r)) {
-				httpwriter.WriteError(w, r, errors.L(locale.TooManyRequests))
+				httpwriter.WriteError(w, r, errors.L(locale.TooManyRequests).WithCause(errors.New("login rate limit exceeded")))
 				return
 			}
 			next.ServeHTTP(w, r)

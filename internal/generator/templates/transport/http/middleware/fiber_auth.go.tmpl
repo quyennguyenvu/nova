@@ -19,7 +19,7 @@ func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		token := bearerToken(c.Get("Authorization"))
 		if token == "" {
-			return httpwriter.WriteError(c, errors.L(locale.Unauthorized))
+			return httpwriter.WriteError(c, errors.L(locale.Unauthorized).WithCause(errors.New("missing bearer token")))
 		}
 		principal, err := tokenSvc.ParseAndVerifyAccessToken(c.UserContext(), token)
 		if err != nil {

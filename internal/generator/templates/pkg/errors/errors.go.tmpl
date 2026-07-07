@@ -17,9 +17,10 @@
 //	    return errors.Wrap(err, "insert user")
 //	}
 //
-//	// usecase — locale-aware
+//	// usecase — locale-aware; WithCause names the reason for the access log
 //	if existing != nil {
-//	    return errors.L(locale.UserEmailExists, input.Email)
+//	    return errors.L(locale.UserEmailExists, input.Email).
+//	        WithCause(errors.New("email already registered"))
 //	}
 //
 //	// transport — log ONCE; translate at write time
@@ -56,6 +57,7 @@ var (
 
 // Re-export std helpers so callers only import this package.
 var (
+	New    = stderrors.New
 	Is     = stderrors.Is
 	As     = stderrors.As
 	Unwrap = stderrors.Unwrap

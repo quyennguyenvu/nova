@@ -49,7 +49,7 @@ func LoginRateLimit(cfg config.LoginRateLimitConfig) gin.HandlerFunc {
 	l := newIPLimiter(cfg)
 	return func(c *gin.Context) {
 		if !l.allow(c.ClientIP()) {
-			httpwriter.WriteError(c, errors.L(locale.TooManyRequests))
+			httpwriter.WriteError(c, errors.L(locale.TooManyRequests).WithCause(errors.New("login rate limit exceeded")))
 			c.Abort()
 			return
 		}

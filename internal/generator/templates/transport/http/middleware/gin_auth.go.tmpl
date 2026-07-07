@@ -18,7 +18,7 @@ func Auth(tokenSvc *jwtsec.TokenService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := bearerToken(c.GetHeader("Authorization"))
 		if token == "" {
-			httpwriter.WriteError(c, errors.L(locale.Unauthorized))
+			httpwriter.WriteError(c, errors.L(locale.Unauthorized).WithCause(errors.New("missing bearer token")))
 			c.Abort()
 			return
 		}

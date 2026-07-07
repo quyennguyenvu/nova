@@ -27,7 +27,7 @@ func Recovery() fiber.Handler {
 					"panic", r,
 					"stack", string(debug.Stack()),
 				)
-				err = httpwriter.WriteError(c, errors.L(locale.InternalError))
+				err = httpwriter.WriteError(c, errors.L(locale.InternalError).WithCause(errors.New("panic recovered")))
 			}
 		}()
 		return c.Next()

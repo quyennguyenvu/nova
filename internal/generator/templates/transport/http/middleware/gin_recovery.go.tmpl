@@ -33,7 +33,7 @@ func Recovery() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			httpwriter.WriteError(c, errors.L(locale.InternalError))
+			httpwriter.WriteError(c, errors.L(locale.InternalError).WithCause(errors.New("panic recovered")))
 			c.Abort()
 		}()
 		c.Next()

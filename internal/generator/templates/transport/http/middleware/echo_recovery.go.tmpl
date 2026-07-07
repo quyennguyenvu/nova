@@ -32,7 +32,7 @@ func Recovery() echo.MiddlewareFunc {
 				if committed {
 					return
 				}
-				err = httpwriter.WriteError(c, errors.L(locale.InternalError))
+				err = httpwriter.WriteError(c, errors.L(locale.InternalError).WithCause(errors.New("panic recovered")))
 			}()
 			return next(c)
 		}

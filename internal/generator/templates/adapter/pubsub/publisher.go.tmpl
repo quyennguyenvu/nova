@@ -120,7 +120,7 @@ func NewPublisher() *Publisher {
 var _ domain.UserPublisher = (*Publisher)(nil)
 
 func (p *Publisher) publish(ctx context.Context, subject string, payload any) error {
-	return errors.L(locale.Unimplemented)
+	return errors.L(locale.Unimplemented).WithCause(errors.New("nats publisher not implemented"))
 }
 
 func (p *Publisher) Close() error { return nil }

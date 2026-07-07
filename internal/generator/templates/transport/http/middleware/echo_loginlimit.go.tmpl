@@ -49,7 +49,7 @@ func LoginRateLimit(cfg config.LoginRateLimitConfig) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if !l.allow(c.RealIP()) {
-				return httpwriter.WriteError(c, errors.L(locale.TooManyRequests))
+				return httpwriter.WriteError(c, errors.L(locale.TooManyRequests).WithCause(errors.New("login rate limit exceeded")))
 			}
 			return next(c)
 		}

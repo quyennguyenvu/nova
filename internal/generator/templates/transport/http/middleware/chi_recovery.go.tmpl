@@ -48,7 +48,7 @@ func Recovery(next http.Handler) http.Handler {
 			if rw.wroteHeader {
 				return
 			}
-			httpwriter.WriteError(rw, r, errors.L(locale.InternalError))
+			httpwriter.WriteError(rw, r, errors.L(locale.InternalError).WithCause(errors.New("panic recovered")))
 		}()
 		next.ServeHTTP(rw, r)
 	})
