@@ -25,3 +25,8 @@ nova
 # Dependency directories (remove the comment below to include it)
 vendor/
 out/
+
+# knowledge graph
+graphify-out/cost.json
+# optional: commit for speed, skip to keep repo small
+graphify-out/cache/

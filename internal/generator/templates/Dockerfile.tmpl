@@ -39,6 +39,7 @@ COPY --from=builder /src/migrations /app/migrations
 {{- end}}
 
 USER app
+{{- if .HasHTTP}}
 EXPOSE 8080
 
 # Probes the readiness endpoint, not the liveness one, so the container is
@@ -46,6 +47,10 @@ EXPOSE 8080
 # time to dial dependencies on cold boot.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD wget -qO- http://localhost:8080/readyz >/dev/null 2>&1 || exit 1
+{{- end}}
+{{- if .HasGRPC}}
+EXPOSE 9090
+{{- end}}
 
 ENTRYPOINT ["/app/api"]
-CMD ["api"]
+CMD ["{{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else}}api{{end}}"]

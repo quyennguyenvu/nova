@@ -260,8 +260,6 @@ linters:
         - ^os/exec.Cmd$
         - ^reflect.StructField$
         # public libs
-        - ^github.com/Shopify/sarama.Config$
-        - ^github.com/Shopify/sarama.ProducerMessage$
         - ^github.com/mitchellh/mapstructure.DecoderConfig$
         - ^github.com/prometheus/client_golang/.+Opts$
         - ^github.com/spf13/cobra.Command$
@@ -467,3 +465,9 @@ linters:
           - noctx
           - unparam
           - wrapcheck
+      # The per-language i18n tables (enMapping/viMapping) are intentionally
+      # parallel — same code set, one translated string each — which dupl flags
+      # as a clone. That parallelism is the design, not copy-paste.
+      - path: 'pkg/locale/locale_(en|vi)\.go'
+        linters:
+          - dupl

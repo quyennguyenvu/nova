@@ -1,12 +1,17 @@
 package generator
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	// Aliased: the package-level const `yaml` (generator.go) shadows the
+	// import name.
+	yamlv3 "gopkg.in/yaml.v3"
 
 	"github.com/quyennguyenvu/nova/internal/config"
 	"github.com/quyennguyenvu/nova/internal/manifest"
@@ -303,15 +308,18 @@ func workerMatrixConfig(database, broker, di string) *config.ProjectConfig {
 func baseMatrixConfig(database, di string) *config.ProjectConfig {
 	v := runtime.Version()
 	cfg := &config.ProjectConfig{
-		ProjectName:   "matrixtest",
-		ModuleName:    "matrixtest",
-		GoVersion:     strings.TrimPrefix(v, "go"),
-		Database:      database,
-		DBDriver:      "pgx",
-		QueryGen:      "sqlc",
-		ConfigFormat:  "yaml",
-		DI:            di,
-		IncludeDocker: false,
+		ProjectName:  "matrixtest",
+		ModuleName:   "matrixtest",
+		GoVersion:    strings.TrimPrefix(v, "go"),
+		Database:     database,
+		DBDriver:     "pgx",
+		QueryGen:     "sqlc",
+		ConfigFormat: "yaml",
+		DI:           di,
+		// Docker on: the Dockerfile + docker-compose.yaml templates then get
+		// parse coverage across every transport × db × broker combo (their
+		// content is asserted in TestDockerComposeStack).
+		IncludeDocker: true,
 		IncludeCI:     false,
 	}
 	if database == "mysql" {
@@ -969,6 +977,212 @@ func renderClaudeMD(t *testing.T, cfg *config.ProjectConfig) string {
 		t.Fatalf("Generate: %v", genErr)
 	}
 	return readFile(t, filepath.Join(dir, "CLAUDE.md"))
+}
+
+// composeFile is the subset of docker-compose.yaml these tests assert on.
+type composeFile struct {
+	// Version pins the absence of the obsolete `version:` key — Compose V2
+	// warns on it.
+	Version  string                    `yaml:"version"`
+	Services map[string]composeService `yaml:"services"`
+	Volumes  map[string]any            `yaml:"volumes"`
+}
+
+type composeService struct {
+	Image       string         `yaml:"image"`
+	Ports       []string       `yaml:"ports"`
+	Environment map[string]any `yaml:"environment"`
+	DependsOn   map[string]struct {
+		Condition string `yaml:"condition"`
+	} `yaml:"depends_on"`
+	Deploy struct {
+		Resources struct {
+			Limits struct {
+				CPUs   string `yaml:"cpus"`
+				Memory string `yaml:"memory"`
+			} `yaml:"limits"`
+		} `yaml:"resources"`
+	} `yaml:"deploy"`
+}
+
+// TestDockerComposeStack pins the generated docker-compose.yaml: it must render
+// exactly the dependency services the stack selects, point the app at their
+// in-network hostnames (not the localhost values .env carries), gate the app on
+// each dependency's healthcheck, and cap every service with a CPU/memory limit
+// so a benchmark run is reproducible.
+func TestDockerComposeStack(t *testing.T) {
+	t.Parallel()
+
+	t.Run("http_postgres_redis_elasticsearch", func(t *testing.T) {
+		t.Parallel()
+		c := loadCompose(t, httpMatrixConfig("fiber", "postgres", "wire"))
+
+		assertComposeServices(t, c,
+			[]string{"app", "postgres", "redis", "elasticsearch"},
+			[]string{"mysql", "kafka", "rabbitmq"})
+		assertComposeEnv(t, c, map[string]string{
+			"DB_HOST":                 "postgres",
+			"DB_PORT":                 "5432",
+			"REDIS_ADDRS":             "redis:6379",
+			"ELASTICSEARCH_ADDRESSES": "http://elasticsearch:9200",
+		})
+		assertHealthyDeps(t, c, "postgres", "redis", "elasticsearch")
+		assertComposeVolumes(t, c, "postgres_data", "redis_data", "elasticsearch_data")
+
+		// HTTP transport publishes the app port; the worker case must not.
+		if len(c.Services["app"].Ports) != 1 {
+			t.Errorf("app ports = %v, want exactly one published port", c.Services["app"].Ports)
+		}
+	})
+
+	t.Run("worker_mysql_rabbitmq", func(t *testing.T) {
+		t.Parallel()
+		c := loadCompose(t, workerMatrixConfig("mysql", "rabbitmq", "wire"))
+
+		assertComposeServices(t, c,
+			[]string{"app", "mysql", "rabbitmq"},
+			[]string{"postgres", "redis", "elasticsearch", "kafka"})
+		assertComposeEnv(t, c, map[string]string{
+			"DB_HOST": "mysql",
+			"DB_PORT": "3306",
+		})
+		assertHealthyDeps(t, c, "mysql", "rabbitmq")
+		assertComposeVolumes(t, c, "mysql_data", "rabbitmq_data")
+
+		if url, _ := c.Services["app"].Environment["RABBITMQ_URL"].(string); !strings.Contains(url, "@rabbitmq:5672") {
+			t.Errorf("app RABBITMQ_URL = %q, want the in-network rabbitmq host", url)
+		}
+		if ports := c.Services["app"].Ports; len(ports) != 0 {
+			t.Errorf("worker app publishes ports %v, want none", ports)
+		}
+	})
+
+	t.Run("kafka_broker", func(t *testing.T) {
+		t.Parallel()
+		c := loadCompose(t, workerMatrixConfig("postgres", "kafka", "wire"))
+
+		assertComposeServices(t, c, []string{"app", "postgres", "kafka"}, []string{"rabbitmq"})
+		assertComposeEnv(t, c, map[string]string{"KAFKA_BROKERS": "kafka:9092"})
+		assertHealthyDeps(t, c, "postgres", "kafka")
+	})
+
+	// IncludeDocker=false must emit neither half of the Docker setup.
+	t.Run("docker_disabled", func(t *testing.T) {
+		t.Parallel()
+		cfg := httpMatrixConfig("fiber", "postgres", "wire")
+		cfg.IncludeDocker = false
+		dir := renderProject(t, cfg)
+		for _, name := range []string{"docker-compose.yaml", "Dockerfile"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+				t.Errorf("%s rendered with IncludeDocker=false", name)
+			}
+		}
+	})
+}
+
+// TestPreCommitHookExecutable pins the git hook: `make setup` points
+// core.hooksPath at .githooks, and git silently skips a hook that isn't
+// executable — so the file must be both rendered and +x.
+func TestPreCommitHookExecutable(t *testing.T) {
+	t.Parallel()
+	dir := renderProject(t, httpMatrixConfig("fiber", "postgres", "wire"))
+	path := filepath.Join(dir, ".githooks/pre-commit")
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat .githooks/pre-commit: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o100 == 0 {
+		t.Errorf(".githooks/pre-commit mode = %v, want the owner exec bit set", info.Mode().Perm())
+	}
+	mustContainAll(t, readFile(t, path), "make fmt", "make lint", "go build")
+
+	// The hook is dead weight unless the Makefile wires core.hooksPath to it.
+	mustContainAll(t, readFile(t, filepath.Join(dir, "Makefile")), "core.hooksPath .githooks")
+}
+
+// loadCompose renders cfg and unmarshals the generated docker-compose.yaml.
+func loadCompose(t *testing.T, cfg *config.ProjectConfig) composeFile {
+	t.Helper()
+	dir := renderProject(t, cfg)
+	var c composeFile
+	if err := yamlv3.Unmarshal([]byte(readFile(t, filepath.Join(dir, "docker-compose.yaml"))), &c); err != nil {
+		t.Fatalf("unmarshal docker-compose.yaml: %v", err)
+	}
+	if c.Version != "" {
+		t.Errorf("docker-compose.yaml declares obsolete version %q", c.Version)
+	}
+	return c
+}
+
+// assertComposeServices checks the exact service set and that each one carries
+// a CPU + memory limit.
+func assertComposeServices(t *testing.T, c composeFile, want, unwanted []string) {
+	t.Helper()
+	for _, name := range want {
+		svc, ok := c.Services[name]
+		if !ok {
+			t.Errorf("missing service %q", name)
+			continue
+		}
+		limits := svc.Deploy.Resources.Limits
+		if limits.CPUs == "" || limits.Memory == "" {
+			t.Errorf("service %q has no cpu/memory limit (%+v)", name, limits)
+		}
+	}
+	for _, name := range unwanted {
+		if _, ok := c.Services[name]; ok {
+			t.Errorf("unexpected service %q for this stack", name)
+		}
+	}
+}
+
+// assertComposeEnv checks the app's endpoint overrides — .env points at
+// localhost, so these must name the compose services instead.
+func assertComposeEnv(t *testing.T, c composeFile, want map[string]string) {
+	t.Helper()
+	env := c.Services["app"].Environment
+	for k, v := range want {
+		if got := fmt.Sprint(env[k]); got != v {
+			t.Errorf("app env %s = %q, want %q", k, got, v)
+		}
+	}
+}
+
+func assertHealthyDeps(t *testing.T, c composeFile, deps ...string) {
+	t.Helper()
+	got := c.Services["app"].DependsOn
+	if len(got) != len(deps) {
+		t.Errorf("app depends_on = %v, want %v", got, deps)
+	}
+	for _, dep := range deps {
+		if got[dep].Condition != "service_healthy" {
+			t.Errorf("app depends_on[%s].condition = %q, want service_healthy", dep, got[dep].Condition)
+		}
+	}
+}
+
+func assertComposeVolumes(t *testing.T, c composeFile, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, ok := c.Volumes[name]; !ok {
+			t.Errorf("missing named volume %q", name)
+		}
+	}
+}
+
+// renderProject generates cfg into a temp dir and returns the project root.
+func renderProject(t *testing.T, cfg *config.ProjectConfig) string {
+	t.Helper()
+	dir := t.TempDir()
+	gen, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if genErr := gen.Generate(dir); genErr != nil {
+		t.Fatalf("Generate: %v", genErr)
+	}
+	return dir
 }
 
 // mustContainAll fails the (sub)test for every substring missing from src.

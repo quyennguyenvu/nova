@@ -61,7 +61,7 @@ type Resolved struct {
 }
 
 // Default returns nova's canonical layout — the single source of truth that
-// matches instruction.md §2 and the output of `nova new`.
+// matches docs/02-project-layout.md and the output of `nova new`.
 func Default() *Manifest {
 	return &Manifest{
 		Version: schemaVersion,

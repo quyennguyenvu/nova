@@ -1,0 +1,267 @@
+# Local stack for {{.ProjectName}} — the app plus every dependency it dials,
+# each with an explicit CPU/memory limit so a benchmark run is reproducible.
+#
+# Requires Docker Compose V2 (`docker compose`, not the legacy `docker-compose`
+# binary): the limits below are read from `deploy.resources.limits`, which V2
+# applies to plain `up` — V1 ignores them outside swarm.
+#
+#   cp .env.example .env          # secrets + credentials, read via env_file
+#   docker compose up -d --build  # whole stack
+#   docker compose up -d {{if eq .Database "mysql"}}mysql{{else if .HasDatabase}}postgres{{end}}{{if .HasRedis}} redis{{end}}{{if eq .MessageQueue "kafka"}} kafka{{end}}{{if eq .MessageQueue "rabbitmq"}} rabbitmq{{end}}{{if .HasElasticsearch}} elasticsearch{{end}}   # dependencies only
+#
+# Every limit is an env var with a default, so a sweep needs no file edits:
+#
+#   LIMIT_APP_CPUS=1 LIMIT_APP_MEMORY=256M docker compose up -d --force-recreate app
+#
+# Host ports are published for each dependency, so host-side tooling
+# ({{if .HasDatabase}}`make migrate-up`, {{end}}k6, kafka CLI) works against the same stack.
+
+services:
+  app:
+    build:
+      context: .
+    image: {{.ProjectName}}:local
+    # The subcommand comes from the image's CMD ({{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else}}api{{end}}) — see Dockerfile.
+    # Secrets and per-deploy values (DB_USER/DB_PASSWORD, JWT keys, APP_ENV).
+    env_file:
+      - .env
+    # Endpoints are overridden here — .env points at localhost for host runs,
+    # but inside the compose network each dependency answers on its service
+    # name. `environment` wins over `env_file`.
+    environment:
+{{- if .HasDatabase}}
+      DB_HOST: {{if eq .Database "mysql"}}mysql{{else}}postgres{{end}}
+      DB_PORT: "{{if eq .Database "mysql"}}3306{{else}}5432{{end}}"
+{{- end}}
+{{- if .HasRedis}}
+      REDIS_ADDRS: redis:6379
+{{- end}}
+{{- if .HasElasticsearch}}
+      ELASTICSEARCH_ADDRESSES: http://elasticsearch:9200
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+      KAFKA_BROKERS: kafka:9092
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+{{- end}}
+{{- if .HasHTTP}}
+    ports:
+      - "${APP_HOST_PORT:-8080}:8080"
+{{- end}}
+{{- if .HasGRPC}}
+    ports:
+      - "${APP_HOST_PORT:-9090}:9090"
+{{- end}}
+{{- if or .HasDatabase .HasRedis .HasElasticsearch (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
+    # Wait for dependencies to pass their healthcheck, not just to start —
+    # otherwise the app exits on a failed dial before the DB finishes booting.
+    depends_on:
+{{- if .HasDatabase}}
+      {{if eq .Database "mysql"}}mysql{{else}}postgres{{end}}:
+        condition: service_healthy
+{{- end}}
+{{- if .HasRedis}}
+      redis:
+        condition: service_healthy
+{{- end}}
+{{- if .HasElasticsearch}}
+      elasticsearch:
+        condition: service_healthy
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+      kafka:
+        condition: service_healthy
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+      rabbitmq:
+        condition: service_healthy
+{{- end}}
+{{- end}}
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIMIT_APP_CPUS:-2}"
+          memory: ${LIMIT_APP_MEMORY:-512M}
+{{- if eq .Database "postgres"}}
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-{{.ProjectName}}}
+      POSTGRES_USER: ${DB_USER:-{{.ProjectName}}}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-{{.ProjectName}}}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIMIT_DB_CPUS:-2}"
+          memory: ${LIMIT_DB_MEMORY:-1G}
+{{- end}}
+{{- if eq .Database "mysql"}}
+
+  mysql:
+    image: mysql:8.4
+    # DB_USER must not be "root" — the image refuses MYSQL_USER=root. Keep the
+    # app on its own user; MYSQL_ROOT_PASSWORD is only for admin access.
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-{{.ProjectName}}}
+      MYSQL_USER: ${DB_USER:-{{.ProjectName}}}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-{{.ProjectName}}}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIMIT_DB_CPUS:-2}"
+          memory: ${LIMIT_DB_MEMORY:-1G}
+{{- end}}
+{{- if .HasRedis}}
+
+  redis:
+    image: redis:7-alpine
+    # Cap redis independently of the container limit so it evicts instead of
+    # being OOM-killed mid-benchmark.
+    command: ["redis-server", "--maxmemory", "${LIMIT_REDIS_MAXMEMORY:-192mb}", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIMIT_REDIS_CPUS:-1}"
+          memory: ${LIMIT_REDIS_MEMORY:-256M}
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+
+  kafka:
+    image: apache/kafka:3.9.0
+    # Single-node KRaft (no ZooKeeper). Two listeners: PLAINTEXT for in-network
+    # clients (the app) and PLAINTEXT_HOST for host tooling on localhost:29092.
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # The publisher writes to user.created without a topic-create step.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIMIT_KAFKA_CPUS:-2}"
+          memory: ${LIMIT_KAFKA_MEMORY:-1G}
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "5672:5672"
+      - "15672:15672" # management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIMIT_RABBITMQ_CPUS:-1}"
+          memory: ${LIMIT_RABBITMQ_MEMORY:-512M}
+{{- end}}
+{{- if .HasElasticsearch}}
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    # Unsecured single node — matches the empty-credentials default in
+    # config/base.{{.ConfigFormat}}. Keep the JVM heap under the memory limit below.
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms${LIMIT_ES_HEAP:-512m} -Xmx${LIMIT_ES_HEAP:-512m}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "${LIMIT_ES_CPUS:-2}"
+          memory: ${LIMIT_ES_MEMORY:-1536M}
+{{- end}}
+{{- if or .HasDatabase .HasRedis .HasElasticsearch (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
+
+volumes:
+{{- if eq .Database "postgres"}}
+  postgres_data:
+{{- end}}
+{{- if eq .Database "mysql"}}
+  mysql_data:
+{{- end}}
+{{- if .HasRedis}}
+  redis_data:
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+  kafka_data:
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+  rabbitmq_data:
+{{- end}}
+{{- if .HasElasticsearch}}
+  elasticsearch_data:
+{{- end}}
+{{- end}}

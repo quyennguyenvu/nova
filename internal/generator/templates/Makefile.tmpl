@@ -73,11 +73,13 @@ gen:{{if .UseWire}} wire-gen{{end}}{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}}{{i
 # Docker
 .PHONY: docker-build docker-up docker-down
 docker-build:
-	docker build -t $(APP_NAME) .
+	docker build -t {{.ProjectName}}:local .
 
+# Compose V2 — `deploy.resources.limits` in docker-compose.yaml is ignored by
+# the legacy docker-compose binary outside swarm.
 docker-up:
-	docker-compose up -d
+	docker compose up -d --build
 
 docker-down:
-	docker-compose down
+	docker compose down
 {{- end}}

@@ -29,7 +29,7 @@ func TestGenerateEntityDefaultLayout(t *testing.T) {
 		t.Fatalf("GenerateEntity: %v", err)
 	}
 	// Entity lands in domain/entity; port (repo interface) in domain itself —
-	// matching `nova new` (instruction.md §2), not the old stale paths.
+	// matching `nova new` (docs/02-project-layout.md), not the old stale paths.
 	assertFileContains(t, filepath.Join(dir, "internal/domain/entity/order.go"), "package entity")
 	assertFileContains(t, filepath.Join(dir, "internal/domain/entity/order.go"), "type Order struct")
 	assertFileContains(t, filepath.Join(dir, "internal/domain/order.go"), "package domain")

@@ -1,0 +1,182 @@
+{
+  ".claude/settings.local.json": {
+    "mtime": 1780162899.5737498,
+    "ast_hash": "b71a57032251521a4d1547ffe63f0cc3",
+    "semantic_hash": "b71a57032251521a4d1547ffe63f0cc3"
+  },
+  "cmd/add.go": {
+    "mtime": 1780416410.9940288,
+    "ast_hash": "73fe5c15ca128a3e5946788628e980a4",
+    "semantic_hash": "73fe5c15ca128a3e5946788628e980a4"
+  },
+  "cmd/new.go": {
+    "mtime": 1782989767.9129815,
+    "ast_hash": "3d8c8d18fe38c4e63efb08abc106f875",
+    "semantic_hash": "3d8c8d18fe38c4e63efb08abc106f875"
+  },
+  "cmd/root.go": {
+    "mtime": 1780316623.9578931,
+    "ast_hash": "d0b6c50bb0a5737466e5243258493b3d",
+    "semantic_hash": "d0b6c50bb0a5737466e5243258493b3d"
+  },
+  "go.mod": {
+    "mtime": 1780316461.6056533,
+    "ast_hash": "ad27a980c9a0674f5cb3eebafd5c3a7f",
+    "semantic_hash": "ad27a980c9a0674f5cb3eebafd5c3a7f"
+  },
+  "internal/config/config.go": {
+    "mtime": 1782989741.5022864,
+    "ast_hash": "9cd12ad5a03ec2386aa3f41e504235b1",
+    "semantic_hash": "9cd12ad5a03ec2386aa3f41e504235b1"
+  },
+  "internal/generator/component.go": {
+    "mtime": 1781979401.5952203,
+    "ast_hash": "6cd91e3907c5381d3c9042c346fdca36",
+    "semantic_hash": "6cd91e3907c5381d3c9042c346fdca36"
+  },
+  "internal/generator/component_render.go": {
+    "mtime": 1781803504.0936463,
+    "ast_hash": "e47cda0082a9d28dd5aed438e7bcfceb",
+    "semantic_hash": "e47cda0082a9d28dd5aed438e7bcfceb"
+  },
+  "internal/generator/component_test.go": {
+    "mtime": 1785775253.9071252,
+    "ast_hash": "34dd525cd0f4a10698ca8c0448804af8",
+    "semantic_hash": "34dd525cd0f4a10698ca8c0448804af8"
+  },
+  "internal/generator/generator.go": {
+    "mtime": 1785730466.2817962,
+    "ast_hash": "79ef68368a51a8a82aeef26e7f30af13",
+    "semantic_hash": "79ef68368a51a8a82aeef26e7f30af13"
+  },
+  "internal/generator/generator_test.go": {
+    "mtime": 1785730470.9246986,
+    "ast_hash": "3b3ba2a61df2c50d210d7e6e5821c685",
+    "semantic_hash": "3b3ba2a61df2c50d210d7e6e5821c685"
+  },
+  "internal/generator/repository_sqlc.go": {
+    "mtime": 1780334921.3626132,
+    "ast_hash": "820046224bf22ffeddb192ace111b32e",
+    "semantic_hash": "820046224bf22ffeddb192ace111b32e"
+  },
+  "internal/manifest/manifest.go": {
+    "mtime": 1785775252.4497788,
+    "ast_hash": "a346c03aeadbb8b9522272c9af0d2c0e",
+    "semantic_hash": "a346c03aeadbb8b9522272c9af0d2c0e"
+  },
+  "internal/manifest/manifest_test.go": {
+    "mtime": 1780316809.2595356,
+    "ast_hash": "3208b5ed6bfebe1d85e60e74cc682bc0",
+    "semantic_hash": "3208b5ed6bfebe1d85e60e74cc682bc0"
+  },
+  "internal/prompt/prompt.go": {
+    "mtime": 1782989749.2995982,
+    "ast_hash": "e62bd4a3c6855861e035360f703a8b0f",
+    "semantic_hash": "e62bd4a3c6855861e035360f703a8b0f"
+  },
+  "main.go": {
+    "mtime": 1779976319.1193817,
+    "ast_hash": "39417338bd42ffd3f954c138de41e001",
+    "semantic_hash": "39417338bd42ffd3f954c138de41e001"
+  },
+  ".github/workflows/release.yaml": {
+    "mtime": 1778338933.6855388,
+    "ast_hash": "3040e11a0b5ceb02edfe0da8332cb771",
+    "semantic_hash": "3040e11a0b5ceb02edfe0da8332cb771"
+  },
+  ".golangci.yaml": {
+    "mtime": 1773046166.6662424,
+    "ast_hash": "5a9014533af946e5c9c9b95a7a1eeaa8",
+    "semantic_hash": "5a9014533af946e5c9c9b95a7a1eeaa8"
+  },
+  ".goreleaser.yaml": {
+    "mtime": 1772383939.409503,
+    "ast_hash": "96c6a178b35f698bf1b17940df8c5153",
+    "semantic_hash": "96c6a178b35f698bf1b17940df8c5153"
+  },
+  "CLAUDE.md": {
+    "mtime": 1785775241.3980682,
+    "ast_hash": "fbce37ea478aacac4c1f60b987bde17d",
+    "semantic_hash": "fbce37ea478aacac4c1f60b987bde17d"
+  },
+  "README.md": {
+    "mtime": 1785775233.2524054,
+    "ast_hash": "0e44398b5fc250f4e78d5744db93c721",
+    "semantic_hash": "0e44398b5fc250f4e78d5744db93c721"
+  },
+  "docs/01-cli-options.md": {
+    "mtime": 1785730537.6674259,
+    "ast_hash": "27b245d0d3055f48fbfbdef568d16167",
+    "semantic_hash": "27b245d0d3055f48fbfbdef568d16167"
+  },
+  "docs/02-project-layout.md": {
+    "mtime": 1785730617.1939337,
+    "ast_hash": "4a5259dc8957c2bbff8cdadad352f97c",
+    "semantic_hash": "4a5259dc8957c2bbff8cdadad352f97c"
+  },
+  "docs/03-architecture-rules.md": {
+    "mtime": 1785737354.0237396,
+    "ast_hash": "25401dadaa9c4ada06fb052313550e89",
+    "semantic_hash": "25401dadaa9c4ada06fb052313550e89"
+  },
+  "docs/04-placement-rationale.md": {
+    "mtime": 1785731139.289127,
+    "ast_hash": "7c323851aae98bd3a0f09de9fbef7891",
+    "semantic_hash": "7c323851aae98bd3a0f09de9fbef7891"
+  },
+  "docs/05-domain-layer.md": {
+    "mtime": 1785731949.868602,
+    "ast_hash": "ac9f101f2451c4628f2d94c62c16a3c4",
+    "semantic_hash": "ac9f101f2451c4628f2d94c62c16a3c4"
+  },
+  "docs/README.md": {
+    "mtime": 1785775438.6104128,
+    "ast_hash": "a3e38f918592d2ea4cbc143279ae42c7",
+    "semantic_hash": "a3e38f918592d2ea4cbc143279ae42c7"
+  },
+  "docs/06-usecase-layer.md": {
+    "mtime": 1785774295.0242064,
+    "ast_hash": "2fde913b6b8fcaea7c0a77456f445f86",
+    "semantic_hash": "2fde913b6b8fcaea7c0a77456f445f86"
+  },
+  "docs/07-transport-layer.md": {
+    "mtime": 1785774482.6061754,
+    "ast_hash": "743ad02936987b6a6241864c4a8ac37f",
+    "semantic_hash": "743ad02936987b6a6241864c4a8ac37f"
+  },
+  "docs/08-adapter-layer.md": {
+    "mtime": 1785774738.9238331,
+    "ast_hash": "8a95fd6d0850df33d37d5f7278b519fa",
+    "semantic_hash": "8a95fd6d0850df33d37d5f7278b519fa"
+  },
+  "docs/09-infrastructure-layer.md": {
+    "mtime": 1785774856.3362405,
+    "ast_hash": "23f74dcd9753e1a8aa1fa2e3a3c5dba7",
+    "semantic_hash": "23f74dcd9753e1a8aa1fa2e3a3c5dba7"
+  },
+  "docs/10-shared-packages.md": {
+    "mtime": 1785774960.0044725,
+    "ast_hash": "2c8cd25f1ba25e7b6f392b7a7a039bb9",
+    "semantic_hash": "2c8cd25f1ba25e7b6f392b7a7a039bb9"
+  },
+  "docs/11-di-and-entrypoints.md": {
+    "mtime": 1785775052.276917,
+    "ast_hash": "90e6f8d0c436ce25a5438c75bdcfef23",
+    "semantic_hash": "90e6f8d0c436ce25a5438c75bdcfef23"
+  },
+  "docs/12-build-and-deploy.md": {
+    "mtime": 1785775137.9823742,
+    "ast_hash": "309f32b8f5e32a67aba84f2a423927a6",
+    "semantic_hash": "309f32b8f5e32a67aba84f2a423927a6"
+  },
+  "docs/13-cross-cutting.md": {
+    "mtime": 1785775201.3943648,
+    "ast_hash": "c97f393dce5ab396debebb44cb1db5c3",
+    "semantic_hash": "c97f393dce5ab396debebb44cb1db5c3"
+  },
+  "graphify-out/memory/query_20260803_064005_why_does_new___connect_project_generation_test_mat.md": {
+    "mtime": 1785739205.466315,
+    "ast_hash": "a36e348488f3e1dced22c08b86d56e56",
+    "semantic_hash": "a36e348488f3e1dced22c08b86d56e56"
+  }
+}

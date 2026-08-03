@@ -20,6 +20,7 @@ import (
 	"{{.ModuleName}}/internal/adapter/repository/redis/mapper"
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/internal/infrastructure/cache"
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 )
@@ -29,14 +30,18 @@ const (
 	userCacheTTL    = 15 * time.Minute
 )
 
+// Decorating means satisfying the port, so binding domain.UserRepository to
+// this type in DI type-checks.
+var _ domain.UserRepository = (*UserCacheRepository)(nil)
+
 // UserCacheRepository is a cache-aside decorator for domain.UserRepository.
 type UserCacheRepository struct {
 	repo  domain.UserRepository
-	cache *redis.Client
+	cache *cache.Client
 }
 
-func NewUserCacheRepository(repo domain.UserRepository, cache *redis.Client) *UserCacheRepository {
-	return &UserCacheRepository{repo: repo, cache: cache}
+func NewUserCacheRepository(repo domain.UserRepository, cacheClient *cache.Client) *UserCacheRepository {
+	return &UserCacheRepository{repo: repo, cache: cacheClient}
 }
 
 func (r *UserCacheRepository) Create(ctx context.Context, user *entity.User) error {
@@ -93,8 +98,19 @@ func (r *UserCacheRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// List, Count and ListAfter pass straight through: caching a page keyed by its
+// filter invalidates on every write to the table, so the hit rate rarely pays
+// for the staleness. Cache these per-query only if you can bound that.
 func (r *UserCacheRepository) List(ctx context.Context, params domain.UserFilter) ([]*entity.User, error) {
 	return r.repo.List(ctx, params)
+}
+
+func (r *UserCacheRepository) Count(ctx context.Context, params domain.UserFilter) (int64, error) {
+	return r.repo.Count(ctx, params)
+}
+
+func (r *UserCacheRepository) ListAfter(ctx context.Context, cursor int64, limit int32) ([]*entity.User, error) {
+	return r.repo.ListAfter(ctx, cursor, limit)
 }
 
 func userKey(id int64) string {

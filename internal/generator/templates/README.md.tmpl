@@ -1,6 +1,6 @@
 # {{.ProjectName}}
 
-A Go REST API built with Clean Architecture.
+A Go {{if .HasHTTP}}REST API{{else if .HasGRPC}}gRPC service{{else if .HasWorker}}consumer worker{{else}}service{{end}} built with Clean Architecture.
 
 ## Architecture
 
@@ -11,12 +11,24 @@ internal/
 │   ├── identity/           # Authenticated principals + ctx plumbing
 │   ├── security/           # Crypto port interfaces (PasswordHasher)
 │   ├── user.go             # UserRepository interface + UserFilter
+{{- if .HasMessageQueue}}
+│   ├── user_publisher.go   # UserPublisher port + domain event structs
+{{- end}}
+{{- if .HasWorker}}
+│   ├── user_audit.go       # UserAuditRepository port (audit trail)
+{{- end}}
 │   └── tx_manager.go       # TxManager port (WithinTx)
 │
 ├── usecase/                # Layer 2: Application Business Rules
-│   └── user/               # Service (Register, Login, Get, Update, Delete, List)
+│   {{if .HasWorker}}├──{{else}}└──{{end}} user/               # Service (Register, Login, Get, Update, Delete, List)
+{{- if .HasWorker}}
+│   └── useraudit/          # Audit-trail service the worker dispatches into
+{{- end}}
 │
 ├── adapter/                # Layer 3: Interface Adapters
+{{- if .HasMessageQueue}}
+│   ├── pubsub/             # domain.UserPublisher over {{.MessageQueue}} + wire-format DTOs
+{{- end}}
 │   └── repository/
 {{- if eq .Database "postgres"}}
 │       ├── postgres/       # sqlc-backed UserRepository + TxManager + mapper
@@ -31,17 +43,25 @@ internal/
 │       └── elasticsearch/  # User search index — Index/Delete/Search (standalone)
 {{- end}}
 │
-├── transport/              # Inbound transport (HTTP/gRPC)
+├── transport/              # Inbound transport
 {{- if .HasHTTP}}
 │   └── http/
 │       ├── router.go       # Framework instance + middleware order + Registrar interface
-│       ├── httpwriter/     # Framework-specific response envelope writer
-│       ├── middleware/     # RequestID, Logging, Recovery, CORS, Locale, Auth
+│       ├── health/         # /healthz (liveness) + /readyz (dependency probes)
+│       ├── httpwriter/     # Framework-specific bind + response envelope writer
+│       ├── middleware/     # RequestID, Logging, Recovery, CORS, Locale, Auth, LoginRateLimit
 │       └── v1/             # v1.go: APIPrefix + Prefixed embed (one prefix per section)
 │           └── user/       # Handler, Registrar (embeds v1.Prefixed), DTOs, assembler
 {{- end}}
+{{- if .HasGRPC}}
+│   └── grpc/               # Service implementation
+{{- end}}
+{{- if .HasWorker}}
+│   └── worker/             # Handler iface + Worker orchestrator + {{.MessageQueue}} consumer
+│       └── v1/user/        # Per-feature message handler + DTO
+{{- end}}
 │
-├── app/                    # Entry-point glue (RunHTTPServer)
+├── app/                    # Entry-point glue ({{if .HasHTTP}}RunHTTPServer{{else if .HasGRPC}}RunGRPCServer{{else}}RunWorker{{end}})
 │
 └── infrastructure/         # Layer 4: Frameworks & Drivers (outermost)
     ├── config/             # cleanenv + embed.FS (base/development/production)
@@ -52,10 +72,15 @@ internal/
     {{- if .HasElasticsearch}}
     ├── search/             # Elasticsearch client factory (ping on construct)
     {{- end}}
+    {{- if .HasMessageQueue}}
+    ├── pubsub/             # {{.MessageQueue}} producer{{if .HasWorker}} + consumer group{{end}} factory
+    {{- end}}
     ├── jwt/                # TokenService (RS256 sign + verify)
     ├── logger/             # zerolog implementation of observability.Logger
     ├── security/           # bcrypt PasswordHasher implementation
-    ├── server/             # HTTP server lifecycle (graceful shutdown)
+    {{- if or .HasHTTP .HasGRPC}}
+    ├── server/             # {{if .HasHTTP}}HTTP{{else}}gRPC{{end}} server lifecycle (graceful shutdown)
+    {{- end}}
     ├── tracing/            # OpenTelemetry provider + cleanup
     └── di/                 # {{if .UseWire}}Wire-generated{{else}}Uber fx runtime{{end}} dependency wiring
 ```
@@ -104,8 +129,8 @@ go mod tidy{{if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
 make gen{{end}}
 {{- if .IncludeDocker}}
 
-# Start infrastructure (database, cache, etc.)
-docker-compose up -d
+# Start infrastructure only — the app itself runs on the host below
+docker compose up -d{{if eq .Database "mysql"}} mysql{{else if .HasDatabase}} postgres{{end}}{{if .HasRedis}} redis{{end}}{{if eq .MessageQueue "kafka"}} kafka{{end}}{{if eq .MessageQueue "rabbitmq"}} rabbitmq{{end}}{{if .HasElasticsearch}} elasticsearch{{end}}
 {{- end}}
 {{- if .HasDatabase}}
 
@@ -223,25 +248,45 @@ implements `transport/http.Registrar` (`Prefix()` + `Register`); `NewRouter` mou
 ## Available Commands
 
 ```bash
-make build          # Build the binary
-make run            # Run the server
-make dev            # Run with hot-reload (air)
-make test           # Run tests
-make test-coverage  # Run tests with coverage
-make lint           # Run linter
+make help           # List every target
+make setup          # Point git at .githooks (fmt + lint + build on commit)
+make test           # Run tests (race + coverage)
+make test-coverage  # Write coverage.out + coverage.html
+make lint           # Run linter{{if eq .QueryGen "sqlc"}} + sqlfluff{{end}}
+make fmt            # Format Go{{if eq .QueryGen "sqlc"}} + SQL{{end}}
+make vet            # go vet ./...
 {{- if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
 make gen            # Regenerate {{if .UseWire}}wire_gen{{if or (eq .QueryGen "sqlc") .HasGRPC}} + {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc dbgen{{if .HasGRPC}} + {{end}}{{end}}{{if .HasGRPC}}proto stubs{{end}}
 {{- end}}
 {{- if .HasDatabase}}
+make migrate-create name=add_orders  # New migration pair
 make migrate-up     # Run database migrations
 make migrate-down   # Rollback migrations
 {{- end}}
 {{- if .IncludeDocker}}
-make docker-build   # Build Docker image
-make docker-up      # Start Docker containers
-make docker-down    # Stop Docker containers
+make docker-build   # Build the app image ({{.ProjectName}}:local)
+make docker-up      # Build + start the whole stack
+make docker-down    # Stop the stack
 {{- end}}
 ```
+
+{{- if .IncludeDocker}}
+
+### Benchmarking in Docker
+
+`docker-compose.yaml` runs the app and every dependency under an explicit
+CPU/memory limit, so two runs are comparable. Each limit is an env var with a
+default, so a sweep needs no file edit:
+
+```bash
+docker compose up -d --build                    # baseline
+LIMIT_APP_CPUS=1 LIMIT_APP_MEMORY=256M \
+  docker compose up -d --force-recreate app     # constrained
+```
+
+Needs Docker Compose V2 (`docker compose`): the legacy `docker-compose` binary
+ignores `deploy.resources.limits` outside swarm mode.
+{{- end}}
 
 ## Project Structure
 

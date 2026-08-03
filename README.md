@@ -44,22 +44,26 @@ myproject/
 ├── main.go
 ├── go.mod
 ├── .env.example
-├── cmd/                           # Cobra subcommands (api, grpc, worker…)
+├── nova.yaml                      # Layout manifest — `nova add` reads this
+├── CLAUDE.md
+├── cmd/                           # Cobra subcommand for the chosen transport
 ├── internal/
-│   ├── domain/                    # Layer 1 — entities, repository interfaces, value objects, events
-│   ├── usecase/                   # Layer 2 — business logic, DTOs, errors
-│   ├── adapter/                   # Layer 3 — repository impls, presenters, assemblers
-│   ├── transport/                 #            HTTP/gRPC/cron handlers + middleware
-│   └── infrastructure/            # Layer 4 — config, DB, cache, server, DI wiring
-├── pkg/                           # Cross-cutting utilities (errors, locale, validator…)
-├── migrations/
-├── api/openapi/openapi.yaml
-├── Dockerfile, docker-compose.yaml
+│   ├── domain/                    # Layer 1 — entities, ports (repository, publisher, hasher)
+│   ├── usecase/                   # Layer 2 — business logic + DTOs
+│   ├── adapter/                   # Layer 3 — repository impls, cache, search, publishers
+│   ├── transport/                 #            HTTP / gRPC / worker handlers + middleware
+│   └── infrastructure/            # Layer 4 — config, DB, cache, jwt, server, DI wiring
+├── pkg/                           # Cross-cutting (errors, httputil, locale, logctx, observability)
+├── sqlc/                          # sqlc.yaml + query/ + migrations/
+├── api/openapi/openapi.yaml       # HTTP only
+├── Dockerfile
 ├── Makefile
 └── .github/workflows/ci.yaml
 ```
 
-The architectural rationale (why files live where they do, adapter vs infrastructure, interface ownership) is documented in [instruction.md](instruction.md).
+The full per-file tree, with the flag that gates each entry, is [docs/02 — Project layout](docs/02-project-layout.md).
+
+The architectural rationale (why files live where they do, adapter vs infrastructure, interface ownership) is documented in [docs/](docs/README.md) — start with [03 — Architecture rules](docs/03-architecture-rules.md) and [04 — Placement rationale](docs/04-placement-rationale.md).
 
 ## Commands
 
@@ -67,20 +71,27 @@ The architectural rationale (why files live where they do, adapter vs infrastruc
 
 Generates a complete project. With no flags it runs interactively; pass any flag and it skips prompts entirely.
 
-| Flag               | Values                                  | Default                   |
-| ------------------ | --------------------------------------- | ------------------------- |
-| `--module`         | Go module path                          | `github.com/myorg/<name>` |
-| `--transport`      | `http`, `grpc`, `worker`, `cron`, `cli` | _(prompted)_              |
-| `--http-framework` | `fiber`, `gin`, `chi`, `echo`           | _(prompted)_              |
-| `--database`       | `postgres`, `mysql`, `none`             | `postgres`                |
-| `--db-driver`      | `pgx`, `sqlx`, `gorm`, `database/sql`   | `pgx`                     |
-| `--query`          | `sqlc`, `raw`, `gorm`                   | `sqlc`                    |
-| `--cache`          | `redis`, `none`                         | `redis`                   |
-| `--queue`          | `kafka`, `rabbitmq`, `none`             | `none`                    |
-| `--config`         | `yaml`, `toml`, `env`                   | `yaml`                    |
-| `--di`             | `wire`, `fx`                            | `wire`                    |
-| `--docker`         | _(bool)_                                | `true`                    |
-| `--ci`             | `github`, `none`                        | `github`                  |
+| Flag               | Values                            | Default                   |
+| ------------------ | --------------------------------- | ------------------------- |
+| `--module`         | Go module path                    | `github.com/myorg/<name>` |
+| `--transport`      | `http`, `grpc`, `worker`          | _(none — must be set)_    |
+| `--http-framework` | `fiber`, `gin`, `chi`, `echo`     | `fiber`                   |
+| `--database`       | `postgres`, `mysql`, `none`       | `postgres`                |
+| `--db-driver`      | `pgx`                             | `pgx`                     |
+| `--query`          | `sqlc`                            | `sqlc`                    |
+| `--cache`          | `redis`, `none`                   | `redis`                   |
+| `--search`         | `elasticsearch`, `none`           | `none`                    |
+| `--queue`          | `kafka`, `rabbitmq`, `none`       | `none`                    |
+| `--config`         | `yaml`                            | `yaml`                    |
+| `--di`             | `wire`, `fx`                      | `wire`                    |
+| `--docker`         | _(bool)_                          | `true`                    |
+| `--ci`             | `github`, `none`                  | `github`                  |
+
+Because any flag skips the prompts, a flag-driven run **must** pass `--transport` — otherwise it
+generates a project with no entry point. The prompts and flags also accept values that are not
+implemented yet (`cron`/`cli` transports, `nethttp`, `sqlite`/`mongodb`, `sqlx`/`gorm`, `raw`
+queries, `bigcache`, `nats`, `toml`); [docs/01 — CLI options](docs/01-cli-options.md) lists exactly
+how each one fails.
 
 Example — full non-interactive run:
 
@@ -100,7 +111,7 @@ Scaffold an individual component into an existing project. Run it with no args f
 ```bash
 nova add                                  # interactive — choose entity/usecase/repository/handler/worker/all
 nova add entity Order                     # domain entity + repository interface
-nova add usecase order                    # service, DTOs, errors
+nova add usecase order                    # service + DTOs
 nova add handler order                    # HTTP handler
 nova add repository order --type=postgres # repository implementation
 nova add worker order                     # full worker transport + order feature handler
@@ -116,7 +127,7 @@ nova add all order                        # entity + usecase + repository + hand
 - `cmd/worker.go` + `internal/app/worker.go` — the `worker` subcommand and its bootstrap
 - and it registers `workerCommand()` in `cmd/root.go`
 
-The bootstrap is **self-contained** — it wires config + logger + the broker consumer directly (broker address from env: `KAFKA_BROKERS` / `RABBITMQ_URL`), so the worker runs in any project regardless of its DI choice or whether it was created with a message queue. After generating, run `go mod tidy` (pulls the broker client), then `go run main.go worker`. Shared files are written only when **absent**, so a second `nova add worker payment` just appends its feature handler (add it to the slice in `internal/app/worker.go`).
+The bootstrap boots through the project's **DI graph** (`di.InitializeWorker`), byte-identical to what `nova new --transport=worker` emits, so it is broker-agnostic. `add` also drops a minimal `WorkerApp` struct + `InitializeWorker` injector into `internal/infrastructure/di` (wire or fx, from `stack.di`) — each symbol only when that package doesn't already declare it, so a worker-enabled project is left untouched and re-runs never duplicate. This assumes a nova-new (or `nova.yaml`) layout; with no `di` package it prints a hint instead. Complete the injector with your provider sets, run `go mod tidy` and (for wire) `wire`, then `go run main.go worker`. Shared files are written only when **absent**, so a second `nova add worker payment` just appends its feature handler.
 
 #### sqlc-backed repositories
 
@@ -168,7 +179,7 @@ Domain  →  Use Case  →  Adapter / Transport  →  Infrastructure
 
 Inner layers never import outer layers. Interfaces live where the **consumer** is — repository interfaces in `domain/` (used by use cases), framework-specific helpers under their transport.
 
-For the full rationale see [instruction.md](instruction.md).
+For the full rationale see [docs/04 — Placement rationale](docs/04-placement-rationale.md).
 
 ## Development
 
