@@ -27,6 +27,10 @@ vendor/
 out/
 
 # knowledge graph
+# Tracks local API token spend (never commit)
 graphify-out/cost.json
-# optional: commit for speed, skip to keep repo small
+# Internal file system paths (unreliable across different machines)
+graphify-out/manifest.json
+
+# Optional: keep repo size small, or commit it to speed up team parsing
 graphify-out/cache/

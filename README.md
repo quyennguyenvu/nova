@@ -200,6 +200,10 @@ make diff-gen         # gen-api + print key generated files for review
 
 Output for the `gen-api` / `gen-worker` targets lands in `/tmp/nova-test-output`.
 
+### Knowledge graph
+
+This repo ships a committed [graphify](https://github.com/Graphify-Labs/graphify) knowledge graph in `graphify-out/` — ask your assistant about the codebase and it answers from the graph. See [GRAPHIFY.md](GRAPHIFY.md) for first-time setup.
+
 ## Releasing
 
 ```bash

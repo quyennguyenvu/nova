@@ -1,5 +1,118 @@
 {
-  "generated_at": "2026-08-03T06:38:20.467416+00:00",
-  "nodes": {},
+  "generated_at": "2026-08-04T04:42:03.452610+00:00",
+  "nodes": {
+    "cmd_new_runnew": {
+      "code_fingerprint": "d11a8486ef9c8d96d9293dc11edd73c25e282cf33983c4e59cdc1301a43c5522",
+      "label": "runNew()",
+      "last": "2026-08-03T06:40:05.465703+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-03T06:40:05.465703+00:00",
+          "outcome": "useful",
+          "q": "Why does New() connect Project Generation Test Matrix to Architecture & Layout Docs, New Command & Config Prompts, sqlc Repository Code-Gen, Component Generator Tests, Template File Selection, CLI Command Wiring?"
+        }
+      ],
+      "score": 0.979012323,
+      "source_file": "cmd/new.go",
+      "status": "tentative",
+      "uses": 1
+    },
+    "config_projectconfig": {
+      "code_fingerprint": "eaf70c7fbbbbe04a07de19e97dde3fa3d7aa2f618e1c152c9457e04aff1a8370",
+      "label": "ProjectConfig",
+      "last": "2026-08-03T06:40:05.465703+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-03T06:40:05.465703+00:00",
+          "outcome": "useful",
+          "q": "Why does New() connect Project Generation Test Matrix to Architecture & Layout Docs, New Command & Config Prompts, sqlc Repository Code-Gen, Component Generator Tests, Template File Selection, CLI Command Wiring?"
+        }
+      ],
+      "score": 0.979012323,
+      "source_file": "internal/config/config.go",
+      "status": "tentative",
+      "uses": 1
+    },
+    "docs_01_cli_options_whitelist_rejection": {
+      "code_fingerprint": "1ea40d1cb6775d443995230dce80624c7bb72a1963fedd86f10b89097530c91b",
+      "label": "Up-front whitelist rejection (nethttp, sqlite, mongodb)",
+      "last": "2026-08-03T06:40:05.465703+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-03T06:40:05.465703+00:00",
+          "outcome": "useful",
+          "q": "Why does New() connect Project Generation Test Matrix to Architecture & Layout Docs, New Command & Config Prompts, sqlc Repository Code-Gen, Component Generator Tests, Template File Selection, CLI Command Wiring?"
+        }
+      ],
+      "score": 0.979012323,
+      "source_file": "docs/01-cli-options.md",
+      "status": "tentative",
+      "uses": 1
+    },
+    "generator_generator": {
+      "code_fingerprint": "d05685bb90ee1da2994c9040a1eb20b89d95f9fff25615391b9d6baf6f25b809",
+      "label": "Generator",
+      "last": "2026-08-03T06:40:05.465703+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-03T06:40:05.465703+00:00",
+          "outcome": "useful",
+          "q": "Why does New() connect Project Generation Test Matrix to Architecture & Layout Docs, New Command & Config Prompts, sqlc Repository Code-Gen, Component Generator Tests, Template File Selection, CLI Command Wiring?"
+        }
+      ],
+      "score": 0.979012323,
+      "source_file": "internal/generator/generator.go",
+      "status": "tentative",
+      "uses": 1
+    },
+    "generator_generator_renderfile": {
+      "code_fingerprint": "d05685bb90ee1da2994c9040a1eb20b89d95f9fff25615391b9d6baf6f25b809",
+      "label": ".renderFile()",
+      "last": "2026-08-03T06:40:05.465703+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-03T06:40:05.465703+00:00",
+          "outcome": "useful",
+          "q": "Why does New() connect Project Generation Test Matrix to Architecture & Layout Docs, New Command & Config Prompts, sqlc Repository Code-Gen, Component Generator Tests, Template File Selection, CLI Command Wiring?"
+        }
+      ],
+      "score": 0.979012323,
+      "source_file": "internal/generator/generator.go",
+      "status": "tentative",
+      "uses": 1
+    },
+    "internal_generator_generator_new": {
+      "code_fingerprint": "d05685bb90ee1da2994c9040a1eb20b89d95f9fff25615391b9d6baf6f25b809",
+      "label": "New()",
+      "last": "2026-08-03T06:40:05.465703+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-03T06:40:05.465703+00:00",
+          "outcome": "useful",
+          "q": "Why does New() connect Project Generation Test Matrix to Architecture & Layout Docs, New Command & Config Prompts, sqlc Repository Code-Gen, Component Generator Tests, Template File Selection, CLI Command Wiring?"
+        }
+      ],
+      "score": 0.979012323,
+      "source_file": "internal/generator/generator.go",
+      "status": "tentative",
+      "uses": 1
+    },
+    "internal_generator_generator_test_testnewrejectsunsupporteddi": {
+      "code_fingerprint": "5f9311c597cab893d7df5c458606120d87eedc3edf28618495127674f510cda9",
+      "label": "TestNewRejectsUnsupportedDI()",
+      "last": "2026-08-03T06:40:05.465703+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-03T06:40:05.465703+00:00",
+          "outcome": "useful",
+          "q": "Why does New() connect Project Generation Test Matrix to Architecture & Layout Docs, New Command & Config Prompts, sqlc Repository Code-Gen, Component Generator Tests, Template File Selection, CLI Command Wiring?"
+        }
+      ],
+      "score": 0.979012323,
+      "source_file": "internal/generator/generator_test.go",
+      "status": "tentative",
+      "uses": 1
+    }
+  },
   "version": 1
 }
