@@ -1,13 +1,8 @@
 # Knowledge graph (graphify)
 
-[graphify](https://github.com/Graphify-Labs/graphify) turns this repo into a queryable knowledge
-graph. Code is parsed locally with tree-sitter (deterministic, no LLM, no API cost); markdown and
-other docs go through semantic extraction. Every edge is tagged `EXTRACTED` (explicit in the
-source) or `INFERRED` (resolved by graphify), so the graph is auditable.
+[graphify](https://github.com/Graphify-Labs/graphify) turns this repo into a queryable knowledge graph. Code is parsed locally with tree-sitter (deterministic, no LLM, no API cost); markdown and other docs go through semantic extraction. Every edge is tagged `EXTRACTED` (explicit in the source) or `INFERRED` (resolved by graphify), so the graph is auditable.
 
-**This repo already has a graph committed.** `graphify-out/` is in git, so after cloning you can
-query it immediately — you do not need to build anything. First-time setup is just installing the
-tool and wiring your assistant to it.
+**This repo already has a graph committed.** `graphify-out/` is in git, so after cloning you can query it immediately — you do not need to build anything. First-time setup is just installing the tool and wiring your assistant to it.
 
 ## First-time setup
 
@@ -60,8 +55,7 @@ graphify install --platform codex      # Codex
 graphify install --platform copilot    # GitHub Copilot CLI
 ```
 
-Then `/graphify` is available as a slash command. `graphify install --help` lists the full platform
-set (opencode, aider, amp, droid, kiro, antigravity, …).
+Then `/graphify` is available as a slash command. `graphify install --help` lists the full platform set (opencode, aider, amp, droid, kiro, antigravity, …).
 
 Optionally make it always-on for this repo:
 
@@ -69,9 +63,7 @@ Optionally make it always-on for this repo:
 graphify claude install     # writes a `## graphify` section to CLAUDE.md + a PreToolUse hook
 ```
 
-That tells the assistant to check the graph before answering codebase questions instead of grepping
-files. Nova's `CLAUDE.md` does **not** carry that section today — it's per-developer opt-in.
-`graphify claude uninstall` removes it.
+That tells the assistant to check the graph before answering codebase questions instead of grepping files. Nova's `CLAUDE.md` does **not** carry that section today — it's per-developer opt-in. `graphify claude uninstall` removes it.
 
 ### 4. Install the git hooks
 
@@ -83,28 +75,19 @@ graphify hook status      # verify
 graphify hook uninstall   # remove
 ```
 
-After each commit the hook re-runs AST extraction on the changed files and rebuilds `graph.json` /
-`GRAPH_REPORT.md` in a detached process — code only, no LLM, no cost, and `git commit` returns
-immediately. It pins your interpreter path at install time, so re-run `hook install` if you
-reinstall graphify. Changes to `docs/*.md` are _not_ picked up by the hook; refresh those with
-`/graphify . --update`.
+After each commit the hook re-runs AST extraction on the changed files and rebuilds `graph.json` / `GRAPH_REPORT.md` in a detached process — code only, no LLM, no cost, and `git commit` returns immediately. It pins your interpreter path at install time, so re-run `hook install` if you reinstall graphify. Changes to `docs/*.md` are _not_ picked up by the hook; refresh those with `/graphify . --update`.
 
-Escape hatches: `GRAPHIFY_SKIP_HOOK=1` skips one rebuild, and the rebuild log is at
-`~/.cache/graphify-rebuild.log`.
+Escape hatches: `GRAPHIFY_SKIP_HOOK=1` skips one rebuild, and the rebuild log is at `~/.cache/graphify-rebuild.log`.
 
 ### 5. (Optional) API key
 
-You do not need an API key. Go code is AST-parsed locally for free. Only docs, PDFs, and images go
-through semantic extraction, and that uses Gemini if `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set —
-otherwise your assistant session does the extraction itself.
+You do not need an API key. Go code is AST-parsed locally for free. Only docs, PDFs, and images go through semantic extraction, and that uses Gemini if `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set — otherwise your assistant session does the extraction itself.
 
-Other useful env vars: `GRAPHIFY_MAX_WORKERS` (AST parallelism), `GRAPHIFY_FORCE` (allow a rebuild
-that shrinks the graph), `GRAPHIFY_GEMINI_MODEL` (override the default Gemini model).
+Other useful env vars: `GRAPHIFY_MAX_WORKERS` (AST parallelism), `GRAPHIFY_FORCE` (allow a rebuild that shrinks the graph), `GRAPHIFY_GEMINI_MODEL` (override the default Gemini model).
 
 ## Using the committed graph
 
-In an assistant session, ask a normal question — with `graphify-out/graph.json` present, the skill
-answers from the graph instead of rebuilding:
+In an assistant session, ask a normal question — with `graphify-out/graph.json` present, the skill answers from the graph instead of rebuilding:
 
 ```text
 How does nova pick which handler template to render?
@@ -121,8 +104,7 @@ graphify explain "buildFileList"                                  # plain-langua
 graphify affected "ProjectConfig" --depth 2                       # reverse traversal — blast radius
 ```
 
-Open `graphify-out/graph.html` in a browser for the interactive force-directed view, and read
-`graphify-out/GRAPH_REPORT.md` for god nodes, cross-community bridges, and suggested questions.
+Open `graphify-out/graph.html` in a browser for the interactive force-directed view, and read `graphify-out/GRAPH_REPORT.md` for god nodes, cross-community bridges, and suggested questions.
 
 ## Keeping the graph fresh
 
@@ -135,9 +117,7 @@ Open `graphify-out/graph.html` in a browser for the interactive force-directed v
 | Full rebuild from scratch            | `/graphify .`                                           |
 | Rebuild after deleting a lot of code | `graphify update . --force`                             |
 
-graphify refuses to overwrite `graph.json` with a **smaller** graph — that guard catches half-broken
-extractions. When a shrink is intentional (you deleted files), `--force` or `GRAPHIFY_FORCE=1` is
-the way through.
+graphify refuses to overwrite `graph.json` with a **smaller** graph — that guard catches half-broken extractions. When a shrink is intentional (you deleted files), `--force` or `GRAPHIFY_FORCE=1` is the way through.
 
 ## What's committed vs. ignored
 
@@ -161,9 +141,7 @@ graphify-out/cost.json           # per-machine token tally
 graphify-out/cache/              # extraction cache — commit it to trade repo size for speed
 ```
 
-Because `graph.json` is tracked, concurrent branches can conflict on it. Two ways out: take either
-side and let the hook rebuild, or use graphify's union merge driver (`graphify merge-driver`, wired
-up by `hook install`).
+Because `graph.json` is tracked, concurrent branches can conflict on it. Two ways out: take either side and let the hook rebuild, or use graphify's union merge driver (`graphify merge-driver`, wired up by `hook install`).
 
 ### Known gotcha in this repo
 
@@ -174,18 +152,14 @@ cat graphify-out/.graphify_python   # /Users/<someone>/.local/share/uv/tools/gra
 cat graphify-out/.graphify_root     # /Users/<someone>/workspace/gh_leo/nova
 ```
 
-On anyone else's machine those paths don't exist. `.graphify_python` is harmless (probes are guarded
-and fall through to your real interpreter), but `.graphify_root` is read by the hook's background
-rebuild as the scan root, so a hook-triggered rebuild can target a directory that isn't there. They
-should be local-only:
+On anyone else's machine those paths don't exist. `.graphify_python` is harmless (probes are guarded and fall through to your real interpreter), but `.graphify_root` is read by the hook's background rebuild as the scan root, so a hook-triggered rebuild can target a directory that isn't there. They should be local-only:
 
 ```bash
 printf 'graphify-out/.graphify_python\ngraphify-out/.graphify_root\n' >> .gitignore
 git rm --cached graphify-out/.graphify_python graphify-out/.graphify_root
 ```
 
-Until that lands, delete both files locally after cloning — the skill and the hook regenerate them
-with your own paths on the next run.
+Until that lands, delete both files locally after cloning — the skill and the hook regenerate them with your own paths on the next run.
 
 ## Troubleshooting
 
@@ -207,11 +181,9 @@ python3 -c "import graphify; print(graphify.__file__)"
 
 **PowerShell** — use `graphify .`, not `/graphify .`.
 
-**`ERROR: Graph is empty`** — extraction produced no nodes. Usually a wrong path or an
-all-files-skipped corpus; check the path argument before rebuilding.
+**`ERROR: Graph is empty`** — extraction produced no nodes. Usually a wrong path or an all-files-skipped corpus; check the path argument before rebuilding.
 
-**`refused to shrink graphify-out/graph.json`** — the shrink guard above. Re-run with `--force` if
-the shrink is intentional.
+**`refused to shrink graphify-out/graph.json`** — the shrink guard above. Re-run with `--force` if the shrink is intentional.
 
 **Graph integrity warnings** (dangling or collapsed edges) — inspect with:
 

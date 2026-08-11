@@ -1,11 +1,8 @@
 # 6. Usecase layer
 
-Layer 2 — application business rules. Depends on `domain/` (plus `infrastructure/jwt` for the
-login flow), never on a framework or a transport. ([index](README.md))
+Layer 2 — application business rules. Depends on `domain/` (plus `infrastructure/jwt` for the login flow), never on a framework or a transport. ([index](README.md))
 
-A usecase **orchestrates**: it loads entities through ports, applies application policy
-(clamping, uniqueness checks, authorization), performs side effects, and returns its own DTOs.
-Entities never cross this boundary — the transport layer only ever sees `usecase/*.Output`.
+A usecase **orchestrates**: it loads entities through ports, applies application policy (clamping, uniqueness checks, authorization), performs side effects, and returns its own DTOs. Entities never cross this boundary — the transport layer only ever sees `usecase/*.Output`.
 
 Sections marked **not scaffolded** are patterns to grow into.
 
@@ -23,10 +20,7 @@ For a `--transport=worker` project a second package, `usecase/useraudit/`, follo
 
 ## internal/usecase/user/service.go
 
-The service holds only ports (plus one concrete `*jwt.TokenService` — see
-[04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface)
-for why that seam is deliberately absent). The publisher field only exists when a queue is
-selected:
+The service holds only ports (plus one concrete `*jwt.TokenService` — see [04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface) for why that seam is deliberately absent). The publisher field only exists when a queue is selected:
 
 ```go
 // Service implements the user use case. It never calls the logger directly —
@@ -50,17 +44,14 @@ Seven methods ship: `Register`, `Get`, `Update`, `Delete`, `List`, `PublicList`,
 
 Two error shapes, and the choice is not stylistic:
 
-| Situation                                | Return                                | Why                                                |
-| ---------------------------------------- | ------------------------------------- | -------------------------------------------------- |
-| A rule the caller violated               | `errors.L(locale.X, args…)`           | Carries a translatable code + HTTP status          |
-| A dependency failed                      | `errors.Wrapf(err, "op ctx=…")`       | Adds caller frame + context, preserves the cause   |
+| Situation                  | Return                          | Why                                              |
+| -------------------------- | ------------------------------- | ------------------------------------------------ |
+| A rule the caller violated | `errors.L(locale.X, args…)`     | Carries a translatable code + HTTP status        |
+| A dependency failed        | `errors.Wrapf(err, "op ctx=…")` | Adds caller frame + context, preserves the cause |
 
-Both are `*errors.AppError`; `.WithCause(err)` attaches the underlying error to a locale-coded
-one so the log line keeps the technical detail while the response stays user-facing.
-[10](10-shared-packages.md) documents the type.
+Both are `*errors.AppError`; `.WithCause(err)` attaches the underlying error to a locale-coded one so the log line keeps the technical detail while the response stays user-facing. [10](10-shared-packages.md) documents the type.
 
-The service **never logs** — except for one deliberate case (below). It wraps and returns; the
-transport boundary logs once. That keeps a single log line per request instead of one per layer.
+The service **never logs** — except for one deliberate case (below). It wraps and returns; the transport boundary logs once. That keeps a single log line per request instead of one per layer.
 
 ### Register — check, hash, create, publish
 
@@ -87,14 +78,10 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, e
 
 Two things worth copying into your own usecases:
 
-1. **The `switch` on the lookup error.** Collapsing it to `if err != nil { /* proceed */ }` turns
-   a database outage into a duplicate insert. Only `ErrNotFound` means "free to create".
-2. **The uniqueness check is advisory.** It produces the friendly `UserEmailExists` message; the
-   `UNIQUE` constraint in the migration is what actually guarantees it. Two concurrent registers
-   can both pass the check — the loser gets the constraint violation.
+1. **The `switch` on the lookup error.** Collapsing it to `if err != nil { /* proceed */ }` turns a database outage into a duplicate insert. Only `ErrNotFound` means "free to create".
+2. **The uniqueness check is advisory.** It produces the friendly `UserEmailExists` message; the `UNIQUE` constraint in the migration is what actually guarantees it. Two concurrent registers can both pass the check — the loser gets the constraint violation.
 
-The event publish is the one place the service logs, because the failure is deliberately
-swallowed:
+The event publish is the one place the service logs, because the failure is deliberately swallowed:
 
 ```go
 // best-effort publish — user is already persisted; broker outage shouldn't fail the request.
@@ -104,9 +91,7 @@ if pubErr := s.publisher.PublishUserCreated(ctx, domain.UserCreated{…}); pubEr
 }
 ```
 
-An error that is never returned must be logged somewhere or it vanishes. If you need the event
-to be guaranteed, that is an outbox table written inside the same transaction — not a retry loop
-here.
+An error that is never returned must be logged somewhere or it vanishes. If you need the event to be guaranteed, that is an outbox table written inside the same transaction — not a retry loop here.
 
 ### List — page-based, policy clamped in the usecase
 
@@ -119,27 +104,19 @@ const (
 )
 ```
 
-`List` clamps `Page`/`PerPage`, builds `domain.UserFilter`, then runs the page query **and** a
-`Count` against the same filter (the port contract says `Count` ignores `Limit`/`Offset`). It
-returns the *clamped* values in `ListOutput`, so the page meta the client sees matches what was
-actually queried — an out-of-range `per_page=9999` reports `per_page: 10`, not a lie.
+`List` clamps `Page`/`PerPage`, builds `domain.UserFilter`, then runs the page query **and** a `Count` against the same filter (the port contract says `Count` ignores `Limit`/`Offset`). It returns the _clamped_ values in `ListOutput`, so the page meta the client sees matches what was actually queried — an out-of-range `per_page=9999` reports `per_page: 10`, not a lie.
 
-Note that transport hands raw values in as `ListInput` and the service converts to
-`domain.UserFilter` internally: **transport never imports `domain`.**
+Note that transport hands raw values in as `ListInput` and the service converts to `domain.UserFilter` internally: **transport never imports `domain`.**
 
 ### PublicList — cursor (keyset) paging
 
-The second read shape, for unauthenticated callers. It exists separately because the two callers
-have different costs and different exposure:
+The second read shape, for unauthenticated callers. It exists separately because the two callers have different costs and different exposure:
 
 - Reads `limit+1` rows to learn `HasMore` without a second query, then trims the extra.
-- Encodes the last kept id as the next cursor: `base64.RawURLEncoding(strconv.FormatInt(id))`.
-  Opaque, not encrypted — clients can't hand-craft offsets, but it is not a secret.
+- Encodes the last kept id as the next cursor: `base64.RawURLEncoding(strconv.FormatInt(id))`. Opaque, not encrypted — clients can't hand-craft offsets, but it is not a secret.
 - Keyset (`id > cursor`) stays stable under concurrent inserts and avoids deep-`OFFSET` scans.
-- Projects to `PublicOutput` — **email + name only**. No id, no timestamps: an anonymous caller
-  learns nothing beyond the directory fields.
-- A malformed cursor is `errors.L(locale.InvalidRequest)` (400), not a 500 — the client sent
-  back a token we issued, so a bad one is a bad request.
+- Projects to `PublicOutput` — **email + name only**. No id, no timestamps: an anonymous caller learns nothing beyond the directory fields.
+- A malformed cursor is `errors.L(locale.InvalidRequest)` (400), not a 500 — the client sent back a token we issued, so a bad one is a bad request.
 
 ### Login — uniform failure, uniform timing
 
@@ -151,10 +128,7 @@ have different costs and different exposure:
 // hash so wall-clock time matches the bad-password path.
 ```
 
-Both failure paths return `errors.L(locale.InvalidCredentials)`. Equal *status* is the easy half;
-equal *timing* is the half that gets forgotten. `bcrypt.CompareHashAndPassword` is CPU-bound, so
-a missing user would return in microseconds while a wrong password takes ~100ms — a reliable
-account-enumeration oracle even with identical response bodies. The fix:
+Both failure paths return `errors.L(locale.InvalidCredentials)`. Equal _status_ is the easy half; equal _timing_ is the half that gets forgotten. `bcrypt.CompareHashAndPassword` is CPU-bound, so a missing user would return in microseconds while a wrong password takes ~100ms — a reliable account-enumeration oracle even with identical response bodies. The fix:
 
 ```go
 var (
@@ -170,17 +144,13 @@ func (s *Service) primeDummyHash() {
 }
 ```
 
-`Login` calls `primeDummyHash()` first, and on the not-found path runs
-`_ = s.hasher.Verify(dummyHash, input.Password)` before returning. One bcrypt op is paid at
-first miss; every miss after that costs the same as a real verify.
+`Login` calls `primeDummyHash()` first, and on the not-found path runs `_ = s.hasher.Verify(dummyHash, input.Password)` before returning. One bcrypt op is paid at first miss; every miss after that costs the same as a real verify.
 
-On success it builds an `identity.UserPrincipal`, signs it, and returns the token plus
-`ExpiresIn` in seconds (RFC 6749 `expires_in`) — the transport does no token work at all.
+On success it builds an `identity.UserPrincipal`, signs it, and returns the token plus `ExpiresIn` in seconds (RFC 6749 `expires_in`) — the transport does no token work at all.
 
 ## internal/usecase/user/dto.go
 
-Plain structs, no tags. The transport layer owns `json`/`validate`; the assembler maps between
-the two ([07](07-transport-layer.md)).
+Plain structs, no tags. The transport layer owns `json`/`validate`; the assembler maps between the two ([07](07-transport-layer.md)).
 
 ```go
 type RegisterInput struct{ Email, Name, Password string }
@@ -220,21 +190,15 @@ type LoginOutput struct {
 }
 ```
 
-Note there is no `Output` for `Delete` and no wrapper struct on the port side: the repository
-returns `[]*entity.User` and a count, and the usecase composes `ListOutput` itself. Result
-structs in the port would force both read shapes to share one type.
+Note there is no `Output` for `Delete` and no wrapper struct on the port side: the repository returns `[]*entity.User` and a count, and the usecase composes `ListOutput` itself. Result structs in the port would force both read shapes to share one type.
 
 ### Do you need a usecase DTO at all?
 
-The **filter passthrough rule** from [05](05-domain-layer.md#internaldomainusergo--repository-port--filter-one-file-per-aggregate):
-if the usecase does zero transformation, let the transport assembler build `domain.UserFilter`
-directly and skip the DTO. The shipped `List` *does* clamp, so `ListInput` earns its place.
+The **filter passthrough rule** from [05](05-domain-layer.md#internaldomainusergo--repository-port--filter-one-file-per-aggregate): if the usecase does zero transformation, let the transport assembler build `domain.UserFilter` directly and skip the DTO. The shipped `List` _does_ clamp, so `ListInput` earns its place.
 
 ## Package naming: the `svc` alias
 
-Usecase packages are named after the aggregate (`package user`) but are **always imported with a
-`svc` suffix** at call sites, because the transport package for the same feature is also called
-`user`:
+Usecase packages are named after the aggregate (`package user`) but are **always imported with a `svc` suffix** at call sites, because the transport package for the same feature is also called `user`:
 
 ```go
 import usersvc "{module}/internal/usecase/user"
@@ -248,9 +212,7 @@ func NewHandler(svc *usersvc.Service) *Handler { … }
 
 **Not scaffolded.**
 
-A domain service interface lives in `domain/service/`
-([05](05-domain-layer.md#internaldomainservicepricing_servicego)) but its implementation belongs
-in `usecase/`, because it is pure business logic with no external system behind it:
+A domain service interface lives in `domain/service/` ([05](05-domain-layer.md#internaldomainservicepricing_servicego)) but its implementation belongs in `usecase/`, because it is pure business logic with no external system behind it:
 
 ```go
 package pricing

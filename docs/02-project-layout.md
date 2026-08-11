@@ -10,11 +10,7 @@ nova new {project} --module=… --transport={http|grpc|worker} --http-framework=
   --queue=kafka --config=yaml --di=wire --docker --ci=github
 ```
 
-Transports are **mutually exclusive** (`Transport` is a single string), so no one run produces
-all of `cmd/api.go`, `cmd/grpc.go` and `cmd/worker.go` — lines marked `[HTTP]`, `[gRPC]` and
-`[worker]` tell you which run emits what, and `[--flag]` marks the other conditionals. See
-[internal/generator/generator.go](../internal/generator/generator.go) (`buildFileList`) for the
-authoritative selection logic.
+Transports are **mutually exclusive** (`Transport` is a single string), so no one run produces all of `cmd/api.go`, `cmd/grpc.go` and `cmd/worker.go` — lines marked `[HTTP]`, `[gRPC]` and `[worker]` tell you which run emits what, and `[--flag]` marks the other conditionals. See [internal/generator/generator.go](../internal/generator/generator.go) (`buildFileList`) for the authoritative selection logic.
 
 ```bash
 {project}/                                  # Root of the generated module
@@ -195,22 +191,8 @@ authoritative selection logic.
 
 ## Notes on placement that differ from older versions of this spec
 
-- HTTP responses are split in two. The **envelope** (`pkg/httputil/response.go`) is
-  framework-free — it imports no HTTP framework and no `internal/` package, so it can live in
-  `pkg/`. The **writer** (`internal/transport/http/httpwriter/writer.go`) binds requests and
-  serializes that envelope through the chosen framework (`*fiber.Ctx`, `*gin.Context`, …), so it
-  lives under `transport/http/` where the framework coupling belongs. Locale reaches both via
-  `context.Context`, so neither imports the middleware package.
-- `observability/` lives in `pkg/` as a **port** (Logger interface). The implementation lives in
-  `internal/infrastructure/logger/`. This keeps inner layers (`usecase`, `adapter/repository`)
-  able to depend on the logger via `logctx.From(ctx)` without importing infrastructure.
-- `jwt/` lives in `infrastructure/`, not `adapter/`. Signing and verifying are pure computation,
-  and verification is called only by the auth middleware — so per
-  [04](04-placement-rationale.md#if-only-transport-calls-it--no-domain-interface) no domain
-  interface is needed for the middleware path, and the package belongs with other technical
-  bootstrapping.
-- `tx_manager.go` is split: the interface lives in `domain/`, the postgres implementation in
-  `adapter/repository/postgres/`. Usecases inject `domain.TxManager` and call it without knowing
-  which DB is wired in.
-- `di/provider.go` and `di/app.go` are emitted for **any** transport; only the graph file itself
-  is DI-specific (`wire.go` vs `fx.go` + `fx_provider.go`).
+- HTTP responses are split in two. The **envelope** (`pkg/httputil/response.go`) is framework-free — it imports no HTTP framework and no `internal/` package, so it can live in `pkg/`. The **writer** (`internal/transport/http/httpwriter/writer.go`) binds requests and serializes that envelope through the chosen framework (`*fiber.Ctx`, `*gin.Context`, …), so it lives under `transport/http/` where the framework coupling belongs. Locale reaches both via `context.Context`, so neither imports the middleware package.
+- `observability/` lives in `pkg/` as a **port** (Logger interface). The implementation lives in `internal/infrastructure/logger/`. This keeps inner layers (`usecase`, `adapter/repository`) able to depend on the logger via `logctx.From(ctx)` without importing infrastructure.
+- `jwt/` lives in `infrastructure/`, not `adapter/`. Signing and verifying are pure computation, and verification is called only by the auth middleware — so per [04](04-placement-rationale.md#if-only-transport-calls-it--no-domain-interface) no domain interface is needed for the middleware path, and the package belongs with other technical bootstrapping.
+- `tx_manager.go` is split: the interface lives in `domain/`, the postgres implementation in `adapter/repository/postgres/`. Usecases inject `domain.TxManager` and call it without knowing which DB is wired in.
+- `di/provider.go` and `di/app.go` are emitted for **any** transport; only the graph file itself is DI-specific (`wire.go` vs `fx.go` + `fx_provider.go`).

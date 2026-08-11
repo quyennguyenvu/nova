@@ -1,12 +1,8 @@
 # 8. Adapter layer
 
-Layer 3 — implementations of domain ports that carry out business operations against external
-systems. Repositories, caches, search indexes, event publishers.
-([index](README.md))
+Layer 3 — implementations of domain ports that carry out business operations against external systems. Repositories, caches, search indexes, event publishers. ([index](README.md))
 
-An adapter answers "does this fulfil a domain port by talking to an external system?" with yes.
-Anything that merely *creates* the client is infrastructure — see the decision guide in
-[03](03-architecture-rules.md#31-adapter-vs-infrastructure-the-decision-guide).
+An adapter answers "does this fulfil a domain port by talking to an external system?" with yes. Anything that merely _creates_ the client is infrastructure — see the decision guide in [03](03-architecture-rules.md#31-adapter-vs-infrastructure-the-decision-guide).
 
 ```bash
 adapter/
@@ -53,9 +49,7 @@ A SQL repository is deliberately split across three concerns, so no file does tw
                               └──────────────────────────┘
 ```
 
-The pair exists to solve one problem: **a repository method must join an ambient transaction
-without knowing whether one is running.** The usecase says `txManager.WithinTx(ctx, fn)`; every
-repository call inside `fn` silently uses that transaction.
+The pair exists to solve one problem: **a repository method must join an ambient transaction without knowing whether one is running.** The usecase says `txManager.WithinTx(ctx, fn)`; every repository call inside `fn` silently uses that transaction.
 
 ### tx_manager.go — implements domain.TxManager
 
@@ -89,18 +83,11 @@ func (t *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 
 Three things to preserve if you touch this:
 
-- **`defer Rollback` is unconditional.** After a successful `Commit`, the rollback is a no-op
-  error that we deliberately discard. This is what guarantees no path leaks a connection — not
-  even a panic in `fn`.
-- **Nesting reuses, never nests.** `WithinTx` inside `WithinTx` runs `fn` on the existing
-  transaction rather than opening a second one, so composing two usecase methods can't deadlock
-  against itself. If you need genuine nesting, that's savepoints — a different method.
-- **`txKey struct{}`** is an unexported zero-size type, so no other package can collide with the
-  context key or read the transaction out.
+- **`defer Rollback` is unconditional.** After a successful `Commit`, the rollback is a no-op error that we deliberately discard. This is what guarantees no path leaks a connection — not even a panic in `fn`.
+- **Nesting reuses, never nests.** `WithinTx` inside `WithinTx` runs `fn` on the existing transaction rather than opening a second one, so composing two usecase methods can't deadlock against itself. If you need genuine nesting, that's savepoints — a different method.
+- **`txKey struct{}`** is an unexported zero-size type, so no other package can collide with the context key or read the transaction out.
 
-The interface lives in `domain/`, the implementation here: the usecase injects
-`domain.TxManager` and never learns which database is wired in
-([02](02-project-layout.md#notes-on-placement-that-differ-from-older-versions-of-this-spec)).
+The interface lives in `domain/`, the implementation here: the usecase injects `domain.TxManager` and never learns which database is wired in ([02](02-project-layout.md#notes-on-placement-that-differ-from-older-versions-of-this-spec)).
 
 ### qx.go — the TX-aware query executor
 
@@ -119,9 +106,7 @@ func (q *qx) Q(ctx context.Context) *dbgen.Queries {
 }
 ```
 
-`base` is built once in `newQX`, so the common (non-transactional) path allocates nothing. The
-type and constructor are **unexported** — `qx` is an implementation detail of this package, not
-something a usecase should see.
+`base` is built once in `newQX`, so the common (non-transactional) path allocates nothing. The type and constructor are **unexported** — `qx` is an implementation detail of this package, not something a usecase should see.
 
 ### user_repository.go
 
@@ -139,9 +124,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 }
 ```
 
-Note the constructor takes the **pool**, not a `*qx`: the executor is an internal detail, so DI
-never has to know it exists. `qx` is held as a field rather than embedded — embedding would
-promote `Q` onto the repository's public method set.
+Note the constructor takes the **pool**, not a `*qx`: the executor is an internal detail, so DI never has to know it exists. `qx` is held as a field rather than embedded — embedding would promote `Q` onto the repository's public method set.
 
 Every method is three lines: call sqlc, wrap the error with context, map the row.
 
@@ -158,14 +141,9 @@ func (r *UserRepository) GetByID(ctx context.Context, id int64) (*entity.User, e
 }
 ```
 
-**Translating `pgx.ErrNoRows` → `errors.ErrNotFound` is the adapter's job, and it is the whole
-reason this is an adapter and not infrastructure.** A driver sentinel is a storage detail; the
-usecase checks `errors.Is(err, errors.ErrNotFound)` and stays portable. Swap postgres for mysql
-and `sql.ErrNoRows` is translated to the same sentinel by the mysql variant.
+**Translating `pgx.ErrNoRows` → `errors.ErrNotFound` is the adapter's job, and it is the whole reason this is an adapter and not infrastructure.** A driver sentinel is a storage detail; the usecase checks `errors.Is(err, errors.ErrNotFound)` and stays portable. Swap postgres for mysql and `sql.ErrNoRows` is translated to the same sentinel by the mysql variant.
 
-`stderrors` is the aliased standard library `errors` — the project's own `pkg/errors` owns the
-unqualified name. Both are needed here: `stderrors.Is` against the driver sentinel, `errors.Wrapf`
-for the app error.
+`stderrors` is the aliased standard library `errors` — the project's own `pkg/errors` owns the unqualified name. Both are needed here: `stderrors.Is` against the driver sentinel, `errors.Wrapf` for the app error.
 
 ### mapper/ — pure row ↔ entity functions
 
@@ -174,9 +152,7 @@ for the app error.
 // One file per entity. All functions are pure — no DB handles, no context.
 ```
 
-Four functions per entity: `UserToEntity`, `UsersToEntities`, `UserToCreateParams`,
-`UserToUpdateParams`. Splitting them out keeps the repository file readable at a glance and makes
-the mapping unit-testable with no database.
+Four functions per entity: `UserToEntity`, `UsersToEntities`, `UserToCreateParams`, `UserToUpdateParams`. Splitting them out keeps the repository file readable at a glance and makes the mapping unit-testable with no database.
 
 This is also where the storage-vs-domain naming gap is absorbed:
 
@@ -199,15 +175,11 @@ func UserToCreateParams(u *entity.User) dbgen.CreateUserParams {
 }
 ```
 
-`pgtype.Timestamptz` never escapes this package — that's the point. `UserToUpdateParams` carries
-only `ID` and `Name`, matching what `UpdateUser` actually sets.
+`pgtype.Timestamptz` never escapes this package — that's the point. `UserToUpdateParams` carries only `ID` and `Name`, matching what `UpdateUser` actually sets.
 
 ### The mysql variant
 
-Same shape, same file names, different types: `*sql.DB` instead of `*pgxpool.Pool`, `*sql.Tx`
-instead of `pgx.Tx`, `sql.ErrNoRows` instead of `pgx.ErrNoRows`, and `CreateUser` is
-`:execlastid` (returning the insert ID) rather than `:one … RETURNING *`. The generator picks the
-directory from `--database`; both trees are always in the template tree.
+Same shape, same file names, different types: `*sql.DB` instead of `*pgxpool.Pool`, `*sql.Tx` instead of `pgx.Tx`, `sql.ErrNoRows` instead of `pgx.ErrNoRows`, and `CreateUser` is `:execlastid` (returning the insert ID) rather than `:one … RETURNING *`. The generator picks the directory from `--database`; both trees are always in the template tree.
 
 ## sqlc — configuration, migrations, queries
 
@@ -243,14 +215,10 @@ sql:
 
 Two things this config does deliberately:
 
-- **`schema: ["migrations"]`** — sqlc reads the *migration* files as its schema source, so there
-  is exactly one definition of the tables. A separate `schema.sql` is a second source of truth
-  that drifts.
-- **The `jsonb` → `json.RawMessage` override** keeps the audit log's payload column as raw bytes
-  instead of a driver-specific JSON type, so the mapper doesn't have to re-encode it.
+- **`schema: ["migrations"]`** — sqlc reads the _migration_ files as its schema source, so there is exactly one definition of the tables. A separate `schema.sql` is a second source of truth that drifts.
+- **The `jsonb` → `json.RawMessage` override** keeps the audit log's payload column as raw bytes instead of a driver-specific JSON type, so the mapper doesn't have to re-encode it.
 
-The mysql config differs in engine, output path, `sql_package: "database/sql"`, the `json`
-db_type, and adds `emit_prepared_queries: true`.
+The mysql config differs in engine, output path, `sql_package: "database/sql"`, the `json` db_type, and adds `emit_prepared_queries: true`.
 
 ### Migration
 
@@ -267,15 +235,9 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX idx_users_email ON users (email);
 ```
 
-golang-migrate format (`.up.sql`/`.down.sql`, timestamp-prefixed). `TIMESTAMP WITH TIME ZONE`
-rather than plain `TIMESTAMP` — storing wall-clock time without a zone is the classic source of
-one-hour bugs. The `UNIQUE` on `email` is the real uniqueness guarantee; the usecase's
-`GetByEmail` check only exists to produce a friendlier message
-([06](06-usecase-layer.md#register--check-hash-create-publish)).
+golang-migrate format (`.up.sql`/`.down.sql`, timestamp-prefixed). `TIMESTAMP WITH TIME ZONE` rather than plain `TIMESTAMP` — storing wall-clock time without a zone is the classic source of one-hour bugs. The `UNIQUE` on `email` is the real uniqueness guarantee; the usecase's `GetByEmail` check only exists to produce a friendlier message ([06](06-usecase-layer.md#register--check-hash-create-publish)).
 
-> **Known bug:** `nova new`'s `create_users_table` migration emits postgres DDL (`BIGSERIAL`,
-> `TIMESTAMP WITH TIME ZONE`) even for a `--database=mysql` project. `nova add repository` does
-> emit correct per-engine DDL — see [internal/generator/repository_sqlc.go](../internal/generator/repository_sqlc.go).
+> **Known bug:** `nova new`'s `create_users_table` migration emits postgres DDL (`BIGSERIAL`, `TIMESTAMP WITH TIME ZONE`) even for a `--database=mysql` project. `nova add repository` does emit correct per-engine DDL — see [internal/generator/repository_sqlc.go](../internal/generator/repository_sqlc.go).
 
 ### Queries
 
@@ -300,28 +262,21 @@ ORDER BY id
 LIMIT sqlc.arg('limit')::int;
 ```
 
-The `sqlc.arg('email') = '' OR email = …` idiom is how an optional filter stays a **single
-prepared statement** — no string concatenation, no SQL injection surface, one query plan. Named
-args (rather than `$1`) mean `ListUsersParams` has readable field names, and `CountUsers` can
-share the `email` parameter with `ListUsers` while ignoring limit/offset, exactly as the port
-contract promises ([05](05-domain-layer.md)).
+The `sqlc.arg('email') = '' OR email = …` idiom is how an optional filter stays a **single prepared statement** — no string concatenation, no SQL injection surface, one query plan. Named args (rather than `$1`) mean `ListUsersParams` has readable field names, and `CountUsers` can share the `email` parameter with `ListUsers` while ignoring limit/offset, exactly as the port contract promises ([05](05-domain-layer.md)).
 
-`ListUsersAfter` is the keyset read behind `PublicList`: `id > cursor ORDER BY id LIMIT n`. No
-`OFFSET`, so cost doesn't grow with page depth.
+`ListUsersAfter` is the keyset read behind `PublicList`: `id > cursor ORDER BY id LIMIT n`. No `OFFSET`, so cost doesn't grow with page depth.
 
-Every read is `SELECT *`, which is safe *because* sqlc regenerates the row struct from the
-migration — add a column and `dbgen.User` grows a field, and the mapper (not the repository) is
-the only thing that needs touching.
+Every read is `SELECT *`, which is safe _because_ sqlc regenerates the row struct from the migration — add a column and `dbgen.User` grows a field, and the mapper (not the repository) is the only thing that needs touching.
 
 ## adapter/pubsub — the event publisher
 
 Three files, split so that swapping brokers touches exactly one:
 
-| File                | Broker-specific? | Contents                                   |
-| ------------------- | ---------------- | ------------------------------------------ |
-| `user_message.go`   | No               | Wire DTOs with `json` tags                 |
-| `user_publisher.go` | No               | One port method per event, maps → DTO      |
-| `publisher.go`      | **Yes**          | `publish()` transport + `Close()`          |
+| File                | Broker-specific? | Contents                              |
+| ------------------- | ---------------- | ------------------------------------- |
+| `user_message.go`   | No               | Wire DTOs with `json` tags            |
+| `user_publisher.go` | No               | One port method per event, maps → DTO |
+| `publisher.go`      | **Yes**          | `publish()` transport + `Close()`     |
 
 ```go
 // Wire-format message DTOs — these own json tags.
@@ -351,16 +306,11 @@ func (p *Publisher) PublishUserCreated(ctx context.Context, evt domain.UserCreat
 └─────────────────────┘      └────────────────────────┘      └──────────────────────┘
 ```
 
-The domain event never carries serialization concerns, so renaming a JSON field is a wire-format
-change that cannot reach the domain. The topic string lives here and is duplicated (with a
-pointer comment) in the worker's handler — see
-[07](07-transport-layer.md#the-ack-decision-is-the-interesting-part) for why that duplication is
-intentional.
+The domain event never carries serialization concerns, so renaming a JSON field is a wire-format change that cannot reach the domain. The topic string lives here and is duplicated (with a pointer comment) in the worker's handler — see [07](07-transport-layer.md#the-ack-decision-is-the-interesting-part) for why that duplication is intentional.
 
 ### The broker variant
 
-`publisher.go` is rendered per `--queue`, and the exported surface is identical either way, so DI
-never changes:
+`publisher.go` is rendered per `--queue`, and the exported surface is identical either way, so DI never changes:
 
 ```go
 // wire.go
@@ -368,15 +318,11 @@ pubsub.NewPublisher,
 wire.Bind(new(domain.UserPublisher), new(*pubsub.Publisher)),
 ```
 
-- **kafka** — wraps `sarama.SyncProducer`. Checks `ctx.Err()` before marshalling, so a
-  cancelled request doesn't publish.
-- **rabbitmq** — opens a channel and declares a durable `events` topic exchange in the
-  constructor (returning an error, so a failed declare fails startup rather than the first
-  publish). The topic name becomes the routing key.
+- **kafka** — wraps `sarama.SyncProducer`. Checks `ctx.Err()` before marshalling, so a cancelled request doesn't publish.
+- **rabbitmq** — opens a channel and declares a durable `events` topic exchange in the constructor (returning an error, so a failed declare fails startup rather than the first publish). The topic name becomes the routing key.
 - **nats** — a compiling stub returning `errors.L(locale.Unimplemented)`.
 
-Switching brokers in an existing project means re-rendering `publisher.go` and the
-`infrastructure/pubsub` factory. Usecases, handlers, and the other two files are untouched.
+Switching brokers in an existing project means re-rendering `publisher.go` and the `infrastructure/pubsub` factory. Usecases, handlers, and the other two files are untouched.
 
 ## adapter/repository/redis — cache-aside decorator
 
@@ -389,31 +335,23 @@ Switching brokers in an existing project means re-rendering `publisher.go` and t
 // GetByEmail (which bypasses cache) when credentials are required.
 ```
 
-`UserCacheRepository` implements `domain.UserRepository` by wrapping another
-`domain.UserRepository`, so the usecase is unaware it exists. Per-method behaviour:
+`UserCacheRepository` implements `domain.UserRepository` by wrapping another `domain.UserRepository`, so the usecase is unaware it exists. Per-method behaviour:
 
-| Method                        | Behaviour                                                  |
-| ----------------------------- | ---------------------------------------------------------- |
-| `GetByID`                     | Read-through, 15-min TTL                                   |
-| `GetByEmail`                  | **Bypasses cache** — it's the login path, needs the hash    |
-| `Update`, `Delete`            | Write through, then `DEL` the key                          |
-| `Create`                      | Passthrough (nothing to invalidate)                        |
-| `List`, `Count`, `ListAfter`  | Passthrough                                                |
+| Method                       | Behaviour                                                |
+| ---------------------------- | -------------------------------------------------------- |
+| `GetByID`                    | Read-through, 15-min TTL                                 |
+| `GetByEmail`                 | **Bypasses cache** — it's the login path, needs the hash |
+| `Update`, `Delete`           | Write through, then `DEL` the key                        |
+| `Create`                     | Passthrough (nothing to invalidate)                      |
+| `List`, `Count`, `ListAfter` | Passthrough                                              |
 
 Three asymmetries that are all deliberate:
 
-- **Read failures degrade, write failures don't.** A cache read error or a decode error logs a
-  warning and falls through to the database; a refill failure logs and returns the row anyway.
-  But a failed `DEL` after a write **returns an error**, because silently leaving a stale entry
-  is worse than a failed request the caller can retry.
-- **`GetByEmail` never caches.** It is the only read that needs `PasswordHash`, and the cached
-  projection deliberately omits credentials.
-- **List/Count/ListAfter don't cache.** Any write to the table invalidates every cached page, so
-  the hit rate rarely pays for the staleness.
+- **Read failures degrade, write failures don't.** A cache read error or a decode error logs a warning and falls through to the database; a refill failure logs and returns the row anyway. But a failed `DEL` after a write **returns an error**, because silently leaving a stale entry is worse than a failed request the caller can retry.
+- **`GetByEmail` never caches.** It is the only read that needs `PasswordHash`, and the cached projection deliberately omits credentials.
+- **List/Count/ListAfter don't cache.** Any write to the table invalidates every cached page, so the hit rate rarely pays for the staleness.
 
-Enable it by binding `domain.UserRepository` to
-`NewUserCacheRepository(<concrete repo>, cacheClient)` in `infrastructure/di`. It is **not** wired
-by default — where caching is correct is a domain decision the generator can't make.
+Enable it by binding `domain.UserRepository` to `NewUserCacheRepository(<concrete repo>, cacheClient)` in `infrastructure/di`. It is **not** wired by default — where caching is correct is a domain decision the generator can't make.
 
 ## adapter/repository/elasticsearch — derived read model
 
@@ -424,19 +362,13 @@ by default — where caching is correct is a domain decision the generator can't
 // on writes.
 ```
 
-Not a decorator — a separate adapter with `Index`, `Delete`, `Search`. The indexed projection
-(`userDoc`) is id + name + email: only the fields a query matches on, never credentials. `Search`
-returns matching **IDs**, which you hydrate through the SQL repository, so the index can never
-serve stale field values.
+Not a decorator — a separate adapter with `Index`, `Delete`, `Search`. The indexed projection (`userDoc`) is id + name + email: only the fields a query matches on, never credentials. `Search` returns matching **IDs**, which you hydrate through the SQL repository, so the index can never serve stale field values.
 
-Also not wired by default. Enabling it means calling `Index`/`Delete` on every user write —
-which is precisely the consistency burden you're opting into, and why the generator won't decide
-it for you.
+Also not wired by default. Enabling it means calling `Index`/`Delete` on every user write — which is precisely the consistency burden you're opting into, and why the generator won't decide it for you.
 
 ## Ports implemented elsewhere
 
-Two ports are satisfied outside this layer, because satisfying a port is necessary but not
-sufficient for `adapter/`:
+Two ports are satisfied outside this layer, because satisfying a port is necessary but not sufficient for `adapter/`:
 
 - `domain/security.PasswordHasher` → `infrastructure/security/bcrypt.go` (pure computation)
 - `pkg/observability.Logger` → `infrastructure/logger/zerolog.go` (cross-cutting)

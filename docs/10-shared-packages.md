@@ -1,7 +1,6 @@
 # 10. Shared packages (pkg/)
 
-Cross-cutting utilities with **no layer affiliation**. Nothing here imports `internal/`, and
-nothing here imports a framework. ([index](README.md))
+Cross-cutting utilities with **no layer affiliation**. Nothing here imports `internal/`, and nothing here imports a framework. ([index](README.md))
 
 ```bash
 pkg/
@@ -12,9 +11,7 @@ pkg/
 └── observability/     # Logger port
 ```
 
-That "no `internal/`, no framework" rule is what makes `pkg/` legitimate rather than a dumping
-ground — see [04](04-placement-rationale.md#pkg-vs-internalshared--do-you-actually-need-pkg) for
-whether you want `internal/shared/` instead.
+That "no `internal/`, no framework" rule is what makes `pkg/` legitimate rather than a dumping ground — see [04](04-placement-rationale.md#pkg-vs-internalshared--do-you-actually-need-pkg) for whether you want `internal/shared/` instead.
 
 ## pkg/errors
 
@@ -30,9 +27,7 @@ The design brief, from the package doc:
 // from and the path it took to get out — without dumping a full stack.
 ```
 
-Three deliberate non-goals: **no stack dumps** (a wrap trail is cheaper and more readable), **no
-status codes passed to `Wrap`** (classification happens where the error originates), and **no
-language in business code** (translation happens at the boundary).
+Three deliberate non-goals: **no stack dumps** (a wrap trail is cheaper and more readable), **no status codes passed to `Wrap`** (classification happens where the error originates), and **no language in business code** (translation happens at the boundary).
 
 ### The type
 
@@ -47,8 +42,7 @@ type AppError struct {
 }
 ```
 
-`Args` and `Err` are `json:"-"` — arguments may contain user data and the cause is diagnostic.
-The client sees a translated message; the operator sees the cause in the log.
+`Args` and `Err` are `json:"-"` — arguments may contain user data and the cause is diagnostic. The client sees a translated message; the operator sees the cause in the log.
 
 ### Sentinels and the re-exports
 
@@ -70,13 +64,9 @@ var (
 )
 ```
 
-The re-exports mean a file needs one `errors` import, not two — which is why the repository files
-alias the standard library as `stderrors` when they need it for a driver sentinel
-([08](08-adapter-layer.md#user_repositorygo)).
+The re-exports mean a file needs one `errors` import, not two — which is why the repository files alias the standard library as `stderrors` when they need it for a driver sentinel ([08](08-adapter-layer.md#user_repositorygo)).
 
-Sentinels are the adapter→usecase vocabulary: the repository maps `pgx.ErrNoRows` to
-`ErrNotFound`, and the usecase checks `errors.Is(err, errors.ErrNotFound)` without knowing the
-driver.
+Sentinels are the adapter→usecase vocabulary: the repository maps `pgx.ErrNoRows` to `ErrNotFound`, and the usecase checks `errors.Is(err, errors.ErrNotFound)` without knowing the driver.
 
 ### Two constructors, two intents
 
@@ -89,8 +79,7 @@ return errors.L(locale.UserEmailExists, input.Email).
 return errors.Wrapf(err, "register user email=%s: lookup", input.Email)
 ```
 
-`L(code, args…)` derives the HTTP status from the code (below) and captures one frame.
-`Wrap`/`Wrapf` append a frame and **preserve the existing classification**:
+`L(code, args…)` derives the HTTP status from the code (below) and captures one frame. `Wrap`/`Wrapf` append a frame and **preserve the existing classification**:
 
 ```go
 // If err is already an *AppError, the frame is appended and Code/Message/
@@ -98,9 +87,7 @@ return errors.Wrapf(err, "register user email=%s: lookup", input.Email)
 // authoritative.
 ```
 
-That is the rule the whole design rests on: **classify once, at the layer that knows what went
-wrong.** Twelve layers of `Wrapf` on a 404 still produce a 404. And `Wrap(nil, …)` returns nil, so
-`return errors.Wrap(err, "…")` is safe unconditionally.
+That is the rule the whole design rests on: **classify once, at the layer that knows what went wrong.** Twelve layers of `Wrapf` on a 404 still produce a 404. And `Wrap(nil, …)` returns nil, so `return errors.Wrap(err, "…")` is safe unconditionally.
 
 `WithCause` attaches a diagnostic cause **without** changing the classification:
 
@@ -112,8 +99,7 @@ wrong.** Twelve layers of `Wrapf` on a 404 still produce a 404. And `Wrap(nil, �
 // failure mapped to a generic locale message) stays traceable by request_id.
 ```
 
-This is what lets `httpwriter.Bind` return an identical generic 400 to every client while the
-operator still sees which field failed ([07](07-transport-layer.md#internaltransporthttphttpwriterwritergo)).
+This is what lets `httpwriter.Bind` return an identical generic 400 to every client while the operator still sees which field failed ([07](07-transport-layer.md#internaltransporthttphttpwriterwritergo)).
 
 ### The frame trail
 
@@ -122,13 +108,9 @@ operator still sees which field failed ([07](07-transport-layer.md#internaltrans
 // suitable for a single structured log field at the transport boundary.
 ```
 
-`Frames()` (innermost first), `Origin()` (the innermost frame), `Trace()` (the joined line).
-`shortFile` renders `user/service.go` rather than an absolute build path — deliberately matching
-the logger's `caller` format, so a trace entry and a log caller field read the same way.
+`Frames()` (innermost first), `Origin()` (the innermost frame), `Trace()` (the joined line). `shortFile` renders `user/service.go` rather than an absolute build path — deliberately matching the logger's `caller` format, so a trace entry and a log caller field read the same way.
 
-A frame is `runtime.Caller` only — no `runtime.Callers` walk, no symbolization of a full stack.
-That's the cost/benefit trade: you get the path the error took through *your* layers, which is the
-part you actually read.
+A frame is `runtime.Caller` only — no `runtime.Callers` walk, no symbolization of a full stack. That's the cost/benefit trade: you get the path the error took through _your_ layers, which is the part you actually read.
 
 ### localeHTTPStatus — the single source of truth
 
@@ -143,28 +125,26 @@ part you actually read.
 // new codes here as you introduce them.
 ```
 
-| Status | Locale codes                                        |
-| ------ | --------------------------------------------------- |
-| 400    | `InvalidRequest`                                    |
-| 401    | `Unauthorized`, `InvalidCredentials`                |
-| 403    | `Forbidden`                                         |
-| 404    | `RecordNotFound`, `UserNotFound`                    |
-| 405    | `MethodNotAllowed`                                  |
-| 408    | `RequestTimeout`                                    |
-| 409    | `UserEmailExists`, `Conflict`                       |
-| 413    | `PayloadTooLarge`                                   |
-| 415    | `UnsupportedMediaType`                              |
-| 422    | `ValidationFailed`                                  |
-| 429    | `TooManyRequests`                                   |
-| 500    | `InternalError`                                     |
-| 501    | `Unimplemented`                                     |
-| 502    | `BadGateway`                                        |
-| 503    | `ServiceUnavailable`                                |
-| 504    | `GatewayTimeout`                                    |
+| Status | Locale codes                         |
+| ------ | ------------------------------------ |
+| 400    | `InvalidRequest`                     |
+| 401    | `Unauthorized`, `InvalidCredentials` |
+| 403    | `Forbidden`                          |
+| 404    | `RecordNotFound`, `UserNotFound`     |
+| 405    | `MethodNotAllowed`                   |
+| 408    | `RequestTimeout`                     |
+| 409    | `UserEmailExists`, `Conflict`        |
+| 413    | `PayloadTooLarge`                    |
+| 415    | `UnsupportedMediaType`               |
+| 422    | `ValidationFailed`                   |
+| 429    | `TooManyRequests`                    |
+| 500    | `InternalError`                      |
+| 501    | `Unimplemented`                      |
+| 502    | `BadGateway`                         |
+| 503    | `ServiceUnavailable`                 |
+| 504    | `GatewayTimeout`                     |
 
-Because the table is framework-free, a gRPC or worker transport maps the same code to the same
-meaning without a second table. **Adding a locale code means adding a row here** — omitting it
-silently yields 500.
+Because the table is framework-free, a gRPC or worker transport maps the same code to the same meaning without a second table. **Adding a locale code means adding a row here** — omitting it silently yields 500.
 
 ### classify and ToAppError
 
@@ -176,12 +156,9 @@ silently yields 500.
 // leak out.
 ```
 
-`*locale.LocaleError` → its own code; a package sentinel → its canonical code; anything else →
-`InternalError` (500). So an unclassified error from a third-party library can never leak its raw
-text to a client.
+`*locale.LocaleError` → its own code; a package sentinel → its canonical code; anything else → `InternalError` (500). So an unclassified error from a third-party library can never leak its raw text to a client.
 
-`ToAppError(err)` is the boundary normalizer: already an `AppError` → returned as-is with frames
-intact; otherwise classify and attach the cause.
+`ToAppError(err)` is the boundary normalizer: already an `AppError` → returned as-is with frames intact; otherwise classify and attach the cause.
 
 ### LogFields — for transports without middleware
 
@@ -194,8 +171,7 @@ intact; otherwise classify and attach the cause.
 //	log.Error("kafka: handle message", errors.LogFields(err)...)
 ```
 
-The worker has no access-log middleware to fold cause and trace in for it, so it calls this. One
-query shape works across HTTP and worker logs.
+The worker has no access-log middleware to fold cause and trace in for it, so it calls this. One query shape works across HTTP and worker logs.
 
 ### The AppError context stash
 
@@ -211,11 +187,7 @@ type appErrSlot struct{ err *AppError }
 type appErrSlotKey struct{}
 ```
 
-A pointer-to-struct in ctx is a mutable channel *upward* through an immutable value. It's the one
-place the codebase does this, and it's what buys "handlers never log":
-`Logging` installs the slot, `httpwriter.WriteError` fills it, `Logging` reads it after
-`c.Next()`. `StashAppError` no-ops when the slot is absent, so tests and background contexts are
-safe.
+A pointer-to-struct in ctx is a mutable channel _upward_ through an immutable value. It's the one place the codebase does this, and it's what buys "handlers never log": `Logging` installs the slot, `httpwriter.WriteError` fills it, `Logging` reads it after `c.Next()`. `StashAppError` no-ops when the slot is absent, so tests and background contexts are safe.
 
 ## pkg/locale
 
@@ -226,8 +198,7 @@ safe.
 // boundary via Translate(). HTTP-status mapping lives in pkg/errors.
 ```
 
-Note the division of labour: **codes and text here, status in `pkg/errors`.** Keeping the status
-table out of this package is what lets a non-HTTP transport use the same codes.
+Note the division of labour: **codes and text here, status in `pkg/errors`.** Keeping the status table out of this package is what lets a non-HTTP transport use the same codes.
 
 ### Codes are negative ints, banded by feature
 
@@ -260,8 +231,7 @@ const (
 )
 ```
 
-Negative so they can't be confused with an HTTP status in a response body, and banded so a new
-feature claims a range rather than appending to a flat list. A new aggregate takes `-1200`.
+Negative so they can't be confused with an HTTP status in a response body, and banded so a new feature claims a range rather than appending to a flat list. A new aggregate takes `-1200`.
 
 ### LocaleError carries args, not text
 
@@ -275,13 +245,9 @@ type LocaleError struct {
 }
 ```
 
-This is the mechanism behind "business code never names a language". `errors.L(locale.UserEmailExists,
-"a@b.com")` stores the email; only `Translate` decides whether the template is
-`"Email %s already exists"` or `"Email %s đã tồn tại"`.
+This is the mechanism behind "business code never names a language". `errors.L(locale.UserEmailExists, "a@b.com")` stores the email; only `Translate` decides whether the template is `"Email %s already exists"` or `"Email %s đã tồn tại"`.
 
-`Locale.Err()` / `Locale.ErrFormat(args…)` build a bare `LocaleError`, and `AsLocaleError` unwraps
-one. In practice usecase code goes through `errors.L` instead, which classifies the status at the
-same time — the bare constructors exist for code that doesn't want to depend on `pkg/errors`.
+`Locale.Err()` / `Locale.ErrFormat(args…)` build a bare `LocaleError`, and `AsLocaleError` unwraps one. In practice usecase code goes through `errors.L` instead, which classifies the status at the same time — the bare constructors exist for code that doesn't want to depend on `pkg/errors`.
 
 ### Translations register explicitly
 
@@ -294,18 +260,14 @@ var translations = map[Language]Mapping{}
 func NewMapping() { enMapping(); viMapping() }
 ```
 
-No `init()`, so registration order is explicit and testable. `cmd/root.go` calls it
-([11](11-di-and-entrypoints.md)) — a generated project that forgets to would serve
-`"unknown error: -1100"`.
+No `init()`, so registration order is explicit and testable. `cmd/root.go` calls it ([11](11-di-and-entrypoints.md)) — a generated project that forgets to would serve `"unknown error: -1100"`.
 
 ```go
 // Translate resolves a Locale code to the user's language.
 // Falls back to English if language or code is not found.
 ```
 
-Two fallbacks, in order: unknown language → English mapping; code missing from that mapping →
-English entry; still missing → `"unknown error: %d"`. A half-translated new language degrades to
-English per-string rather than blanking the message.
+Two fallbacks, in order: unknown language → English mapping; code missing from that mapping → English entry; still missing → `"unknown error: %d"`. A half-translated new language degrades to English per-string rather than blanking the message.
 
 ### Language in context
 
@@ -317,13 +279,11 @@ English per-string rather than blanking the message.
 // transport-specific code.
 ```
 
-`WithLanguage(ctx, lang)` / `LanguageFromContext(ctx)` (defaulting to `LangEn`). The middleware
-only parses the header; the ctx plumbing lives here so `pkg/` never depends on `internal/`.
+`WithLanguage(ctx, lang)` / `LanguageFromContext(ctx)` (defaulting to `LangEn`). The middleware only parses the header; the ctx plumbing lives here so `pkg/` never depends on `internal/`.
 
 ## pkg/httputil
 
-The **framework-free** half of the HTTP response story. Its framework-bound counterpart is
-`transport/http/httpwriter` ([07](07-transport-layer.md)).
+The **framework-free** half of the HTTP response story. Its framework-bound counterpart is `transport/http/httpwriter` ([07](07-transport-layer.md)).
 
 ```go
 // All success and error responses share a single shape:
@@ -345,8 +305,7 @@ The **framework-free** half of the HTTP response story. Its framework-bound coun
 // file:line — so you can see what ran and where it errored.
 ```
 
-That paragraph is the operational payoff of the whole logging design: one envelope field turns a
-user's screenshot into a complete server-side replay.
+That paragraph is the operational payoff of the whole logging design: one envelope field turns a user's screenshot into a complete server-side replay.
 
 ### Request ID lives here, not in transport
 
@@ -380,9 +339,7 @@ type PageMeta struct {
 }
 ```
 
-`NewPageMeta` derives `TotalPage` by ceil division and returns 0 rather than dividing by zero on a
-non-positive `perPage`. The two shapes are why the assembler has separate meta projections
-([07](07-transport-layer.md#assemblergo--the-only-place-that-maps)).
+`NewPageMeta` derives `TotalPage` by ceil division and returns 0 rather than dividing by zero on a non-positive `perPage`. The two shapes are why the assembler has separate meta projections ([07](07-transport-layer.md#assemblergo--the-only-place-that-maps)).
 
 ### ErrorResponseFromApp — the locale code becomes the client code
 
@@ -395,9 +352,7 @@ non-positive `perPage`. The two shapes are why the assembler has separate meta p
 // A nil app is treated as a generic 500 in the requested language.
 ```
 
-So the HTTP status says *category* (404) and `error.code` says *reason* (-1100 `UserNotFound` vs
--1003 `RecordNotFound`) — a client can branch on the specific code without string matching. The
-nil-app path means a bug in the caller still produces a valid, translated envelope.
+So the HTTP status says _category_ (404) and `error.code` says _reason_ (-1100 `UserNotFound` vs -1003 `RecordNotFound`) — a client can branch on the specific code without string matching. The nil-app path means a bug in the caller still produces a valid, translated envelope.
 
 ## pkg/observability — the Logger port
 
@@ -411,9 +366,7 @@ type Logger interface {
 }
 ```
 
-The port lives in `pkg/`, the implementation in `internal/infrastructure/logger`
-([09](09-infrastructure-layer.md)) — that inversion is what lets a usecase log without importing
-infrastructure.
+The port lives in `pkg/`, the implementation in `internal/infrastructure/logger` ([09](09-infrastructure-layer.md)) — that inversion is what lets a usecase log without importing infrastructure.
 
 ```go
 // The human-readable text is the msg argument — never also pass it as a
@@ -422,8 +375,7 @@ infrastructure.
 // duplicate field in the output.
 ```
 
-**Reserved keys: `time`, `level`, `caller`, plus `message`.** Passing one produces a duplicate JSON
-field, which most log pipelines resolve unpredictably.
+**Reserved keys: `time`, `level`, `caller`, plus `message`.** Passing one produces a duplicate JSON field, which most log pipelines resolve unpredictably.
 
 Tracing and metrics deliberately have no port here:
 
@@ -459,10 +411,6 @@ func With(ctx context.Context, log observability.Logger) context.Context
 func From(ctx context.Context) observability.Logger
 ```
 
-**`From` never returns nil.** That's why `logctx.From(ctx).Error(…)` appears inline throughout the
-adapters and usecases with no guard — a test or background goroutine gets the nop logger rather
-than a panic.
+**`From` never returns nil.** That's why `logctx.From(ctx).Error(…)` appears inline throughout the adapters and usecases with no guard — a test or background goroutine gets the nop logger rather than a panic.
 
-Note what this package does *not* do: it doesn't create loggers, and it doesn't depend on a
-concrete one. It depends only on the port, so the dependency direction stays
-`usecase → logctx → observability`, with `infrastructure/logger` plugged in at the bottom by DI.
+Note what this package does _not_ do: it doesn't create loggers, and it doesn't depend on a concrete one. It depends only on the port, so the dependency direction stays `usecase → logctx → observability`, with `infrastructure/logger` plugged in at the bottom by DI.

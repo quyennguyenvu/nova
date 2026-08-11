@@ -1,8 +1,6 @@
 # 9. Infrastructure layer
 
-Layer 4 — frameworks and drivers. **Technical capabilities, no business logic.** Connection
-factories, server bootstrap, config loading, logging, crypto, tracing, DI.
-([index](README.md))
+Layer 4 — frameworks and drivers. **Technical capabilities, no business logic.** Connection factories, server bootstrap, config loading, logging, crypto, tracing, DI. ([index](README.md))
 
 ```bash
 infrastructure/
@@ -30,15 +28,9 @@ func NewKafkaProducer(cfg config.KafkaConfig, log *logger.Logger) (sarama.SyncPr
 func NewHTTPServer(_ context.Context, cfg config.HTTPConfig, …) (*HTTPServer, func(), error)
 ```
 
-**Each component owns its own shutdown.** No `Close()` on a domain port, no central teardown
-function listing every resource. Wire composes the cleanups automatically and runs them in
-reverse construction order; fx's lifecycle hooks do the same
-([11](11-di-and-entrypoints.md#how-cleanup-works)). Adding a dependency therefore cannot leak it:
-if it needs teardown, its constructor returns the hook and the graph picks it up.
+**Each component owns its own shutdown.** No `Close()` on a domain port, no central teardown function listing every resource. Wire composes the cleanups automatically and runs them in reverse construction order; fx's lifecycle hooks do the same ([11](11-di-and-entrypoints.md#how-cleanup-works)). Adding a dependency therefore cannot leak it: if it needs teardown, its constructor returns the hook and the graph picks it up.
 
-The other consistent choice: **constructors verify connectivity**. Postgres pings, Redis pings,
-Elasticsearch pings, RabbitMQ declares its exchange. A misconfigured dependency fails at startup
-with a clear error rather than on the first request in production.
+The other consistent choice: **constructors verify connectivity**. Postgres pings, Redis pings, Elasticsearch pings, RabbitMQ declares its exchange. A misconfigured dependency fails at startup with a clear error rather than on the first request in production.
 
 ## config/ — one struct, three layers of value
 
@@ -86,21 +78,10 @@ Precedence, lowest to highest: **`base.yaml` → `<APP_ENV>.yaml` → environmen
 
 Four consequences worth understanding before you change this:
 
-- **`Load()` takes no path.** The YAML is `//go:embed`-ed, so the binary has no runtime
-  dependency on the working directory — the same image runs from `/`, from a scratch container,
-  from a Kubernetes job. The cost is that a config change is a rebuild, which is the intended
-  trade for a service image.
-- **`APP_ENV` is validated against a whitelist** (`EnvDev`, `EnvProd` from `constant.go`; `local`
-  is the third constant and loads base only). A typo'd `APP_ENV=prod` silently gets base defaults
-  rather than a missing-file error — check `constant.go` when an override doesn't apply.
-- **The split between YAML and `.env` is by *nature*, not convenience.** Operational tuning
-  (timeouts, pool sizes, bcrypt cost, sample ratio) lives in YAML and is reviewed in code review.
-  Secrets and per-deployment endpoints live in the environment. That's why `JWTConfig.PrivateKey`
-  and `PublicKey` carry **only** an `env:` tag and no YAML tag — they cannot be committed by
-  accident.
-- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`,
-  `RabbitMQ` sections only exist when the corresponding flag was set, so a worker project's
-  config has no HTTP block to misconfigure.
+- **`Load()` takes no path.** The YAML is `//go:embed`-ed, so the binary has no runtime dependency on the working directory — the same image runs from `/`, from a scratch container, from a Kubernetes job. The cost is that a config change is a rebuild, which is the intended trade for a service image.
+- **`APP_ENV` is validated against a whitelist** (`EnvDev`, `EnvProd` from `constant.go`; `local` is the third constant and loads base only). A typo'd `APP_ENV=prod` silently gets base defaults rather than a missing-file error — check `constant.go` when an override doesn't apply.
+- **The split between YAML and `.env` is by _nature_, not convenience.** Operational tuning (timeouts, pool sizes, bcrypt cost, sample ratio) lives in YAML and is reviewed in code review. Secrets and per-deployment endpoints live in the environment. That's why `JWTConfig.PrivateKey` and `PublicKey` carry **only** an `env:` tag and no YAML tag — they cannot be committed by accident.
+- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure.
 
 ### The sub-config projection
 
@@ -113,28 +94,22 @@ func NewHTTPServer(_ context.Context, cfg config.HTTPConfig, …)
 func LoginRateLimit(cfg config.LoginRateLimitConfig) fiber.Handler
 ```
 
-Wire projects these with `wire.FieldsOf` ([11](11-di-and-entrypoints.md)). The payoff is that a
-component's signature documents exactly what it reads, and no constructor can quietly start
-depending on an unrelated section. `transport/http.NewRouter` is the one exception — it takes
-`*config.Config` because it configures the framework from `HTTP` *and* branches on `AppEnv`.
+Wire projects these with `wire.FieldsOf` ([11](11-di-and-entrypoints.md)). The payoff is that a component's signature documents exactly what it reads, and no constructor can quietly start depending on an unrelated section. `transport/http.NewRouter` is the one exception — it takes `*config.Config` because it configures the framework from `HTTP` _and_ branches on `AppEnv`.
 
 ### Defaults that carry a warning
 
 ```yaml
-  cors:
-    # Production deployments MUST set CORS_ALLOW_ORIGINS (comma-separated env
-    # var) to enumerate every allowed origin. Empty here means EVERY
-    # cross-origin request is rejected — browsers will see no
-    # Access-Control-Allow-Origin header and reject preflights. Never use "*".
-    allow_origins: []
+cors:
+  # Production deployments MUST set CORS_ALLOW_ORIGINS (comma-separated env
+  # var) to enumerate every allowed origin. Empty here means EVERY
+  # cross-origin request is rejected — browsers will see no
+  # Access-Control-Allow-Origin header and reject preflights. Never use "*".
+  allow_origins: []
 ```
 
-The insecure-by-default trap is inverted here: an unconfigured deployment rejects all
-cross-origin traffic (visibly broken) rather than accepting all of it (invisibly unsafe).
-`development.yaml` ships localhost origins so dev tooling works without editing base.
+The insecure-by-default trap is inverted here: an unconfigured deployment rejects all cross-origin traffic (visibly broken) rather than accepting all of it (invisibly unsafe). `development.yaml` ships localhost origins so dev tooling works without editing base.
 
-`tracing.endpoint: ""` follows the same idea from the other direction — empty means a no-op
-tracer, so the app runs with no collector instead of failing.
+`tracing.endpoint: ""` follows the same idea from the other direction — empty means a no-op tracer, so the app runs with no collector instead of failing.
 
 [13](13-cross-cutting.md) has the full config/secrets rules.
 
@@ -153,14 +128,9 @@ u := url.URL{
 }
 ```
 
-**Config carries discrete typed fields** (`Host`, `Port`, `User`, `Password`, `Name`, `SSLMode`),
-not a single `DATABASE_URL`, and the DSN is assembled escape-safely. `net.JoinHostPort` handles
-IPv6 literals; `url.UserPassword` percent-encodes the credentials. The mysql variant uses
-`mysql.Config.FormatDSN()` for the same reason. A `fmt.Sprintf` DSN is the single most common way
-a generated project breaks on a rotated password.
+**Config carries discrete typed fields** (`Host`, `Port`, `User`, `Password`, `Name`, `SSLMode`), not a single `DATABASE_URL`, and the DSN is assembled escape-safely. `net.JoinHostPort` handles IPv6 literals; `url.UserPassword` percent-encodes the credentials. The mysql variant uses `mysql.Config.FormatDSN()` for the same reason. A `fmt.Sprintf` DSN is the single most common way a generated project breaks on a rotated password.
 
-Pool limits (`MaxConns`, `MinConns`, `MaxConnLifetime`, `MaxConnIdleTime`) come from config, and
-the factory pings under `cfg.ConnectTimeout` before returning.
+Pool limits (`MaxConns`, `MinConns`, `MaxConnLifetime`, `MaxConnIdleTime`) come from config, and the factory pings under `cfg.ConnectTimeout` before returning.
 
 ## cache/ and search/ — thin wrappers, deliberately
 
@@ -175,20 +145,13 @@ type Client struct {
 func New(cfg config.RedisConfig, log *logger.Logger) (*Client, func(), error)
 ```
 
-The wrapper type is what makes single/sentinel/cluster mode a **config** choice rather than a code
-change: `cfg.Mode` selects the constructor, every caller depends on `*cache.Client`. The embedded
-interface means the full redis API is still available without re-exporting methods.
+The wrapper type is what makes single/sentinel/cluster mode a **config** choice rather than a code change: `cfg.Mode` selects the constructor, every caller depends on `*cache.Client`. The embedded interface means the full redis API is still available without re-exporting methods.
 
-`search.Client` is the same pattern over `*elasticsearch.Client` — "the search counterpart to
-infrastructure/cache". Both ping on construct. Adapters take these wrapper types
-([08](08-adapter-layer.md)).
+`search.Client` is the same pattern over `*elasticsearch.Client` — "the search counterpart to infrastructure/cache". Both ping on construct. Adapters take these wrapper types ([08](08-adapter-layer.md)).
 
 ## pubsub/ — producer and consumer group
 
-`NewKafkaProducer` returns a `sarama.SyncProducer` with `RequiredAcks: WaitForAll` and
-`Return.Successes: true` — a synchronous, fully-acknowledged producer, because the publish path is
-best-effort-with-logging in the usecase and a silently-dropped ack would defeat that
-([06](06-usecase-layer.md#register--check-hash-create-publish)).
+`NewKafkaProducer` returns a `sarama.SyncProducer` with `RequiredAcks: WaitForAll` and `Return.Successes: true` — a synchronous, fully-acknowledged producer, because the publish path is best-effort-with-logging in the usecase and a silently-dropped ack would defeat that ([06](06-usecase-layer.md#register--check-hash-create-publish)).
 
 `NewKafkaConsumerGroup` is worker-only and **fails fast** on missing config:
 
@@ -204,12 +167,9 @@ if cfg.ConsumerGroupID == "" {
 saramaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
 ```
 
-`OffsetOldest` only applies to a group with no committed offsets — so a fresh deployment replays
-history rather than silently skipping messages published before it started. Group membership (not
-manual partition assignment) is what makes replicas rebalance automatically.
+`OffsetOldest` only applies to a group with no committed offsets — so a fresh deployment replays history rather than silently skipping messages published before it started. Group membership (not manual partition assignment) is what makes replicas rebalance automatically.
 
-The factory hands the group to `transport/worker.kafkaConsumer`, which owns `Consume()`/`Close()`
-— the factory does no consuming, which is what keeps it infrastructure.
+The factory hands the group to `transport/worker.kafkaConsumer`, which owns `Consume()`/`Close()` — the factory does no consuming, which is what keeps it infrastructure.
 
 ## server/ — lifecycle only
 
@@ -218,8 +178,7 @@ The factory hands the group to `transport/worker.kafkaConsumer`, which owns `Con
 // itself (middleware, routes, healthz) is constructed in transport/http.NewRouter.
 ```
 
-The split is strict: `transport/http` builds the app, `infrastructure/server` binds the port and
-shuts it down. `Start()` is one line (`app.Listen(addr)`); the cleanup hook is where the care is:
+The split is strict: `transport/http` builds the app, `infrastructure/server` binds the port and shuts it down. `Start()` is one line (`app.Listen(addr)`); the cleanup hook is where the care is:
 
 ```go
 // NewHTTPServer wraps app for graceful shutdown. The shutdown context is
@@ -233,10 +192,7 @@ cleanup := func() {
 }
 ```
 
-That comment describes a bug this code exists to avoid: deriving the shutdown context from the
-same context the signal handler cancels means `ShutdownTimeout` is already expired when you use
-it, and every in-flight request is killed mid-response. Rooting it at `Background()` is what makes
-`shutdown_timeout: 10s` mean anything.
+That comment describes a bug this code exists to avoid: deriving the shutdown context from the same context the signal handler cancels means `ShutdownTimeout` is already expired when you use it, and every in-flight request is killed mid-response. Rooting it at `Background()` is what makes `shutdown_timeout: 10s` mean anything.
 
 ## logger/ — implements pkg/observability.Logger
 
@@ -249,10 +205,7 @@ type Logger struct {
 }
 ```
 
-The port is in `pkg/observability` so inner layers can log via `logctx.From(ctx)` without
-importing infrastructure ([10](10-shared-packages.md)). This is one of the two ports implemented
-outside `adapter/` — logging is cross-cutting, not a business operation
-([03](03-architecture-rules.md#ports-implemented-outside-adapter)).
+The port is in `pkg/observability` so inner layers can log via `logctx.From(ctx)` without importing infrastructure ([10](10-shared-packages.md)). This is one of the two ports implemented outside `adapter/` — logging is cross-cutting, not a business operation ([03](03-architecture-rules.md#ports-implemented-outside-adapter)).
 
 Two details that exist because wrapping a logger usually breaks its caller reporting:
 
@@ -268,11 +221,9 @@ const callerSkip = 2
 // source without absolute-path noise.
 ```
 
-If you add a method that calls `emit` at a different depth, `callerSkip` must change with it, or
-every log line from that method points at the logger.
+If you add a method that calls `emit` at a different depth, `callerSkip` must change with it, or every log line from that method points at the logger.
 
-`format: "console"` swaps in `zerolog.ConsoleWriter` for local development; `json` is the default
-and what production should ship. `NewWithWriter` exists so tests can assert on log output.
+`format: "console"` swaps in `zerolog.ConsoleWriter` for local development; `json` is the default and what production should ship. `NewWithWriter` exists so tests can assert on log output.
 
 ## jwt/ — RS256 signer and verifier
 
@@ -284,18 +235,11 @@ and what production should ship. `NewWithWriter` exists so tests can assert on l
 // public key and run verify-only — Sign errors when no private key is set.
 ```
 
-Note the package name is `jwtsec`, not `jwt` — the directory is `jwt/` but the package avoids
-colliding with `github.com/golang-jwt/jwt`, which is why every import aliases it
-`jwtsec "…/internal/infrastructure/jwt"`.
+Note the package name is `jwtsec`, not `jwt` — the directory is `jwt/` but the package avoids colliding with `github.com/golang-jwt/jwt`, which is why every import aliases it `jwtsec "…/internal/infrastructure/jwt"`.
 
-**RS256 rather than HS256 is the load-bearing choice.** With a shared HMAC secret, every service
-that can *verify* a token can also *forge* one. Asymmetric keys mean only the issuer holds the
-signing key, and rotation is: publish the new public key fleet-wide, *then* start signing with the
-new private key. Keys are base64-encoded PEM so they survive single-line env vars, and are parsed
-once at startup so the request path touches only in-memory keys.
+**RS256 rather than HS256 is the load-bearing choice.** With a shared HMAC secret, every service that can _verify_ a token can also _forge_ one. Asymmetric keys mean only the issuer holds the signing key, and rotation is: publish the new public key fleet-wide, _then_ start signing with the new private key. Keys are base64-encoded PEM so they survive single-line env vars, and are parsed once at startup so the request path touches only in-memory keys.
 
-The surface is deliberately small — `Sign`, `ParseAndVerifyAccessToken`, `AccessTokenTTL` — so the
-algorithm can be replaced without touching middleware or the usecase.
+The surface is deliberately small — `Sign`, `ParseAndVerifyAccessToken`, `AccessTokenTTL` — so the algorithm can be replaced without touching middleware or the usecase.
 
 ### Verification returns a generic 401, always
 
@@ -307,9 +251,7 @@ algorithm can be replaced without touching middleware or the usecase.
 // returned.
 ```
 
-Telling a caller *why* their token failed ("expired" vs "bad signature") is an oracle. The
-distinction is preserved in the logs instead — and the log severity is triaged rather than
-uniform:
+Telling a caller _why_ their token failed ("expired" vs "bad signature") is an oracle. The distinction is preserved in the logs instead — and the log severity is triaged rather than uniform:
 
 ```go
 // logVerifyFailure routes a token-parse failure by operational severity rather
@@ -321,16 +263,11 @@ uniform:
 // bug) or someone is presenting a forged token, so it goes to Warn.
 ```
 
-`classifyParseError` maps the golang-jwt validation bitfield to a stable `reason` field, and
-treats anything unrecognised as anomalous — so a new failure mode surfaces as a Warn instead of
-hiding in Debug.
+`classifyParseError` maps the golang-jwt validation bitfield to a stable `reason` field, and treats anything unrecognised as anomalous — so a new failure mode surfaces as a Warn instead of hiding in Debug.
 
-`formatSubject` stringifies the user ID for the `sub` claim, because "JSON numbers in JWT can lose
-precision in some libraries".
+`formatSubject` stringifies the user ID for the `sub` claim, because "JSON numbers in JWT can lose precision in some libraries".
 
-`AccessTokenClaims` embeds `jwt.RegisteredClaims` and adds `userId`/`email`/`name` plus optional
-device/session fields. The registered set stays authoritative for lifecycle; custom claims are
-convenience.
+`AccessTokenClaims` embeds `jwt.RegisteredClaims` and adds `userId`/`email`/`name` plus optional device/session fields. The registered set stays authoritative for lifecycle; custom claims are convenience.
 
 ## security/ — implements domain/security.PasswordHasher
 
@@ -342,9 +279,7 @@ convenience.
 var _ security.PasswordHasher = (*BcryptHasher)(nil)
 ```
 
-The second port implemented outside `adapter/`: `Hash(plain string) (string, error)` is pure
-computation — no external system, no `context.Context`, nothing to map
-([03](03-architecture-rules.md#ports-implemented-outside-adapter)).
+The second port implemented outside `adapter/`: `Hash(plain string) (string, error)` is pure computation — no external system, no `context.Context`, nothing to map ([03](03-architecture-rules.md#ports-implemented-outside-adapter)).
 
 ```go
 // NewBcryptHasher reads the cost from config, clamping invalid values to
@@ -358,10 +293,7 @@ func NewBcryptHasher(cfg config.SecurityConfig) *BcryptHasher {
 }
 ```
 
-Clamping rather than erroring means a misconfigured `BCRYPT_COST=0` yields a safe default instead
-of a boot failure — and, critically, never yields cost 0. `Verify` collapses every mismatch to
-`errors.ErrUnauthorized`, which is what lets `Login` return a uniform `InvalidCredentials`
-([06](06-usecase-layer.md#login--uniform-failure-uniform-timing)).
+Clamping rather than erroring means a misconfigured `BCRYPT_COST=0` yields a safe default instead of a boot failure — and, critically, never yields cost 0. `Verify` collapses every mismatch to `errors.ErrUnauthorized`, which is what lets `Login` return a uniform `InvalidCredentials` ([06](06-usecase-layer.md#login--uniform-failure-uniform-timing)).
 
 ## tracing/ — OpenTelemetry provider
 
@@ -387,24 +319,20 @@ if cfg.Endpoint == "" {
 }
 ```
 
-Note the propagator is still installed in the no-op path, so inbound `traceparent` headers keep
-flowing through the service even with export disabled — you don't break a distributed trace by
-running one hop without a collector.
+Note the propagator is still installed in the no-op path, so inbound `traceparent` headers keep flowing through the service even with export disabled — you don't break a distributed trace by running one hop without a collector.
 
-`Shutdown` flushes pending spans; without calling it, the last spans before exit are lost.
-`SampleRatio` defaults to 0.1 in `base.yaml`.
+`Shutdown` flushes pending spans; without calling it, the last spans before exit are lost. `SampleRatio` defaults to 0.1 in `base.yaml`.
 
 ## Nothing here knows about business rules
 
 The test for whether a new package belongs in this layer:
 
-| It does…                                          | Layer               |
-| ------------------------------------------------- | ------------------- |
-| Creates a client/pool/producer                    | **infrastructure/** |
-| Uses that client to fulfil a domain port          | **adapter/**        |
-| Binds a port, starts/stops a process              | **infrastructure/** |
-| Translates a driver error into a domain error     | **adapter/**        |
-| Satisfies a port with pure computation, no I/O    | **infrastructure/** |
+| It does…                                       | Layer               |
+| ---------------------------------------------- | ------------------- |
+| Creates a client/pool/producer                 | **infrastructure/** |
+| Uses that client to fulfil a domain port       | **adapter/**        |
+| Binds a port, starts/stops a process           | **infrastructure/** |
+| Translates a driver error into a domain error  | **adapter/**        |
+| Satisfies a port with pure computation, no I/O | **infrastructure/** |
 
-The full guide, with the flowchart, is in
-[03](03-architecture-rules.md#31-adapter-vs-infrastructure-the-decision-guide).
+The full guide, with the flowchart, is in [03](03-architecture-rules.md#31-adapter-vs-infrastructure-the-decision-guide).

@@ -1,14 +1,10 @@
 # 1. CLI options
 
-What `nova new` asks, which flag maps to each answer, and what happens when you pick an option
-that isn't implemented yet. ([index](README.md))
+What `nova new` asks, which flag maps to each answer, and what happens when you pick an option that isn't implemented yet. ([index](README.md))
 
 ## Interactive prompts
 
-`nova new` with no flags asks the questions below, in this order — see
-[internal/prompt/prompt.go](../internal/prompt/prompt.go) (`RunInteractive`). Each has a
-matching `nova new` flag; passing **any** flag skips every prompt and fills the rest from
-`config.DefaultConfig()`.
+`nova new` with no flags asks the questions below, in this order — see [internal/prompt/prompt.go](../internal/prompt/prompt.go) (`RunInteractive`). Each has a matching `nova new` flag; passing **any** flag skips every prompt and fills the rest from `config.DefaultConfig()`.
 
 | Prompt                | Flag               | Options (default first)                        | Implemented today                 |
 | --------------------- | ------------------ | ---------------------------------------------- | --------------------------------- |
@@ -28,21 +24,12 @@ matching `nova new` flag; passing **any** flag skips every prompt and fills the 
 | Include Docker setup? | `--docker`         | yes/no                                         | yes                               |
 | Include CI/CD?        | `--ci=github`      | yes/no                                         | yes                               |
 
-The Makefile, the lint config and the git pre-commit hook are always emitted — there is no
-prompt for them.
+The Makefile, the lint config and the git pre-commit hook are always emitted — there is no prompt for them.
 
 ## Unimplemented options fail in three different ways
 
 Check this before filing a bug:
 
-- `nethttp`, `sqlite`, `mongodb` are rejected up front — `generator.New()` whitelists
-  frameworks (`fiber`/`gin`/`chi`/`echo`), databases (`postgres`/`mysql`/`none`) and DI
-  (`wire`/`fx`), and returns an error for anything else.
-- `cron` and `cli` generate a project **that does not compile**: no `cmd/`, no
-  `internal/app/`, no transport package, and (with `--di=wire`) a `wire.go` referencing an
-  `App` graph that was never emitted. Same for a flag-driven run that never sets
-  `--transport`, since `DefaultConfig()` leaves it empty.
-- `sqlx`/`gorm`/`database/sql`, `raw`/`gorm` queries, `bigcache` and `toml` are accepted and
-  then **silently ignored** — the templates only branch on `pgx`+`sqlc`, `redis` and `yaml`.
-  `nats` is the one that fails latest: the publisher compiles and returns
-  `locale.Unimplemented` at runtime.
+- `nethttp`, `sqlite`, `mongodb` are rejected up front — `generator.New()` whitelists frameworks (`fiber`/`gin`/`chi`/`echo`), databases (`postgres`/`mysql`/`none`) and DI (`wire`/`fx`), and returns an error for anything else.
+- `cron` and `cli` generate a project **that does not compile**: no `cmd/`, no `internal/app/`, no transport package, and (with `--di=wire`) a `wire.go` referencing an `App` graph that was never emitted. Same for a flag-driven run that never sets `--transport`, since `DefaultConfig()` leaves it empty.
+- `sqlx`/`gorm`/`database/sql`, `raw`/`gorm` queries, `bigcache` and `toml` are accepted and then **silently ignored** — the templates only branch on `pgx`+`sqlc`, `redis` and `yaml`. `nats` is the one that fails latest: the publisher compiles and returns `locale.Unimplemented` at runtime.

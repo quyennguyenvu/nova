@@ -1,14 +1,12 @@
 # 5. Domain layer
 
-Layer 1 — entities, value objects, ports. Zero external dependencies: no framework, no DB, no
-`json` tags. ([index](README.md))
+Layer 1 — entities, value objects, ports. Zero external dependencies: no framework, no DB, no `json` tags. ([index](README.md))
 
 Sections marked **not scaffolded** are patterns to grow into; `nova new` doesn't emit them.
 
 ## internal/domain/entity/user.go
 
-Domain entities have NO framework tags. Serialization is a transport concern. The stored
-credential is the hash — plaintext passwords never live on the entity.
+Domain entities have NO framework tags. Serialization is a transport concern. The stored credential is the hash — plaintext passwords never live on the entity.
 
 ```go
 package entity
@@ -25,16 +23,13 @@ type User struct {
 }
 ```
 
-The scaffold has no `NewUser` constructor: the only invariant at creation time is "the password
-is hashed", and that hashing belongs to the usecase (it holds the `PasswordHasher` port). Add a
-constructor when the entity gains invariants it can enforce alone.
+The scaffold has no `NewUser` constructor: the only invariant at creation time is "the password is hashed", and that hashing belongs to the usecase (it holds the `PasswordHasher` port). Add a constructor when the entity gains invariants it can enforce alone.
 
 ## internal/domain/valueobject/ — what are value objects?
 
 **Not scaffolded.**
 
-Value objects represent **concepts that are defined by their attributes, not by identity**.
-Two value objects with the same attributes are considered equal (unlike entities which have unique IDs).
+Value objects represent **concepts that are defined by their attributes, not by identity**. Two value objects with the same attributes are considered equal (unlike entities which have unique IDs).
 
 Use value objects to:
 
@@ -128,9 +123,7 @@ func (m Money) IsZero() bool { return m.Amount == 0 }
 
 ## internal/domain/user.go — repository port + filter (one file per aggregate)
 
-Repository interfaces and their filter structs live **in the `domain` package** as one file per
-aggregate. This avoids the `repository.UserRepository` stutter — the call site becomes
-`domain.UserRepository`, which reads naturally.
+Repository interfaces and their filter structs live **in the `domain` package** as one file per aggregate. This avoids the `repository.UserRepository` stutter — the call site becomes `domain.UserRepository`, which reads naturally.
 
 **Why not a `domain/repository/` sub-package?**
 
@@ -175,11 +168,7 @@ type UserRepository interface {
 }
 ```
 
-Two reads, two shapes: `List` + `Count` back the admin page-based listing, `ListAfter` backs the
-public cursor (keyset) listing. Keeping them as separate methods means neither caller pays for
-the other's cost — the cursor path never runs a `COUNT(*)`, and the admin path never fakes
-totals. The usecase composes the pieces into its own output DTO
-([06](06-usecase-layer.md)); the port deliberately returns no result struct.
+Two reads, two shapes: `List` + `Count` back the admin page-based listing, `ListAfter` backs the public cursor (keyset) listing. Keeping them as separate methods means neither caller pays for the other's cost — the cursor path never runs a `COUNT(*)`, and the admin path never fakes totals. The usecase composes the pieces into its own output DTO ([06](06-usecase-layer.md)); the port deliberately returns no result struct.
 
 **Call site examples:**
 
@@ -205,24 +194,17 @@ domain/
 └── valueobject/
 ```
 
-**Filter passthrough rule**: If the use case does zero transformation on the filter
-(no validation, no business rules), skip the usecase-level DTO and let the transport
-assembler map directly to `domain.UserFilter`. Only add a usecase DTO when the use case
-**does something** (clamps pagination, applies authorization rules, combines data from
-multiple repos). The shipped user service does clamp, so it has `ListInput`.
+**Filter passthrough rule**: If the use case does zero transformation on the filter (no validation, no business rules), skip the usecase-level DTO and let the transport assembler map directly to `domain.UserFilter`. Only add a usecase DTO when the use case **does something** (clamps pagination, applies authorization rules, combines data from multiple repos). The shipped user service does clamp, so it has `ListInput`.
 
 ## internal/domain/service/pricing_service.go
 
 **Not scaffolded.**
 
-Domain services contain **cross-entity business rules** that don't naturally belong to a single entity.
-They are INTERFACES in the domain layer, implemented in the usecase layer.
+Domain services contain **cross-entity business rules** that don't naturally belong to a single entity. They are INTERFACES in the domain layer, implemented in the usecase layer.
 
 > **⚠️ Common misconception: "multiple tables" ≠ "domain service"**
 >
-> A query that JOINs multiple tables (e.g., "list users with role=admin") is **NOT** a domain service.
-> It's a **repository method** — pure data retrieval with zero business logic.
-> The fact that it requires a SQL JOIN is an implementation detail of how the data is stored.
+> A query that JOINs multiple tables (e.g., "list users with role=admin") is **NOT** a domain service. It's a **repository method** — pure data retrieval with zero business logic. The fact that it requires a SQL JOIN is an implementation detail of how the data is stored.
 >
 > Domain services are for **business rules, computations, and decisions** — not data fetching.
 
@@ -244,9 +226,7 @@ Return a decision → Domain service (even if it only involves 1 entity)
 | "Calculate discount based on user tier + order history" | **Domain service** | Business computation using multiple entities |
 | "Determine if order should be auto-approved"            | **Domain service** | Business decision based on rules             |
 
-> **Key insight**: If you switched from PostgreSQL (JOINs) to MongoDB (embedded documents),
-> the JOIN disappears but the repository interface stays the same. The caller says
-> "give me admin users" — it doesn't care about JOINs. That's why it's a repository concern.
+> **Key insight**: If you switched from PostgreSQL (JOINs) to MongoDB (embedded documents), the JOIN disappears but the repository interface stays the same. The caller says "give me admin users" — it doesn't care about JOINs. That's why it's a repository concern.
 
 ```go
 package service
@@ -272,10 +252,7 @@ type PricingService interface {
 
 ## internal/domain/event/ — domain events
 
-**Not scaffolded as a package.** `nova new` puts one publisher port + its event struct per
-aggregate directly in `domain/` — `domain.UserPublisher` and `domain.UserCreated` in
-[domain/user_publisher.go](../internal/generator/templates/domain/user_publisher.go.tmpl) —
-matching how `domain.UserRepository` lives in `domain/user.go`:
+**Not scaffolded as a package.** `nova new` puts one publisher port + its event struct per aggregate directly in `domain/` — `domain.UserPublisher` and `domain.UserCreated` in [domain/user_publisher.go](../internal/generator/templates/domain/user_publisher.go.tmpl) — matching how `domain.UserRepository` lives in `domain/user.go`:
 
 ```go
 // internal/domain/user_publisher.go — what ships today
@@ -302,8 +279,7 @@ The `event/` package below is the shape to grow into once several aggregates pub
 
 ### internal/domain/event/event.go
 
-Domain events represent **something that happened** in the system.
-They are published by use cases after successful business operations.
+Domain events represent **something that happened** in the system. They are published by use cases after successful business operations.
 
 ```go
 package event
@@ -329,11 +305,9 @@ type OrderPlaced struct {
 
 ### internal/domain/event/publisher.go
 
-The `EventPublisher` interface is a **port** — it defines WHAT can be done (publish events),
-not HOW (Kafka, RabbitMQ, NATS). This allows swapping message brokers without changing business logic.
+The `EventPublisher` interface is a **port** — it defines WHAT can be done (publish events), not HOW (Kafka, RabbitMQ, NATS). This allows swapping message brokers without changing business logic.
 
-Note: the interface accepts domain event structs (no `json` tags). The **adapter** is responsible
-for mapping domain events → message DTOs with `json` tags before serializing to the wire.
+Note: the interface accepts domain event structs (no `json` tags). The **adapter** is responsible for mapping domain events → message DTOs with `json` tags before serializing to the wire.
 
 ```go
 package event

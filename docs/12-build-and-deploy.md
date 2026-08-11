@@ -1,7 +1,6 @@
 # 12. Build and deploy
 
-Makefile targets, the git hook, Docker image, local compose stack (with benchmark limits), and
-the CI pipeline. ([index](README.md))
+Makefile targets, the git hook, Docker image, local compose stack (with benchmark limits), and the CI pipeline. ([index](README.md))
 
 ## Makefile
 
@@ -33,26 +32,17 @@ make docker-down     # docker compose down
 
 Notes on the ones with a decision behind them:
 
-- **`test` runs `-race`.** Slower, but the alternative is discovering a data race in production.
-  Nova's own suite uses the same flag.
-- **`lint` chains sqlfluff** for sqlc projects (`--dialect postgres|mysql`), so hand-written SQL is
-  held to the same bar as Go. `fmt` chains `sqlfluff fix`.
-- **`gen` is composed**, not a script: it expands to only the generators the project actually has,
-  so a `--di=fx --query=none` project's `make gen` is a no-op rather than an error.
-- **`wire-gen` deletes `wire_gen.go` first.** A stale generated file that still compiles is worse
-  than a missing one — wire would leave it in place on a failed run.
-- **`migrate-*` read `$MIGRATE_DATABASE_URL`**, not the app config. Migration tooling runs
-  outside the app (CI, a job, your shell), so it takes a URL from the environment; `.env.example`
-  documents it as "used by Makefile (migrate) and sqlc — not read by the Go config".
+- **`test` runs `-race`.** Slower, but the alternative is discovering a data race in production. Nova's own suite uses the same flag.
+- **`lint` chains sqlfluff** for sqlc projects (`--dialect postgres|mysql`), so hand-written SQL is held to the same bar as Go. `fmt` chains `sqlfluff fix`.
+- **`gen` is composed**, not a script: it expands to only the generators the project actually has, so a `--di=fx --query=none` project's `make gen` is a no-op rather than an error.
+- **`wire-gen` deletes `wire_gen.go` first.** A stale generated file that still compiles is worse than a missing one — wire would leave it in place on a failed run.
+- **`migrate-*` read `$MIGRATE_DATABASE_URL`**, not the app config. Migration tooling runs outside the app (CI, a job, your shell), so it takes a URL from the environment; `.env.example` documents it as "used by Makefile (migrate) and sqlc — not read by the Go config".
 
-There is deliberately **no `make build` or `make run`** target: the binary is built by
-`go build`/`docker build`, and running it means choosing a subcommand
-(`./{project} api`) — a `make run` would have to guess.
+There is deliberately **no `make build` or `make run`** target: the binary is built by `go build`/`docker build`, and running it means choosing a subcommand (`./{project} api`) — a `make run` would have to guess.
 
 ## .githooks/pre-commit
 
-Activated by `make setup` (`git config core.hooksPath .githooks`) — nothing runs until you opt in,
-because a hook that installs itself is hostile.
+Activated by `make setup` (`git config core.hooksPath .githooks`) — nothing runs until you opt in, because a hook that installs itself is hostile.
 
 Three gates, in order:
 
@@ -74,13 +64,9 @@ if [ -n "$(git diff)" ]; then
 fi
 ```
 
-It formats, then **fails if formatting changed anything** rather than silently amending your
-staged content. You review and stage the reformatting yourself — a hook that mutates the commit
-you're making is how surprising diffs land in a PR.
+It formats, then **fails if formatting changed anything** rather than silently amending your staged content. You review and stage the reformatting yourself — a hook that mutates the commit you're making is how surprising diffs land in a PR.
 
-> The generator renders this file with the **executable bit** (`0o700`, via `outFileMode` in
-> [generator.go](../internal/generator/generator.go)). Git silently skips a non-executable hook,
-> so a hook without `+x` looks installed and does nothing.
+> The generator renders this file with the **executable bit** (`0o700`, via `outFileMode` in [generator.go](../internal/generator/generator.go)). Git silently skips a non-executable hook, so a hook without `+x` looks installed and does nothing.
 
 ## Dockerfile
 
@@ -109,10 +95,8 @@ Five choices worth keeping:
 - **`go.mod`/`go.sum` copied before the source** so `go mod download` is a cached layer.
 - **`CGO_ENABLED=0`** → a static binary that runs on `alpine` (or `scratch`) without libc.
 - **`-ldflags="-w -s"`** strips DWARF and the symbol table.
-- **`USER app`** — a non-root, no-login user. Running as root in a container is the default and
-  the wrong default.
-- **`ca-certificates` + `tzdata`** installed explicitly: a static Go binary has neither, and
-  their absence shows up as TLS failures and UTC-only timestamps.
+- **`USER app`** — a non-root, no-login user. Running as root in a container is the default and the wrong default.
+- **`ca-certificates` + `tzdata`** installed explicitly: a static Go binary has neither, and their absence shows up as TLS failures and UTC-only timestamps.
 
 The header carries the one prerequisite:
 
@@ -122,9 +106,7 @@ The header carries the one prerequisite:
 # Run `make gen` locally after `nova new` and commit before building images.
 ```
 
-Generated code is **committed**, not generated in the image. That keeps the build hermetic (no
-`wire`/`sqlc` in the builder stage, no network beyond module download) and makes the generated
-graph reviewable in a PR.
+Generated code is **committed**, not generated in the image. That keeps the build hermetic (no `wire`/`sqlc` in the builder stage, no network beyond module download) and makes the generated graph reviewable in a PR.
 
 ### Entrypoint, port, healthcheck
 
@@ -143,13 +125,9 @@ ENTRYPOINT ["/app/api"]
 CMD ["api"]     # or "grpc" / "worker", per --transport
 ```
 
-Splitting `ENTRYPOINT` from `CMD` means `docker run img worker` overrides the subcommand without
-re-specifying the binary. `EXPOSE` and the healthcheck are transport-gated, so a worker image
-declares neither — there's no port to probe.
+Splitting `ENTRYPOINT` from `CMD` means `docker run img worker` overrides the subcommand without re-specifying the binary. `EXPOSE` and the healthcheck are transport-gated, so a worker image declares neither — there's no port to probe.
 
-`/readyz` rather than `/healthz` in the healthcheck is the deliberate half: a container that is
-up but can't reach its database should not be routed traffic
-([07](07-transport-layer.md#internaltransporthttphealthcheckergo)).
+`/readyz` rather than `/healthz` in the healthcheck is the deliberate half: a container that is up but can't reach its database should not be routed traffic ([07](07-transport-layer.md#internaltransporthttphealthcheckergo)).
 
 ## docker-compose.yaml — the local stack, with limits
 
@@ -159,9 +137,7 @@ docker compose up -d --build  # whole stack
 docker compose up -d postgres redis kafka   # dependencies only
 ```
 
-**Requires Compose V2** (`docker compose`, not the legacy `docker-compose` binary): the resource
-limits are read from `deploy.resources.limits`, which V2 applies to a plain `up` — V1 ignores them
-outside swarm. `make docker-up` carries the same note.
+**Requires Compose V2** (`docker compose`, not the legacy `docker-compose` binary): the resource limits are read from `deploy.resources.limits`, which V2 applies to a plain `up` — V1 ignores them outside swarm. `make docker-up` carries the same note.
 
 ### Every limit is an env var with a default
 
@@ -172,56 +148,50 @@ LIMIT_APP_CPUS=1 LIMIT_APP_MEMORY=256M docker compose up -d --force-recreate app
 ```
 
 ```yaml
-    deploy:
-      resources:
-        limits:
-          cpus: "${LIMIT_APP_CPUS:-2}"
-          memory: ${LIMIT_APP_MEMORY:-512M}
+deploy:
+  resources:
+    limits:
+      cpus: "${LIMIT_APP_CPUS:-2}"
+      memory: ${LIMIT_APP_MEMORY:-512M}
 ```
 
-| Variable                 | Default | Applies to                          |
-| ------------------------ | ------- | ----------------------------------- |
-| `LIMIT_APP_CPUS`         | `2`     | app                                 |
-| `LIMIT_APP_MEMORY`       | `512M`  | app                                 |
-| `LIMIT_DB_CPUS`          | `2`     | postgres / mysql                    |
-| `LIMIT_DB_MEMORY`        | `512M`  | postgres / mysql                    |
-| `LIMIT_REDIS_MAXMEMORY`  | `192mb` | redis (`--maxmemory`, `allkeys-lru`) |
-| `LIMIT_ES_HEAP`          | `512m`  | elasticsearch (`ES_JAVA_OPTS`)      |
+| Variable                | Default | Applies to                           |
+| ----------------------- | ------- | ------------------------------------ |
+| `LIMIT_APP_CPUS`        | `2`     | app                                  |
+| `LIMIT_APP_MEMORY`      | `512M`  | app                                  |
+| `LIMIT_DB_CPUS`         | `2`     | postgres / mysql                     |
+| `LIMIT_DB_MEMORY`       | `512M`  | postgres / mysql                     |
+| `LIMIT_REDIS_MAXMEMORY` | `192mb` | redis (`--maxmemory`, `allkeys-lru`) |
+| `LIMIT_ES_HEAP`         | `512m`  | elasticsearch (`ES_JAVA_OPTS`)       |
 
-A sweep is a shell loop over one variable, and every run is reproducible because the ceiling is
-explicit rather than "whatever the host had free".
+A sweep is a shell loop over one variable, and every run is reproducible because the ceiling is explicit rather than "whatever the host had free".
 
 ### Config precedence inside the network
 
 ```yaml
-    env_file:
-      - .env          # secrets and per-deploy values
-    environment:      # wins over env_file
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      REDIS_ADDRS: redis:6379
-      ELASTICSEARCH_ADDRESSES: http://elasticsearch:9200
-      KAFKA_BROKERS: kafka:9092
+env_file:
+  - .env # secrets and per-deploy values
+environment: # wins over env_file
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  REDIS_ADDRS: redis:6379
+  ELASTICSEARCH_ADDRESSES: http://elasticsearch:9200
+  KAFKA_BROKERS: kafka:9092
 ```
 
-`.env` points at `localhost` so host-side runs work; inside the network each dependency answers on
-its **service name**. `environment` overriding `env_file` is what lets one `.env` serve both.
+`.env` points at `localhost` so host-side runs work; inside the network each dependency answers on its **service name**. `environment` overriding `env_file` is what lets one `.env` serve both.
 
 ### Dependencies wait for health, not for start
 
 ```yaml
-    depends_on:
-      postgres:
-        condition: service_healthy
+depends_on:
+  postgres:
+    condition: service_healthy
 ```
 
-Every dependency declares a healthcheck (`pg_isready`, `mysqladmin ping`, `redis-cli ping`, an ES
-cluster-health probe), and the app waits on `service_healthy`. Without this the app dials a
-still-booting database, fails, and exits — the single most common "compose doesn't work" report.
+Every dependency declares a healthcheck (`pg_isready`, `mysqladmin ping`, `redis-cli ping`, an ES cluster-health probe), and the app waits on `service_healthy`. Without this the app dials a still-booting database, fails, and exits — the single most common "compose doesn't work" report.
 
-Host ports are published for each dependency so host tooling (`make migrate-up`, k6, the kafka
-CLI) works against the same stack. Kafka runs single-node KRaft with dual listeners
-(`kafka:9092` in-network, `localhost:29092` from the host) for exactly that reason.
+Host ports are published for each dependency so host tooling (`make migrate-up`, k6, the kafka CLI) works against the same stack. Kafka runs single-node KRaft with dual listeners (`kafka:9092` in-network, `localhost:29092` from the host) for exactly that reason.
 
 Data lives in named volumes, so `docker compose down` keeps it and `down -v` discards it.
 
@@ -233,38 +203,33 @@ tidy ─┼──▶ build
 test ─┘
 ```
 
-| Job     | What it does                                                        |
-| ------- | ------------------------------------------------------------------- |
-| `lint`  | `golangci-lint-action`                                              |
-| `tidy`  | `go mod tidy` then `git diff --exit-code go.mod go.sum`             |
+| Job     | What it does                                                             |
+| ------- | ------------------------------------------------------------------------ |
+| `lint`  | `golangci-lint-action`                                                   |
+| `tidy`  | `go mod tidy` then `git diff --exit-code go.mod go.sum`                  |
 | `test`  | `go test -v -race -coverprofile=coverage.out ./...` + service containers |
-| `build` | `go build -ldflags="-w -s"` — `needs: [lint, tidy, test]`           |
+| `build` | `go build -ldflags="-w -s"` — `needs: [lint, tidy, test]`                |
 
 ```yaml
-      # Catches forgotten dep updates: re-running tidy should be a no-op on
-      # a clean PR; any drift fails the job.
+# Catches forgotten dep updates: re-running tidy should be a no-op on
+# a clean PR; any drift fails the job.
 ```
 
-The `tidy` job is the one people leave out and then regret: an untidy `go.mod` breaks other
-people's builds in ways that look unrelated to the PR that caused it.
+The `tidy` job is the one people leave out and then regret: an untidy `go.mod` breaks other people's builds in ways that look unrelated to the PR that caused it.
 
-`test` brings up postgres/mysql/redis as **service containers** with health options, mirroring what
-compose provides locally, and injects the same env vars the app reads (`DB_HOST`, `REDIS_ADDRS`, …).
+`test` brings up postgres/mysql/redis as **service containers** with health options, mirroring what compose provides locally, and injects the same env vars the app reads (`DB_HOST`, `REDIS_ADDRS`, …).
 
 The JWT keys are committed fixtures, labelled as such:
 
 ```yaml
-        # JWT_PUBLIC_KEY / JWT_PRIVATE_KEY are throwaway CI-only base64 PEM
-        # fixtures so config.Load passes key parsing in NewTokenService. Real
-        # deployments inject rotating keys via a secrets manager / mounted volume.
+# JWT_PUBLIC_KEY / JWT_PRIVATE_KEY are throwaway CI-only base64 PEM
+# fixtures so config.Load passes key parsing in NewTokenService. Real
+# deployments inject rotating keys via a secrets manager / mounted volume.
 ```
 
-They exist because `NewTokenService` parses keys at startup and would fail the whole test binary
-without them ([09](09-infrastructure-layer.md#jwt--rs256-signer-and-verifier)). They are
-deliberately worthless.
+They exist because `NewTokenService` parses keys at startup and would fail the whole test binary without them ([09](09-infrastructure-layer.md#jwt--rs256-signer-and-verifier)). They are deliberately worthless.
 
-`permissions: contents: read` scopes the token to the minimum — the default is broader than any of
-these jobs needs.
+`permissions: contents: read` scopes the token to the minimum — the default is broader than any of these jobs needs.
 
 ## .env.example — secrets only
 
@@ -275,25 +240,17 @@ these jobs needs.
 # has a default in base.yaml with per-env overrides in <APP_ENV>.yaml.
 ```
 
-The split is the same one described in [09](09-infrastructure-layer.md#config--one-struct-three-layers-of-value):
-tuning is reviewed in code, secrets are injected. Notable entries:
+The split is the same one described in [09](09-infrastructure-layer.md#config--one-struct-three-layers-of-value): tuning is reviewed in code, secrets are injected. Notable entries:
 
-- **JWT keys**, with the `openssl` commands to generate a pair inline, and a note that only the
-  issuing service sets `JWT_PRIVATE_KEY`.
+- **JWT keys**, with the `openssl` commands to generate a pair inline, and a note that only the issuing service sets `JWT_PRIVATE_KEY`.
 - **`CORS_ALLOW_ORIGINS`**, empty, with "production MUST set this. Never `*`".
-- **Discrete DB fields** (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) rather than a
-  `DATABASE_URL` — the DSN is assembled escape-safely in code
-  ([09](09-infrastructure-layer.md#database--connection-factory)).
-- **`MIGRATE_DATABASE_URL`** separately, flagged "used by Makefile (migrate) and sqlc — not read
-  by the Go config".
+- **Discrete DB fields** (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) rather than a `DATABASE_URL` — the DSN is assembled escape-safely in code ([09](09-infrastructure-layer.md#database--connection-factory)).
+- **`MIGRATE_DATABASE_URL`** separately, flagged "used by Makefile (migrate) and sqlc — not read by the Go config".
 
 `APP_ENV=local` by default, which loads `base.yaml` only.
 
 ## Lint configuration
 
-`.golangci.yaml` mirrors nova's own (maratori's golden config): strict, with `goimports` + `golines`
-at 120 columns for `fmt`. `.sqlfluff` is always emitted; `make lint` only invokes it for sqlc
-projects.
+`.golangci.yaml` mirrors nova's own (maratori's golden config): strict, with `goimports` + `golines` at 120 columns for `fmt`. `.sqlfluff` is always emitted; `make lint` only invokes it for sqlc projects.
 
-The generated `CLAUDE.md` documents these commands for Claude Code inside the new project, so the
-conventions survive contact with an agent.
+The generated `CLAUDE.md` documents these commands for Claude Code inside the new project, so the conventions survive contact with an agent.

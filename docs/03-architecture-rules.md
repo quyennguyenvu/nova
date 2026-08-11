@@ -1,7 +1,6 @@
 # 3. Architecture rules
 
-The dependency rule the layout enforces, and the adapter-vs-infrastructure decision guide.
-([index](README.md))
+The dependency rule the layout enforces, and the adapter-vs-infrastructure decision guide. ([index](README.md))
 
 ## Clean Architecture principles to enforce
 
@@ -62,8 +61,7 @@ transport/                   # Delivery mechanisms (separate from adapter)
 └── cronjob/                 # Cron job handlers (no middleware)
 ```
 
-`adapter/external/` and `transport/cronjob/` are patterns to grow into — `nova new` doesn't
-scaffold them.
+`adapter/external/` and `transport/cronjob/` are patterns to grow into — `nova new` doesn't scaffold them.
 
 ### INFRASTRUCTURE layer — "provides technical capabilities"
 
@@ -150,25 +148,11 @@ Think of it this way:
 
 ### Ports implemented outside `adapter/`
 
-Satisfying a port is necessary but not sufficient for `adapter/`. The implementation must also
-_carry out a business operation against an external system_ — persist, publish, charge, notify.
-Two ports in this layout are implemented in `infrastructure/`:
+Satisfying a port is necessary but not sufficient for `adapter/`. The implementation must also _carry out a business operation against an external system_ — persist, publish, charge, notify. Two ports in this layout are implemented in `infrastructure/`:
 
-- `domain/security.PasswordHasher` → `infrastructure/security/bcrypt.go`.
-  `Hash(plain string) (string, error)` is pure computation: no external system, no
-  `context.Context`, no I/O, nothing to map. A technical capability the usecase consumes,
-  like a connection pool.
-- `pkg/observability.Logger` → `infrastructure/logger/zerolog.go`. It does write output, but
-  logging is cross-cutting, not a business operation.
-  [04](04-placement-rationale.md) documents this split.
+- `domain/security.PasswordHasher` → `infrastructure/security/bcrypt.go`. `Hash(plain string) (string, error)` is pure computation: no external system, no `context.Context`, no I/O, nothing to map. A technical capability the usecase consumes, like a connection pool.
+- `pkg/observability.Logger` → `infrastructure/logger/zerolog.go`. It does write output, but logging is cross-cutting, not a business operation. [04](04-placement-rationale.md) documents this split.
 
-Note the test is not "does the signature mention an entity" — `StripeClient.Charge(ctx,
-orderID, amount)` takes only scalars and is still an adapter, because it runs a business
-operation over the network and translates provider failures into domain errors. Likewise
-`adapter/repository` maps `*entity.User` ↔ SQL rows and owns the transaction. Bcrypt does
-none of that; its port exists purely for dependency inversion, so inner layers can name the
-capability without importing `infrastructure/`.
+Note the test is not "does the signature mention an entity" — `StripeClient.Charge(ctx, orderID, amount)` takes only scalars and is still an adapter, because it runs a business operation over the network and translates provider failures into domain errors. Likewise `adapter/repository` maps `*entity.User` ↔ SQL rows and owns the transaction. Bcrypt does none of that; its port exists purely for dependency inversion, so inner layers can name the capability without importing `infrastructure/`.
 
-`infrastructure/jwt` sits outside `adapter/` for the same reason (signing is computation, not
-I/O) — and its verification path needs no port at all, because only middleware calls it. See
-[04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface).
+`infrastructure/jwt` sits outside `adapter/` for the same reason (signing is computation, not I/O) — and its verification path needs no port at all, because only middleware calls it. See [04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface).

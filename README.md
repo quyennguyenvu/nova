@@ -71,27 +71,23 @@ The architectural rationale (why files live where they do, adapter vs infrastruc
 
 Generates a complete project. With no flags it runs interactively; pass any flag and it skips prompts entirely.
 
-| Flag               | Values                            | Default                   |
-| ------------------ | --------------------------------- | ------------------------- |
-| `--module`         | Go module path                    | `github.com/myorg/<name>` |
-| `--transport`      | `http`, `grpc`, `worker`          | _(none — must be set)_    |
-| `--http-framework` | `fiber`, `gin`, `chi`, `echo`     | `fiber`                   |
-| `--database`       | `postgres`, `mysql`, `none`       | `postgres`                |
-| `--db-driver`      | `pgx`                             | `pgx`                     |
-| `--query`          | `sqlc`                            | `sqlc`                    |
-| `--cache`          | `redis`, `none`                   | `redis`                   |
-| `--search`         | `elasticsearch`, `none`           | `none`                    |
-| `--queue`          | `kafka`, `rabbitmq`, `none`       | `none`                    |
-| `--config`         | `yaml`                            | `yaml`                    |
-| `--di`             | `wire`, `fx`                      | `wire`                    |
-| `--docker`         | _(bool)_                          | `true`                    |
-| `--ci`             | `github`, `none`                  | `github`                  |
+| Flag               | Values                        | Default                   |
+| ------------------ | ----------------------------- | ------------------------- |
+| `--module`         | Go module path                | `github.com/myorg/<name>` |
+| `--transport`      | `http`, `grpc`, `worker`      | _(none — must be set)_    |
+| `--http-framework` | `fiber`, `gin`, `chi`, `echo` | `fiber`                   |
+| `--database`       | `postgres`, `mysql`, `none`   | `postgres`                |
+| `--db-driver`      | `pgx`                         | `pgx`                     |
+| `--query`          | `sqlc`                        | `sqlc`                    |
+| `--cache`          | `redis`, `none`               | `redis`                   |
+| `--search`         | `elasticsearch`, `none`       | `none`                    |
+| `--queue`          | `kafka`, `rabbitmq`, `none`   | `none`                    |
+| `--config`         | `yaml`                        | `yaml`                    |
+| `--di`             | `wire`, `fx`                  | `wire`                    |
+| `--docker`         | _(bool)_                      | `true`                    |
+| `--ci`             | `github`, `none`              | `github`                  |
 
-Because any flag skips the prompts, a flag-driven run **must** pass `--transport` — otherwise it
-generates a project with no entry point. The prompts and flags also accept values that are not
-implemented yet (`cron`/`cli` transports, `nethttp`, `sqlite`/`mongodb`, `sqlx`/`gorm`, `raw`
-queries, `bigcache`, `nats`, `toml`); [docs/01 — CLI options](docs/01-cli-options.md) lists exactly
-how each one fails.
+Because any flag skips the prompts, a flag-driven run **must** pass `--transport` — otherwise it generates a project with no entry point. The prompts and flags also accept values that are not implemented yet (`cron`/`cli` transports, `nethttp`, `sqlite`/`mongodb`, `sqlx`/`gorm`, `raw` queries, `bigcache`, `nats`, `toml`); [docs/01 — CLI options](docs/01-cli-options.md) lists exactly how each one fails.
 
 Example — full non-interactive run:
 
