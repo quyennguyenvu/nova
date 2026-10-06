@@ -105,17 +105,35 @@ func runNew(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stdout, "✅ Project generated successfully in ./%s\n\n", cfg.ProjectName)
 	fmt.Fprintln(os.Stdout, "Next steps:")
-	fmt.Fprintf(os.Stdout, "  cd %s\n", cfg.ProjectName)
-	fmt.Fprintln(os.Stdout, "  cp env.example .env  # if using env config")
-	fmt.Fprintln(os.Stdout, "  go mod tidy")
-	fmt.Fprintln(os.Stdout, "  make gen")
-	fmt.Fprintln(os.Stdout, "  go run main.go api")
-	if cfg.IncludeDocker {
-		fmt.Fprintln(os.Stdout, "  # or: docker-compose up")
+	for _, step := range nextSteps(cfg) {
+		fmt.Fprintf(os.Stdout, "  %s\n", step)
 	}
 	fmt.Fprintln(os.Stdout)
 
 	return nil
+}
+
+// nextSteps is the post-generation checklist in the order that actually
+// works: code generators first (sqlc must emit dbgen before `go mod tidy`
+// can resolve its import), then the transport's own subcommand.
+func nextSteps(cfg *config.ProjectConfig) []string {
+	steps := []string{
+		"cd " + cfg.ProjectName,
+		"cp .env.example .env   # fill in secrets (JWT keys, DB password)",
+		"make gen               # code generators, then dependency resolution",
+	}
+	switch {
+	case cfg.HasWorker():
+		steps = append(steps, "go run main.go worker")
+	case cfg.HasGRPC():
+		steps = append(steps, "go run main.go grpc")
+	default:
+		steps = append(steps, "go run main.go api")
+	}
+	if cfg.IncludeDocker {
+		steps = append(steps, "# or: docker compose up")
+	}
+	return steps
 }
 
 func applyFlags(cmd *cobra.Command, cfg *config.ProjectConfig) {

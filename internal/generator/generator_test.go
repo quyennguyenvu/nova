@@ -1,7 +1,10 @@
 package generator
 
 import (
+	"bytes"
 	"fmt"
+	"go/format"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -226,6 +229,13 @@ func TestGenerateMatrix(t *testing.T) {
 				})
 			}
 		}
+		for _, fw := range httpFrameworks {
+			name := "http_" + di + "_" + fw + "_none"
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				renderAndVet(t, noDBMatrixConfig(fw, di), wireGenHTTPStub)
+			})
+		}
 	}
 }
 
@@ -325,6 +335,21 @@ func baseMatrixConfig(database, di string) *config.ProjectConfig {
 	if database == "mysql" {
 		cfg.DBDriver = "database/sql"
 	}
+	return cfg
+}
+
+// noDBMatrixConfig is an HTTP project with no database, cache, search, or
+// broker: the leanest supported shape and the one most likely to leave an
+// unconditional import or variable dangling.
+func noDBMatrixConfig(framework, di string) *config.ProjectConfig {
+	cfg := baseMatrixConfig("none", di)
+	cfg.Transport = "http"
+	cfg.HTTPFramework = framework
+	cfg.DBDriver = ""
+	cfg.QueryGen = ""
+	cfg.Cache = "none"
+	cfg.Search = "none"
+	cfg.MessageQueue = "none"
 	return cfg
 }
 
@@ -1218,10 +1243,152 @@ func runGo(t *testing.T, dir string, args ...string) error {
 	t.Helper()
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
+	// -p=2 caps each child go command's compiler workers; with -parallel 2 the
+	// matrix stays near 2.5 GB instead of 8 cases x 8 compilers swapping the machine.
+	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod -p=2")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("go %s output:\n%s", strings.Join(args, " "), out)
 	}
 	return err
+}
+
+// TestRenderedGoIsGofmtClean renders representative configs and asserts every
+// .go file is already in gofmt form. Conditional template lines otherwise
+// drift struct alignment and import order, and the generated project then
+// fails its own `make lint` on the first commit.
+func TestRenderedGoIsGofmtClean(t *testing.T) {
+	t.Parallel()
+	cfgs := []*config.ProjectConfig{
+		httpMatrixConfig("fiber", "postgres", "wire"),
+		httpMatrixConfig("gin", "mysql", "fx"),
+		workerMatrixConfig("postgres", "kafka", "wire"),
+		workerMatrixConfig("mysql", "rabbitmq", "fx"),
+	}
+	for _, cfg := range cfgs {
+		dir := renderProject(t, cfg)
+		walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
+				return err
+			}
+			src, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			want, fmtErr := format.Source(src)
+			if fmtErr != nil {
+				return fmt.Errorf("%s: %w", path, fmtErr)
+			}
+			if !bytes.Equal(src, want) {
+				rel, _ := filepath.Rel(dir, path)
+				t.Errorf("%s/%s/%s/%s: %s is not gofmt-clean",
+					cfg.Transport, cfg.HTTPFramework, cfg.Database, cfg.DI, rel)
+			}
+			return nil
+		})
+		if walkErr != nil {
+			t.Fatal(walkErr)
+		}
+	}
+}
+
+// TestGeneratedProjectBootstrap runs the real first-run sequence a user
+// follows on representative projects. The vet matrix stubs dbgen and
+// wire_gen, so only this test can catch engine-specific DDL that sqlc
+// rejects or an injector wire cannot build. It is sequential on purpose
+// (each step peaks near 1 GB) and skips when a tool is missing, so a CI
+// box without sqlc/wire still passes.
+func TestGeneratedProjectBootstrap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-toolchain bootstrap in -short mode")
+	}
+	for _, tool := range []string{"go", "sqlc", "wire"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not on PATH", tool)
+		}
+	}
+	// Search stays off here: golangci-lint's analyzers crawl the typed
+	// go-elasticsearch client for minutes per project. The vet matrix still
+	// renders and vets that adapter.
+	noSearch := func(cfg *config.ProjectConfig) *config.ProjectConfig {
+		cfg.Search = "none"
+		return cfg
+	}
+	cases := []struct {
+		name string
+		cfg  *config.ProjectConfig
+	}{
+		{"http_fiber_postgres_wire", noSearch(httpMatrixConfig("fiber", "postgres", "wire"))},
+		{"http_gin_mysql_wire", noSearch(httpMatrixConfig("gin", "mysql", "wire"))},
+		{"worker_postgres_kafka_wire", workerMatrixConfig("postgres", "kafka", "wire")},
+		{"http_echo_none_fx", noDBMatrixConfig("echo", "fx")},
+	}
+	for _, tc := range cases {
+		// No t.Parallel: each case compiles a full dependency tree.
+		t.Run(tc.name, func(t *testing.T) { bootstrapProject(t, tc.cfg) })
+	}
+}
+
+func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
+	t.Helper()
+	dir := renderProject(t, cfg)
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not on PATH")
+	}
+	run := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = dir
+		// PWD is set explicitly because the generated Makefile's rm lines use
+		// $(PWD), which make inherits from the environment, not from cmd.Dir.
+		cmd.Env = append(os.Environ(), "PWD="+dir, "GOFLAGS=-mod=mod -p=2", "GOGC=50")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+		}
+	}
+	// The generated Makefile owns the bootstrap order (sqlc → tidy → wire); a
+	// user's first run is exactly this.
+	run("make", "gen")
+	run("go", "build", "./...")
+	// The generated project ships a strict golangci config plus a pre-commit
+	// hook and CI job that run it, so a fresh render must already be clean.
+	if _, err := exec.LookPath("golangci-lint"); err == nil {
+		run("golangci-lint", "run")
+	}
+}
+
+// TestUsersMigrationPerEngine pins the users DDL to the engine. sqlc derives
+// the schema from this file, so Postgres-only syntax in a mysql project
+// means dbgen is never generated and the project cannot build.
+func TestUsersMigrationPerEngine(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		db      string
+		want    []string
+		mustNot []string
+	}{
+		{
+			"postgres",
+			[]string{"BIGSERIAL", "TIMESTAMP WITH TIME ZONE"},
+			[]string{"AUTO_INCREMENT", "DATETIME"},
+		},
+		{
+			"mysql",
+			[]string{"BIGINT AUTO_INCREMENT PRIMARY KEY", "DATETIME(6)"},
+			[]string{"BIGSERIAL", "WITH TIME ZONE", "NOW()"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.db, func(t *testing.T) {
+			t.Parallel()
+			dir := renderProject(t, httpMatrixConfig("fiber", tc.db, "wire"))
+			matches, err := filepath.Glob(filepath.Join(dir, "sqlc/migrations/*_create_users_table.up.sql"))
+			if err != nil || len(matches) != 1 {
+				t.Fatalf("expected one users migration, got %v (%v)", matches, err)
+			}
+			src := readFile(t, matches[0])
+			mustContainAll(t, src, tc.want...)
+			mustNotContain(t, src, tc.mustNot...)
+		})
+	}
 }

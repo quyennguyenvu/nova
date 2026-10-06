@@ -54,7 +54,10 @@ func LoginRateLimit(cfg config.LoginRateLimitConfig) fiber.Handler {
 	l := newIPLimiter(cfg)
 	return func(c *fiber.Ctx) error {
 		if !l.allow(c.IP()) {
-			return httpwriter.WriteError(c, errors.L(locale.TooManyRequests).WithCause(errors.New("login rate limit exceeded")))
+			return httpwriter.WriteError(
+				c,
+				errors.L(locale.TooManyRequests).WithCause(errors.New("login rate limit exceeded")),
+			)
 		}
 		return c.Next()
 	}

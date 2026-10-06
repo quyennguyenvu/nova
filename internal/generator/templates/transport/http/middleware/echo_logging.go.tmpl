@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -66,38 +67,44 @@ func Logging(base observability.Logger) echo.MiddlewareFunc {
 			c.SetRequest(req.WithContext(ctx))
 
 			err := next(c)
-
-			status := c.Response().Status
-			ev := scoped.Info
-			if err != nil || status >= 500 {
-				ev = scoped.Error
-			} else if status >= 400 {
-				ev = scoped.Warn
-			}
-			fields := []any{
-				"status", status,
-				"duration_ms", time.Since(start).Milliseconds(),
-				"err", errMsg(err),
-				"client_ip", c.RealIP(),
-				"user_agent", req.UserAgent(),
-			}
-			if app := errors.AppErrorFromContext(ctx); app != nil {
-				fields = append(fields, "app_code", app.Code)
-				if app.Locale != 0 {
-					fields = append(fields, "app_locale", int(app.Locale))
-				}
-				// Surface the inner cause + trace whenever there's something to
-				// diagnose: a server fault (5xx), or any error that wrapped an
-				// underlying cause — e.g. a 4xx that failed decoding input or a
-				// downstream call. A plain validation 4xx carries no inner Err, so
-				// its line stays lean (app_code already names the client mistake)
-				// and error-rate alerts stay free of client-driven noise.
-				if err != nil || app.Err != nil || status >= 500 {
-					fields = append(fields, "app_err", app.Error(), "app_trace", app.Trace())
-				}
-			}
-			ev("request", fields...)
+			logAccess(ctx, scoped, c, err, start)
 			return err
 		}
 	}
+}
+
+// logAccess emits the single access line for a request. Severity follows the
+// status (and any handler error); AppError detail is appended whenever there
+// is something to diagnose.
+func logAccess(ctx context.Context, scoped observability.Logger, c echo.Context, err error, start time.Time) {
+	status := c.Response().Status
+	ev := scoped.Info
+	if err != nil || status >= 500 {
+		ev = scoped.Error
+	} else if status >= 400 {
+		ev = scoped.Warn
+	}
+	fields := []any{
+		"status", status,
+		"duration_ms", time.Since(start).Milliseconds(),
+		"err", errMsg(err),
+		"client_ip", c.RealIP(),
+		"user_agent", c.Request().UserAgent(),
+	}
+	if app := errors.AppErrorFromContext(ctx); app != nil {
+		fields = append(fields, "app_code", app.Code)
+		if app.Locale != 0 {
+			fields = append(fields, "app_locale", int(app.Locale))
+		}
+		// Surface the inner cause + trace whenever there's something to
+		// diagnose: a server fault (5xx), or any error that wrapped an
+		// underlying cause — e.g. a 4xx that failed decoding input or a
+		// downstream call. A plain validation 4xx carries no inner Err, so
+		// its line stays lean (app_code already names the client mistake)
+		// and error-rate alerts stay free of client-driven noise.
+		if err != nil || app.Err != nil || status >= 500 {
+			fields = append(fields, "app_err", app.Error(), "app_trace", app.Trace())
+		}
+	}
+	ev("request", fields...)
 }

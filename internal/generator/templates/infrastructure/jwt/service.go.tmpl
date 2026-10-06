@@ -74,7 +74,8 @@ func (s *TokenService) AccessTokenTTL() time.Duration { return s.accessTokenTTL 
 // an error on verify-only services (no private key configured).
 func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 	if s.privateKey == nil {
-		return "", errors.L(locale.InternalError).WithCause(errors.New("no signing key configured (verify-only service)"))
+		return "", errors.L(locale.InternalError).
+			WithCause(errors.New("no signing key configured (verify-only service)"))
 	}
 	now := time.Now()
 	claims := AccessTokenClaims{
@@ -108,7 +109,10 @@ func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 // to httpwriter.WriteError. The client always gets a generic localized 401
 // (locale.Unauthorized) — the specific reason is logged server-side, never
 // returned. ctx is used only to reach the request-scoped logger via logctx.From.
-func (s *TokenService) ParseAndVerifyAccessToken(ctx context.Context, tokenStr string) (*identity.UserPrincipal, error) {
+func (s *TokenService) ParseAndVerifyAccessToken(
+	ctx context.Context,
+	tokenStr string,
+) (*identity.UserPrincipal, error) {
 	log := logctx.From(ctx)
 	var claims AccessTokenClaims
 	tkn, err := jwt.ParseWithClaims(
@@ -173,11 +177,11 @@ func logVerifyFailure(ctx context.Context, err error) {
 	log.Debug("jwt verification rejected", "reason", reason)
 }
 
-// classifyParseError maps a golang-jwt v4 *ValidationError bitfield to a stable
-// reason string and whether it is anomalous (worth a Warn). Anything that is
-// not a recognised routine rejection — including a non-ValidationError, which
-// shouldn't happen — is treated as anomalous so it can never hide in the noise.
-func classifyParseError(err error) (reason string, anomalous bool) {
+// classifyParseError maps a golang-jwt v4 *ValidationError bitfield to a
+// stable reason string, plus whether it is anomalous (worth a Warn). Anything
+// that is not a recognised routine rejection — including a non-ValidationError,
+// which shouldn't happen — is anomalous so it can never hide in the noise.
+func classifyParseError(err error) (string, bool) {
 	var ve *jwt.ValidationError
 	if !errors.As(err, &ve) {
 		return "unknown", true

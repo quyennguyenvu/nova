@@ -39,7 +39,11 @@ func (g *ComponentGenerator) renderTemplates(specs []renderSpec, data any) error
 		if err != nil {
 			return err
 		}
-		if wErr := writeFile(out, rendered); wErr != nil {
+		formatted, fmtErr := formatGoSource(s.outRel, []byte(rendered))
+		if fmtErr != nil {
+			return fmt.Errorf("template %s: %w", s.tmpl, fmtErr)
+		}
+		if wErr := writeFile(out, string(formatted)); wErr != nil {
 			return wErr
 		}
 		fmt.Fprintf(os.Stdout, "   📄 %s\n", s.outRel)

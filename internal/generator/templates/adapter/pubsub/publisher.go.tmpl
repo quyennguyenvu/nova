@@ -35,8 +35,8 @@ func NewPublisher(producer sarama.SyncProducer) *Publisher {
 var _ domain.UserPublisher = (*Publisher)(nil)
 
 func (p *Publisher) publish(ctx context.Context, topic string, payload any) error {
-	if err := ctx.Err(); err != nil {
-		return errors.Wrapf(err, "publish to %s: context done", topic)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Wrapf(ctxErr, "publish to %s: context done", topic)
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -74,9 +74,9 @@ func NewPublisher(conn *amqp.Connection) (*Publisher, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "open rabbitmq channel")
 	}
-	if err := ch.ExchangeDeclare(rabbitmqExchange, "topic", true, false, false, false, nil); err != nil {
+	if declErr := ch.ExchangeDeclare(rabbitmqExchange, "topic", true, false, false, false, nil); declErr != nil {
 		_ = ch.Close()
-		return nil, errors.Wrap(err, "declare exchange")
+		return nil, errors.Wrap(declErr, "declare exchange")
 	}
 	return &Publisher{conn: conn, ch: ch}, nil
 }
@@ -89,11 +89,11 @@ func (p *Publisher) publish(ctx context.Context, routingKey string, payload any)
 	if err != nil {
 		return errors.Wrapf(err, "publish to %s: marshal event", routingKey)
 	}
-	if err := p.ch.PublishWithContext(ctx, rabbitmqExchange, routingKey, false, false, amqp.Publishing{
+	if pubErr := p.ch.PublishWithContext(ctx, rabbitmqExchange, routingKey, false, false, amqp.Publishing{
 		ContentType: "application/json",
 		Body:        data,
-	}); err != nil {
-		return errors.Wrapf(err, "publish to %s", routingKey)
+	}); pubErr != nil {
+		return errors.Wrapf(pubErr, "publish to %s", routingKey)
 	}
 	return nil
 }

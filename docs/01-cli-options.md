@@ -31,5 +31,6 @@ The Makefile, the lint config and the git pre-commit hook are always emitted —
 Check this before filing a bug:
 
 - `nethttp`, `sqlite`, `mongodb` are rejected up front — `generator.New()` whitelists frameworks (`fiber`/`gin`/`chi`/`echo`), databases (`postgres`/`mysql`/`none`) and DI (`wire`/`fx`), and returns an error for anything else.
+- `--database=none` renders an in-memory `UserRepository` (`internal/adapter/repository/memory/`) so the User CRUD, handlers and DI graph still build and run; data lives only for the lifetime of the process. The health probe has no dependency to check in that configuration and mirrors liveness.
 - `cron` and `cli` generate a project **that does not compile**: no `cmd/`, no `internal/app/`, no transport package, and (with `--di=wire`) a `wire.go` referencing an `App` graph that was never emitted. Same for a flag-driven run that never sets `--transport`, since `DefaultConfig()` leaves it empty.
 - `sqlx`/`gorm`/`database/sql`, `raw`/`gorm` queries, `bigcache` and `toml` are accepted and then **silently ignored** — the templates only branch on `pgx`+`sqlc`, `redis` and `yaml`. `nats` is the one that fails latest: the publisher compiles and returns `locale.Unimplemented` at runtime.

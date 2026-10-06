@@ -18,6 +18,7 @@ import (
 // throttle the public login endpoint without depending on globals.
 type Registrar struct {
 	v1.Prefixed
+
 	handler    *Handler
 	tokenSvc   *jwtsec.TokenService
 	loginLimit config.LoginRateLimitConfig

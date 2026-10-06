@@ -9,7 +9,9 @@ package health
 
 import (
 	"context"
+{{- if or .HasDatabase .HasRedis}}
 	"time"
+{{- end}}
 {{- if .HasDatabase}}
 {{- if eq .Database "postgres"}}
 
@@ -80,6 +82,8 @@ func (*Checker) Liveness() Status {
 	return Status{OK: true}
 }
 
+{{- if or .HasDatabase .HasRedis}}
+
 // Readiness pings every configured dependency under a 1-second deadline.
 // Returns OK=false if ANY check fails — the JSON body carries per-check
 // detail so the failing dependency is visible without log archaeology.
@@ -117,3 +121,11 @@ func (c *Checker) Readiness(ctx context.Context) Status {
 
 	return Status{OK: ok, Details: details}
 }
+{{- else}}
+
+// Readiness has no downstream dependency to probe in this configuration, so
+// it reports the same process-up signal as Liveness.
+func (*Checker) Readiness(context.Context) Status {
+	return Status{OK: true}
+}
+{{- end}}

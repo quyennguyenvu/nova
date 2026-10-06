@@ -12,6 +12,11 @@
 
 version: "2"
 
+run:
+  # Cap analyzer parallelism: the default uses every CPU and a cold run then
+  # spikes well past 1 GB, which swaps a 16 GB machine when anything else builds.
+  concurrency: 4
+
 issues:
   # Maximum count of issues with the same text.
   # Set to 0 to disable.
@@ -36,12 +41,15 @@ formatters:
       # with the given prefixes are grouped after 3rd-party packages.
       # Default: []
       local-prefixes:
-        - github.com/my/project
+        - {{.ModuleName}}
 
     golines:
       # Target maximum line length.
       # Default: 100
       max-len: 120
+      # Struct tags are hand-aligned in the templates; golines' tag realignment
+      # would reorder them (env before yaml) and pad fields missing a key.
+      reformat-tags: false
 
 linters:
   # Notes for bootstrap scaffolding:

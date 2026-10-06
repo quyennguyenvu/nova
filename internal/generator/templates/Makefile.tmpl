@@ -1,6 +1,6 @@
 .SILENT:
 GOPATH = $(shell go env GOPATH)
-WIRE_PATH = "$(GOPATH)/bin/wire"
+WIRE_PATH ?= $(shell go env GOPATH)/bin/wire
 export
 
 .PHONY: help
@@ -24,7 +24,7 @@ test-coverage:
 # Linting
 .PHONY: lint
 lint:
-	golangci-lint run{{if eq .QueryGen "sqlc"}} && sqlfluff lint --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}
+	GOGC=50 golangci-lint run{{if eq .QueryGen "sqlc"}} && sqlfluff lint --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}
 
 .PHONY: fmt
 fmt:
@@ -67,7 +67,14 @@ proto-gen:
 	protoc --go_out=. --go-grpc_out=. api/proto/**/*.proto
 {{- end}}
 
-gen:{{if .UseWire}} wire-gen{{end}}{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}}{{if .HasGRPC}} proto-gen{{end}}
+.PHONY: tidy
+tidy:
+	go mod tidy
+
+# Order matters: sqlc must emit dbgen before tidy can resolve its import, and
+# wire needs a tidied module to type-check the injector.
+.PHONY: gen
+gen:{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}} tidy{{if .UseWire}} wire-gen{{end}}{{if .HasGRPC}} proto-gen{{end}}
 
 {{- if .IncludeDocker}}
 # Docker

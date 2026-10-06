@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/signal"
 	"syscall"
@@ -31,7 +32,7 @@ func RunWorker() error {
 
 	errChan := make(chan error, 1)
 	go func() {
-		if startErr := worker.Start(ctx); startErr != nil && startErr != context.Canceled {
+		if startErr := worker.Start(ctx); startErr != nil && !errors.Is(startErr, context.Canceled) {
 			errChan <- startErr
 		}
 	}()

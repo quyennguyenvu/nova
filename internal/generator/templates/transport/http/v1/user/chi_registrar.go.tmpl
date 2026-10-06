@@ -14,6 +14,7 @@ import (
 // embedded v1.Prefixed base, so the prefix is declared once for the section.
 type Registrar struct {
 	v1.Prefixed
+
 	handler    *Handler
 	tokenSvc   *jwtsec.TokenService
 	loginLimit config.LoginRateLimitConfig

@@ -7,8 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
-
-{{- if and .HasMessageQueue (or .HasHTTP .HasWorker)}}
+{{ if and .HasMessageQueue (or .HasHTTP .HasWorker)}}
 	"{{.ModuleName}}/internal/adapter/pubsub"
 {{- end}}
 {{- if and (eq .Database "postgres") (or .HasHTTP .HasWorker)}}
@@ -16,6 +15,9 @@ import (
 {{- end}}
 {{- if and (eq .Database "mysql") (or .HasHTTP .HasWorker)}}
 	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
+{{- end}}
+{{- if and (not .HasDatabase) (or .HasHTTP .HasWorker)}}
+	memoryrepo "{{.ModuleName}}/internal/adapter/repository/memory"
 {{- end}}
 {{- if or .HasHTTP .HasWorker}}
 	"{{.ModuleName}}/internal/domain"
@@ -171,6 +173,9 @@ func adapterModule() fx.Option {
 {{- if .HasWorker}}
 		fx.Annotate(mysqlrepo.NewUserAuditRepository, fx.As(new(domain.UserAuditRepository))),
 {{- end}}
+{{- end}}
+{{- if not .HasDatabase}}
+		fx.Annotate(memoryrepo.NewUserRepository, fx.As(new(domain.UserRepository))),
 {{- end}}
 {{- if .HasMessageQueue}}
 		fx.Annotate(pubsub.NewPublisher, fx.As(new(domain.UserPublisher))),

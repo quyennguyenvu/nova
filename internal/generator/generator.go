@@ -332,6 +332,13 @@ func (g *Generator) adapterFiles() []templateFile {
 			"internal/adapter/repository/mysql/user_audit_repository.go",
 			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == mysql,
 		},
+		// Repository — in-memory. Keeps the User slice runnable when the project
+		// has no database; the SQL adapters replace it otherwise.
+		{
+			"templates/adapter/repository/memory/user_repository.go.tmpl",
+			"internal/adapter/repository/memory/user_repository.go",
+			!cfg.HasDatabase(),
+		},
 		// Repository — cache
 		{
 			"templates/adapter/repository/redis/user_cache.go.tmpl",
@@ -724,8 +731,13 @@ func (g *Generator) renderFile(tmplPath, outPath string) error {
 		return fmt.Errorf("failed to create directory %s: %w", dir, mkdirErr)
 	}
 
+	out, fmtErr := formatGoSource(outPath, buf.Bytes())
+	if fmtErr != nil {
+		return fmt.Errorf("template %s: %w", tmplPath, fmtErr)
+	}
+
 	// Write file
-	if writeErr := os.WriteFile(outPath, buf.Bytes(), outFileMode(outPath)); writeErr != nil {
+	if writeErr := os.WriteFile(outPath, out, outFileMode(outPath)); writeErr != nil {
 		return fmt.Errorf("failed to write file %s: %w", outPath, writeErr)
 	}
 

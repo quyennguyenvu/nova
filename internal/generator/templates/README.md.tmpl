@@ -124,9 +124,8 @@ openssl rsa -in jwt.key -pubout -out jwt.pub
 sed -i.bak "s|^JWT_PUBLIC_KEY=.*|JWT_PUBLIC_KEY=$(base64 < jwt.pub | tr -d '\n')|" .env
 sed -i.bak "s|^JWT_PRIVATE_KEY=.*|JWT_PRIVATE_KEY=$(base64 < jwt.key | tr -d '\n')|" .env && rm .env.bak
 
-# Install dependencies{{if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}} + run code generators ({{if .UseWire}}wire{{if or (eq .QueryGen "sqlc") .HasGRPC}}, {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc{{if .HasGRPC}}, {{end}}{{end}}{{if .HasGRPC}}proto{{end}}){{end}}
-go mod tidy{{if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
-make gen{{end}}
+# Generate code and resolve dependencies. `make gen` runs{{if eq .QueryGen "sqlc"}} sqlc,{{end}} go mod tidy{{if .UseWire}}, wire{{end}}{{if .HasGRPC}}, protoc{{end}} in the order that works.
+make gen
 {{- if .IncludeDocker}}
 
 # Start infrastructure only — the app itself runs on the host below

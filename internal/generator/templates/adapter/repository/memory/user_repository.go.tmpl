@@ -1,0 +1,149 @@
+// Package memory is the in-process UserRepository used when the project is
+// generated without a database. It keeps the User CRUD runnable (demos,
+// handler tests) with the same contract as the SQL adapters: ErrNotFound on
+// misses, ErrAlreadyExists on a duplicate email, ids assigned on Create.
+// Data lives for the lifetime of the process only.
+package memory
+
+import (
+	"context"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/pkg/errors"
+)
+
+var _ domain.UserRepository = (*UserRepository)(nil)
+
+// UserRepository is a mutex-guarded map keyed by id.
+type UserRepository struct {
+	mu     sync.RWMutex
+	nextID int64
+	users  map[int64]*entity.User
+}
+
+func NewUserRepository() *UserRepository {
+	return &UserRepository{nextID: 1, users: map[int64]*entity.User{}}
+}
+
+func (r *UserRepository) Create(_ context.Context, user *entity.User) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, u := range r.users {
+		if strings.EqualFold(u.Email, user.Email) {
+			return errors.Wrapf(errors.ErrAlreadyExists, "user repo: insert email=%s", user.Email)
+		}
+	}
+	now := time.Now()
+	user.ID = r.nextID
+	r.nextID++
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	user.UpdatedAt = now
+	stored := *user
+	r.users[user.ID] = &stored
+	return nil
+}
+
+func (r *UserRepository) GetByID(_ context.Context, id int64) (*entity.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	u, ok := r.users[id]
+	if !ok {
+		return nil, errors.Wrapf(errors.ErrNotFound, "user repo: select id=%d", id)
+	}
+	out := *u
+	return &out, nil
+}
+
+func (r *UserRepository) GetByEmail(_ context.Context, email string) (*entity.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, u := range r.users {
+		if strings.EqualFold(u.Email, email) {
+			out := *u
+			return &out, nil
+		}
+	}
+	return nil, errors.Wrapf(errors.ErrNotFound, "user repo: select email=%s", email)
+}
+
+func (r *UserRepository) Update(_ context.Context, user *entity.User) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.users[user.ID]; !ok {
+		return errors.Wrapf(errors.ErrNotFound, "user repo: update id=%d", user.ID)
+	}
+	user.UpdatedAt = time.Now()
+	stored := *user
+	r.users[user.ID] = &stored
+	return nil
+}
+
+func (r *UserRepository) Delete(_ context.Context, id int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.users[id]; !ok {
+		return errors.Wrapf(errors.ErrNotFound, "user repo: delete id=%d", id)
+	}
+	delete(r.users, id)
+	return nil
+}
+
+func (r *UserRepository) List(_ context.Context, filter domain.UserFilter) ([]*entity.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	all := r.sortedMatching(filter.Email)
+	start := int(filter.Offset)
+	if start >= len(all) {
+		return []*entity.User{}, nil
+	}
+	end := len(all)
+	if filter.Limit > 0 && start+int(filter.Limit) < end {
+		end = start + int(filter.Limit)
+	}
+	return all[start:end], nil
+}
+
+func (r *UserRepository) Count(_ context.Context, filter domain.UserFilter) (int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return int64(len(r.sortedMatching(filter.Email))), nil
+}
+
+func (r *UserRepository) ListAfter(_ context.Context, cursor int64, limit int32) ([]*entity.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*entity.User, 0, limit)
+	for _, u := range r.sortedMatching("") {
+		if u.ID <= cursor {
+			continue
+		}
+		out = append(out, u)
+		if len(out) == int(limit) {
+			break
+		}
+	}
+	return out, nil
+}
+
+// sortedMatching returns copies of every user whose email contains the filter
+// (case-insensitive; empty matches all), ordered by id. Callers hold r.mu.
+func (r *UserRepository) sortedMatching(emailFilter string) []*entity.User {
+	needle := strings.ToLower(emailFilter)
+	out := make([]*entity.User, 0, len(r.users))
+	for _, u := range r.users {
+		if needle != "" && !strings.Contains(strings.ToLower(u.Email), needle) {
+			continue
+		}
+		cp := *u
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}

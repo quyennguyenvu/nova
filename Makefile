@@ -1,4 +1,4 @@
-.PHONY: build run clean gen gen-api gen-grpc gen-worker verify-gen diff-gen rebuild test lint fmt vet help
+.PHONY: build run clean gen gen-api gen-grpc gen-worker verify-gen diff-gen rebuild test test-all lint fmt vet help
 
 # Binary
 BINARY    := bin/nova
@@ -96,11 +96,14 @@ diff-gen: gen-api ## Generate + show key template outputs for quick review
 
 ## —— Quality ————————————————————————————————————
 
-test: ## Run Go tests
-	go test -v ./...
+test: ## Fast suite (-short skips the render-then-vet matrix)
+	go test -short ./...
 
-lint: ## Run linter
-	golangci-lint run
+test-all: ## Full suite: 32-case vet matrix (2 at a time) + 4 real-toolchain bootstraps (~2 min warm cache; <2.5 GB)
+	go test -parallel 2 -timeout 30m ./...
+
+lint: ## Run linter (GOGC=50 trades a few seconds for a lower memory peak)
+	GOGC=50 golangci-lint run
 
 fmt: ## Format all Go source files
 	golangci-lint fmt

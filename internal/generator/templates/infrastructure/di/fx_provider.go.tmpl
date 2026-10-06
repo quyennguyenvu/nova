@@ -8,8 +8,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
-
-{{- if .HasRedis}}
+{{ if .HasRedis}}
 	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
 {{- end}}
 {{- if .HasElasticsearch}}
@@ -28,8 +27,7 @@ import (
 {{- end}}
 	"{{.ModuleName}}/internal/infrastructure/tracing"
 	"{{.ModuleName}}/pkg/observability"
-
-{{- if eq .Database "postgres"}}
+{{ if eq .Database "postgres"}}
 	"github.com/jackc/pgx/v5/pgxpool"
 {{- end}}
 {{- if eq .MessageQueue "kafka"}}
@@ -153,7 +151,11 @@ func provideRedisCache(lc fx.Lifecycle, cfg config.RedisConfig, log *logger.Logg
 {{- end}}
 {{- if .HasElasticsearch}}
 
-func provideElasticsearch(lc fx.Lifecycle, cfg config.ElasticsearchConfig, log *logger.Logger) (*infraSearch.Client, error) {
+func provideElasticsearch(
+	lc fx.Lifecycle,
+	cfg config.ElasticsearchConfig,
+	log *logger.Logger,
+) (*infraSearch.Client, error) {
 	client, cleanup, err := infraSearch.New(cfg, log)
 	if err != nil {
 		return nil, err
@@ -218,7 +220,12 @@ func provideHTTPServer(
 {{- end}}
 {{- if .HasGRPC}}
 
-func provideGRPCServer(lc fx.Lifecycle, ctx context.Context, cfg config.GRPCConfig, log *logger.Logger) (*server.GRPCServer, error) {
+func provideGRPCServer(
+	lc fx.Lifecycle,
+	ctx context.Context,
+	cfg config.GRPCConfig,
+	log *logger.Logger,
+) (*server.GRPCServer, error) {
 	srv, cleanup, err := server.NewGRPCServer(ctx, cfg, log)
 	if err != nil {
 		return nil, err

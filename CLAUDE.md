@@ -9,7 +9,7 @@ Behavioral guidelines (adapted from [andrej-karpathy-skills](https://github.com/
 1. **Think before coding.** Don't assume, don't hide confusion, surface tradeoffs. State assumptions explicitly; if multiple interpretations exist, present them instead of picking silently; if a simpler approach exists, say so.
 2. **Simplicity first.** Minimum code that solves the problem, nothing speculative — no unrequested features, no abstractions for single-use code, no error handling for impossible cases. If a senior engineer would call it overcomplicated, rewrite it smaller.
 3. **Surgical changes.** Every changed line should trace to the request. Don't refactor or reformat adjacent code; match the surrounding template/style even if you'd do it differently. Remove only the imports/vars/funcs your own change orphaned; flag pre-existing dead code rather than deleting it unasked.
-4. **Goal-driven execution.** Turn the task into a verifiable goal and loop until it passes. Here that means `make lint` and `make test` stay green, and generator changes are proven by the render-then-`go vet` matrix in [internal/generator/generator_test.go](internal/generator/generator_test.go) — add the matrix case in the same change, not after. "Fix the bug" → write a failing test first, then make it pass.
+4. **Goal-driven execution.** Turn the task into a verifiable goal and loop until it passes. Here that means `make lint` and `make test` stay green, and generator/template changes are additionally proven by `make test-all`, the render-then-`go vet` matrix in [internal/generator/generator_test.go](internal/generator/generator_test.go) plus `TestGeneratedProjectBootstrap`, which runs the real `make gen` → `go build` → `golangci-lint run` sequence on four representative projects (sequential; skips when a tool is missing) — add the matrix case in the same change, not after. "Fix the bug" → write a failing test first, then make it pass.
 
 ## Project
 
@@ -25,8 +25,9 @@ Module is `github.com/quyennguyenvu/nova`, binary is `bin/nova`. Requires Go 1.2
 ```bash
 make build            # go build -o bin/nova .
 make rebuild          # clean + build
-make test             # go test -v ./...
-make lint             # golangci-lint run
+make test             # go test -short ./... (fast; skips the render-then-vet matrix)
+make test-all         # full suite: 32-case vet matrix (2 at a time) + 4 real-toolchain bootstraps (~2 min warm cache; <2.5 GB)
+make lint             # GOGC=50 golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...
 
@@ -38,6 +39,15 @@ make diff-gen         # gen-api + cat key outputs (go.mod, cmd/api.go, di/wire.g
 ```
 
 Run a single test: `go test -v -run TestName ./path/to/pkg`.
+
+## Resource limits
+
+The dev machine has 16 GB RAM. One `go vet`/`go build` of a rendered project peaks near 1.1 GB because it recompiles fiber/sarama/otel/pgx from scratch, and one cold `golangci-lint run` near 1.2 GB. Several at once swap the machine to a standstill, so:
+
+- Run heavy toolchain commands (`make test-all`, `golangci-lint`, `go build`/`go vet`/`wire` on rendered projects) one at a time from the main thread — never inside parallel subagents, and never while a background one is still running.
+- For review or analysis fan-out use read-only agents (`grimoire-core:code-reviewer`, Explore). At most one agent at a time may run builds, tests, or linters.
+- Use `make test` for feedback; run `make test-all` alone with nothing else building.
+- Never `go clean -cache` or delete the module cache; cold rebuilds are exactly what makes each matrix case cost 1 GB.
 
 ## Architecture
 
@@ -51,7 +61,7 @@ Run a single test: `go test -v -run TestName ./path/to/pkg`.
 
 ### Rendering strategy
 
-[internal/generator/generator.go](internal/generator/generator.go) renders `text/template` files from an `embed.FS` (`//go:embed all:templates`). The template tree lives at [internal/generator/templates/](internal/generator/templates/). Files are selected by `cond` booleans in `buildFileList()` (which composes `entryPointFiles`, `rootFiles`, `domainFiles`, `usecaseFiles`, `adapterFiles`, `transportFiles`, `workerFiles`, `infrastructureFiles`, `pkgFiles`, `migrationFiles`, `sqlcFiles`, `toolingFiles`).
+[internal/generator/generator.go](internal/generator/generator.go) renders `text/template` files from an `embed.FS` (`//go:embed all:templates`). The template tree lives at [internal/generator/templates/](internal/generator/templates/). Files are selected by `cond` booleans in `buildFileList()` (which composes `entryPointFiles`, `rootFiles`, `domainFiles`, `usecaseFiles`, `adapterFiles`, `transportFiles`, `workerFiles`, `infrastructureFiles`, `pkgFiles`, `migrationFiles`, `sqlcFiles`, `toolingFiles`). Every rendered `.go` file is passed through `go/format` before writing (`formatGoSource`), so conditional template lines cannot leave the output un-gofmt'd.
 
 ### Template naming convention
 
@@ -72,7 +82,7 @@ All framework variants coexist in the template tree; the generator picks one at 
 
 `nova new` and `nova add` are independent generators (different template trees). `add` decides _where_ each file goes via [internal/manifest](internal/manifest/manifest.go); every generator renders `.tmpl` files from the [skel/](internal/generator/skel/) tree (see below) — the one exception is the sqlc repository, which is field-driven code-gen in [repository_sqlc.go](internal/generator/repository_sqlc.go). `manifest.Load(".")` finds the project root (nearest ancestor with `go.mod`) and returns `Default()` (nova's canonical layout, mirroring [docs/02-project-layout.md](docs/02-project-layout.md)) overlaid with any `nova.yaml` found there — so `add` works in projects not generated by `nova new`. `Manifest.Resolve(component, name, dbOverride)` expands the `{lower}`/`{snake}`/`{title}`/`{db}` placeholders in each `Target`. **The set of components `add` offers lives in `prompt.SupportedComponents` — keep it in lockstep with the `dispatchAdd` switch in [cmd/add.go](cmd/add.go) and the `Generate*` methods.** `Default()` declares more layout keys (cache/grpc/publisher/migration/query) than are implemented, so a `nova.yaml` can describe them ahead of their generators.
 
-One generator is NOT a flat stub: when `Stack.QueryGen == "sqlc"` + a SQL engine, `GenerateRepository` delegates to [repository_sqlc.go](internal/generator/repository_sqlc.go), which **AST-parses the existing entity** (`parseEntityStruct`), maps each Go field via `mapField` to (SQL column type, sqlc dbgen field, read/write expr) per engine, and emits the migration + sqlc query + typed impl + mapper — mirroring `nova new`'s `user_repository.go`/`mapper` exactly but parameterized by the entity's fields. The entity MUST exist first (it drives the columns) or it errors. This is why `GenerateEntity` emits a **typed** port (`*entity.X`, not `any`): the generated impl must satisfy it (`var _ domain.XRepository = ...`). Generated Go is run through `go/format` before writing. Verify changes here with real sqlc, not just `go vet` (the `generator_test.go` dbgen stub doesn't exercise these queries). Note: `nova new`'s `create_*_table` migration template is postgres-only DDL (`BIGSERIAL`) even for mysql projects — a pre-existing bug; the sqlc repository generator emits correct per-engine DDL.
+One generator is NOT a flat stub: when `Stack.QueryGen == "sqlc"` + a SQL engine, `GenerateRepository` delegates to [repository_sqlc.go](internal/generator/repository_sqlc.go), which **AST-parses the existing entity** (`parseEntityStruct`), maps each Go field via `mapField` to (SQL column type, sqlc dbgen field, read/write expr) per engine, and emits the migration + sqlc query + typed impl + mapper — mirroring `nova new`'s `user_repository.go`/`mapper` exactly but parameterized by the entity's fields. The entity MUST exist first (it drives the columns) or it errors. This is why `GenerateEntity` emits a **typed** port (`*entity.X`, not `any`): the generated impl must satisfy it (`var _ domain.XRepository = ...`). Generated Go is run through `go/format` before writing. Verify changes here with real sqlc, not just `go vet` (the `generator_test.go` dbgen stub doesn't exercise these queries). Both generators emit per-engine DDL (`BIGSERIAL`/`TIMESTAMPTZ` for postgres, `AUTO_INCREMENT`/`DATETIME(6)` for mysql); `TestUsersMigrationPerEngine` pins the `nova new` side.
 
 `add`'s `.tmpl` files live under [internal/generator/skel/](internal/generator/skel/), **one directory per command** (`entity/`, `usecase/`, `handler/`, `repository/`, `worker/`), embedded via `skelFS` in [component_render.go](internal/generator/component_render.go) — separate from the `nova new` tree. The `Generate*` methods build a `[]renderSpec{tmpl, outRel, skipIfExists}` and call `renderTemplates(specs, tmplData)`; `tmplData` carries the fields every template may need. To add a template-driven command: drop a dir under `skel/` and render it.
 

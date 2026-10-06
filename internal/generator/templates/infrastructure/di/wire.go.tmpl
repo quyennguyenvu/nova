@@ -5,8 +5,7 @@ package di
 
 import (
 	"context"
-
-{{- if .HasMessageQueue}}
+{{ if .HasMessageQueue}}
 	"{{.ModuleName}}/internal/adapter/pubsub"
 {{- end}}
 {{- if eq .Database "postgres"}}
@@ -14,6 +13,9 @@ import (
 {{- end}}
 {{- if eq .Database "mysql"}}
 	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
+{{- end}}
+{{- if not .HasDatabase}}
+	memoryrepo "{{.ModuleName}}/internal/adapter/repository/memory"
 {{- end}}
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/infrastructure/config"
@@ -159,6 +161,10 @@ var adapterSet = wire.NewSet(
 	mysqlrepo.NewUserAuditRepository,
 	wire.Bind(new(domain.UserAuditRepository), new(*mysqlrepo.UserAuditRepository)),
 {{- end}}
+{{- end}}
+{{- if not .HasDatabase}}
+	memoryrepo.NewUserRepository,
+	wire.Bind(new(domain.UserRepository), new(*memoryrepo.UserRepository)),
 {{- end}}
 {{- if .HasMessageQueue}}
 	pubsub.NewPublisher,

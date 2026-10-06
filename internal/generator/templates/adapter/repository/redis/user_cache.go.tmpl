@@ -98,9 +98,9 @@ func (r *UserCacheRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// List, Count and ListAfter pass straight through: caching a page keyed by its
-// filter invalidates on every write to the table, so the hit rate rarely pays
-// for the staleness. Cache these per-query only if you can bound that.
+// List passes straight through, as do Count and ListAfter: caching a page keyed
+// by its filter invalidates on every write to the table, so the hit rate rarely
+// pays for the staleness. Cache these per-query only if you can bound that.
 func (r *UserCacheRepository) List(ctx context.Context, params domain.UserFilter) ([]*entity.User, error) {
 	return r.repo.List(ctx, params)
 }

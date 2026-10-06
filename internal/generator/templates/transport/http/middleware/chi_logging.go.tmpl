@@ -21,6 +21,7 @@ func traceIDOr(sc trace.SpanContext) string {
 
 type statusRecorder struct {
 	http.ResponseWriter
+
 	status int
 }
 

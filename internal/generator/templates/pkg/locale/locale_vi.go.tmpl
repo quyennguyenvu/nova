@@ -1,7 +1,7 @@
 package locale
 
 func viMapping() {
-	translations[LangVi] = Mapping{
+	translations[LangVi] = Mapping{ //nolint:gosec // G101: UI strings keyed by error name, not credentials
 		InternalError:        "Lỗi hệ thống",
 		InvalidRequest:       "Yêu cầu không hợp lệ",
 		Unauthorized:         "Chưa đăng nhập",

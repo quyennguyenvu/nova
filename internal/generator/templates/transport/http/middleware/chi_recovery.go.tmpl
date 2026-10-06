@@ -16,6 +16,7 @@ import (
 // body is already on the wire) — we log and bail in that case.
 type recoveryWriter struct {
 	http.ResponseWriter
+
 	wroteHeader bool
 }
 

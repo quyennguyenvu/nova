@@ -12,6 +12,11 @@
 
 version: "2"
 
+run:
+  # Cap analyzer parallelism: the default uses every CPU and a cold run then
+  # spikes well past 1 GB, which swaps a 16 GB machine when anything else builds.
+  concurrency: 4
+
 issues:
   # Maximum count of issues with the same text.
   # Set to 0 to disable.

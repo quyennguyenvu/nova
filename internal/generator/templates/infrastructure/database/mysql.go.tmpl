@@ -1,16 +1,22 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
 )
+
+// pingTimeout bounds the startup connectivity check so a down database fails
+// fast instead of hanging boot.
+const pingTimeout = 5 * time.Second
 
 // NewMySQLDB creates a new MySQL database connection.
 func NewMySQLDB(cfg config.DatabaseConfig, log *logger.Logger) (*sql.DB, func(), error) {
@@ -33,8 +39,11 @@ func NewMySQLDB(cfg config.DatabaseConfig, log *logger.Logger) (*sql.DB, func(),
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 
-	if err := db.Ping(); err != nil {
-		return nil, nil, fmt.Errorf("failed to ping database: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+
+	if pingErr := db.PingContext(ctx); pingErr != nil {
+		return nil, nil, fmt.Errorf("failed to ping database: %w", pingErr)
 	}
 
 	cleanup := func() {

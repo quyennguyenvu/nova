@@ -76,6 +76,8 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   │       ├── user.go             # Row ↔ entity mapping (keeps repo file thin)
 │   │   │   │       └── user_audit.go       # [worker]
 │   │   │   ├── mysql/                      # [--database=mysql]   (same shape as postgres/)
+│   │   │   ├── memory/                     # [--database=none]    in-process UserRepository (demos, handler tests)
+│   │   │   │   └── user_repository.go
 │   │   │   ├── redis/                      # [--cache=redis]
 │   │   │   │   ├── user_cache.go           # Read-through cache decorator
 │   │   │   │   └── mapper/
@@ -196,3 +198,4 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 - `jwt/` lives in `infrastructure/`, not `adapter/`. Signing and verifying are pure computation, and verification is called only by the auth middleware — so per [04](04-placement-rationale.md#if-only-transport-calls-it--no-domain-interface) no domain interface is needed for the middleware path, and the package belongs with other technical bootstrapping.
 - `tx_manager.go` is split: the interface lives in `domain/`, the postgres implementation in `adapter/repository/postgres/`. Usecases inject `domain.TxManager` and call it without knowing which DB is wired in.
 - `di/provider.go` and `di/app.go` are emitted for **any** transport; only the graph file itself is DI-specific (`wire.go` vs `fx.go` + `fx_provider.go`).
+- `internal/adapter/repository/<db>/dbgen/` and `internal/infrastructure/di/wire_gen.go` are not rendered by nova. `make gen` creates them (sqlc, then `go mod tidy`, then wire, in that order because tidy needs the `dbgen` import to resolve); a fresh clone must run `make gen` before `go build`.

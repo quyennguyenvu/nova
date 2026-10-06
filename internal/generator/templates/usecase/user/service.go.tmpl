@@ -3,6 +3,8 @@ package user
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
+	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -156,10 +158,16 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListOutput, error
 	if page <= 0 {
 		page = 1
 	}
+	// Offsets are int32 at the repo boundary; refuse pages that cannot be
+	// addressed instead of letting the conversion wrap negative.
+	offset := int64(page-1) * int64(perPage)
+	if offset > math.MaxInt32 {
+		return nil, errors.L(locale.InvalidRequest).WithCause(fmt.Errorf("page %d out of range", page))
+	}
 	filter := domain.UserFilter{
 		Email:  input.Email,
 		Limit:  int32(perPage),
-		Offset: int32((page - 1) * perPage),
+		Offset: int32(offset),  //nolint:gosec // bounded by the MaxInt32 check above
 	}
 	users, err := s.userRepo.List(ctx, filter)
 	if err != nil {

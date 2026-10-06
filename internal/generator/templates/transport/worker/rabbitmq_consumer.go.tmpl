@@ -67,26 +67,31 @@ func (c *rabbitmqConsumer) Subscribe(ctx context.Context, topics []string, dispa
 			if !ok {
 				return nil
 			}
-			if dispErr := dispatch(ctx, d.RoutingKey, d.Body); dispErr != nil {
-				c.log.Error("rabbitmq: dispatch failed",
-					"routing_key", d.RoutingKey,
-					"delivery_tag", d.DeliveryTag,
-					"err", dispErr.Error(),
-				)
-				// Requeue so another replica (or the next redelivery)
-				// gets a shot. Switch to a DLQ in production.
-				if nackErr := d.Nack(false, true); nackErr != nil {
-					c.log.Error("rabbitmq: nack failed", "err", nackErr.Error())
-				}
-				continue
-			}
-			if ackErr := d.Ack(false); ackErr != nil {
-				c.log.Error("rabbitmq: ack failed",
-					"delivery_tag", d.DeliveryTag,
-					"err", ackErr.Error(),
-				)
-			}
+			c.handle(ctx, d, dispatch)
 		}
+	}
+}
+
+// handle dispatches one delivery and acks or nacks it. A dispatch error
+// requeues the message so another replica (or the next redelivery) gets a
+// shot; switch to a DLQ in production.
+func (c *rabbitmqConsumer) handle(ctx context.Context, d amqp.Delivery, dispatch DispatchFunc) {
+	if dispErr := dispatch(ctx, d.RoutingKey, d.Body); dispErr != nil {
+		c.log.Error("rabbitmq: dispatch failed",
+			"routing_key", d.RoutingKey,
+			"delivery_tag", d.DeliveryTag,
+			"err", dispErr.Error(),
+		)
+		if nackErr := d.Nack(false, true); nackErr != nil {
+			c.log.Error("rabbitmq: nack failed", "err", nackErr.Error())
+		}
+		return
+	}
+	if ackErr := d.Ack(false); ackErr != nil {
+		c.log.Error("rabbitmq: ack failed",
+			"delivery_tag", d.DeliveryTag,
+			"err", ackErr.Error(),
+		)
 	}
 }
 
