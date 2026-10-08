@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/AlecAivazis/survey/v2"
 
@@ -19,13 +20,7 @@ func RunInteractive(cfg *config.ProjectConfig) error {
 	if err := promptHTTPFramework(cfg); err != nil {
 		return err
 	}
-	if err := promptGRPCGateway(cfg); err != nil {
-		return err
-	}
 	if err := promptDatabase(cfg); err != nil {
-		return err
-	}
-	if err := promptSQL(cfg); err != nil {
 		return err
 	}
 	if err := promptCache(cfg); err != nil {
@@ -35,9 +30,6 @@ func RunInteractive(cfg *config.ProjectConfig) error {
 		return err
 	}
 	if err := promptMessageQueue(cfg); err != nil {
-		return err
-	}
-	if err := promptConfigFormat(cfg); err != nil {
 		return err
 	}
 	if err := promptDI(cfg); err != nil {
@@ -68,7 +60,7 @@ func promptProjectBasics(cfg *config.ProjectConfig) error {
 func promptTransport(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Transport layer:",
-		Options: []string{"http", "grpc", "worker", "cron", "cli"},
+		Options: config.Transports,
 		Default: "http",
 	}, &cfg.Transport); err != nil {
 		return err
@@ -83,23 +75,9 @@ func promptHTTPFramework(cfg *config.ProjectConfig) error {
 
 	if err := survey.AskOne(&survey.Select{
 		Message: "HTTP framework:",
-		Options: []string{"fiber", "gin", "chi", "echo", "nethttp"},
+		Options: config.HTTPFrameworks,
 		Default: "fiber",
 	}, &cfg.HTTPFramework); err != nil {
-		return err
-	}
-	return nil
-}
-
-func promptGRPCGateway(cfg *config.ProjectConfig) error {
-	if !cfg.HasGRPC() {
-		return nil
-	}
-
-	if err := survey.AskOne(&survey.Confirm{
-		Message: "Include gRPC-Gateway?",
-		Default: false,
-	}, &cfg.GRPCGateway); err != nil {
 		return err
 	}
 	return nil
@@ -108,31 +86,9 @@ func promptGRPCGateway(cfg *config.ProjectConfig) error {
 func promptDatabase(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Database:",
-		Options: []string{"postgres", "mysql", "sqlite", "mongodb", "none"},
+		Options: config.Databases,
 		Default: "postgres",
 	}, &cfg.Database); err != nil {
-		return err
-	}
-	return nil
-}
-
-func promptSQL(cfg *config.ProjectConfig) error {
-	if !cfg.HasSQL() {
-		return nil
-	}
-
-	if err := survey.AskOne(&survey.Select{
-		Message: "Database driver:",
-		Options: []string{"pgx", "sqlx", "gorm", "database/sql"},
-		Default: "pgx",
-	}, &cfg.DBDriver); err != nil {
-		return err
-	}
-	if err := survey.AskOne(&survey.Select{
-		Message: "Query generation:",
-		Options: []string{"sqlc", "raw", "gorm"},
-		Default: "sqlc",
-	}, &cfg.QueryGen); err != nil {
 		return err
 	}
 	return nil
@@ -141,7 +97,7 @@ func promptSQL(cfg *config.ProjectConfig) error {
 func promptCache(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Cache:",
-		Options: []string{"redis", "bigcache", "none"},
+		Options: config.Caches,
 		Default: "redis",
 	}, &cfg.Cache); err != nil {
 		return err
@@ -152,7 +108,7 @@ func promptCache(cfg *config.ProjectConfig) error {
 func promptSearch(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Search engine:",
-		Options: []string{"elasticsearch", "none"},
+		Options: config.Searches,
 		Default: "none",
 	}, &cfg.Search); err != nil {
 		return err
@@ -161,26 +117,18 @@ func promptSearch(cfg *config.ProjectConfig) error {
 }
 
 func promptMessageQueue(cfg *config.ProjectConfig) error {
+	opts := slices.Clone(config.MessageQueues)
 	defaultMQ := "none"
 	if cfg.HasWorker() {
+		// A worker is a consumer; "none" would fail Validate anyway.
+		opts = slices.DeleteFunc(opts, func(s string) bool { return s == "none" })
 		defaultMQ = "kafka"
 	}
 	if err := survey.AskOne(&survey.Select{
 		Message: "Message queue:",
-		Options: []string{"kafka", "rabbitmq", "nats", "none"},
+		Options: opts,
 		Default: defaultMQ,
 	}, &cfg.MessageQueue); err != nil {
-		return err
-	}
-	return nil
-}
-
-func promptConfigFormat(cfg *config.ProjectConfig) error {
-	if err := survey.AskOne(&survey.Select{
-		Message: "Configuration format:",
-		Options: []string{"yaml", "toml"},
-		Default: "yaml",
-	}, &cfg.ConfigFormat); err != nil {
 		return err
 	}
 	return nil
@@ -189,7 +137,7 @@ func promptConfigFormat(cfg *config.ProjectConfig) error {
 func promptDI(cfg *config.ProjectConfig) error {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Dependency injection:",
-		Options: []string{"wire", "fx"},
+		Options: config.DIs,
 		Default: "wire",
 	}, &cfg.DI); err != nil {
 		return err

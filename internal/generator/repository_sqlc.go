@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/quyennguyenvu/nova/internal/manifest"
 )
@@ -44,7 +43,7 @@ type fieldMapping struct {
 // entity<->row mapper. It requires the entity to already exist (its fields drive
 // the columns) and only runs when the project's stack uses sqlc + a SQL engine.
 func (g *ComponentGenerator) generateSQLCRepository(name, engine string) error {
-	title := toTitle(name)
+	title := manifest.Title(name)
 
 	entityRes, ok := g.manifest.Resolve("entity", name, "")
 	if !ok {
@@ -59,7 +58,7 @@ func (g *ComponentGenerator) generateSQLCRepository(name, engine string) error {
 	cols, skipped := mapFields(engine, fields)
 	for _, s := range skipped {
 		fmt.Fprintf(
-			os.Stdout,
+			g.Out,
 			"   ⚠️  skipped field %s: unsupported type %q (add the column manually)\n",
 			s.Name,
 			s.GoType,
@@ -74,7 +73,7 @@ func (g *ComponentGenerator) generateSQLCRepository(name, engine string) error {
 	migRes, _ := g.manifest.Resolve("migration", name, "")
 	queryRes, _ := g.manifest.Resolve("query", name, "")
 
-	table := plural(snakeCase(name))
+	table := plural(manifest.Snake(name))
 	insertCols := filterColumns(cols, "id")
 	updateCols := filterColumns(insertCols, "created_at")
 
@@ -89,28 +88,43 @@ func (g *ComponentGenerator) generateSQLCRepository(name, engine string) error {
 	}
 
 	ts := time.Now().Format("20060102150405")
-	// rel paths are relative to baseDir — the write loop joins baseDir once.
-	files := []genFile{
-		{
-			filepath.Join(migRes.Dir, fmt.Sprintf("%s_create_%s_table.up.sql", ts, table)),
-			genMigrationUp(engine, table, insertCols),
-			false,
-		},
-		{
-			filepath.Join(migRes.Dir, fmt.Sprintf("%s_create_%s_table.down.sql", ts, table)),
-			genMigrationDown(table),
-			false,
-		},
-		{relOf(queryRes, ""), genQuery(engine, title, table, insertCols, updateCols), false},
-		{relOf(repoRes, ""), genRepoImpl(ic), true},
-		{
-			filepath.Join(repoRes.Dir, "mapper", snakeCase(name)+".go"),
+	// rel paths are relative to baseDir — the write loop resolves them once.
+	var files []genFile
+	existing, _ := filepath.Glob(filepath.Join(g.baseDir, migRes.Dir, "*_create_"+table+"_table.up.sql"))
+	if len(existing) > 0 {
+		fmt.Fprintf(g.Out, "   ↩︎  migration for %s exists, skipped\n", table)
+	} else {
+		files = append(files,
+			genFile{
+				filepath.Join(migRes.Dir, fmt.Sprintf("%s_create_%s_table.up.sql", ts, table)),
+				genMigrationUp(engine, table, insertCols),
+				false,
+			},
+			genFile{
+				filepath.Join(migRes.Dir, fmt.Sprintf("%s_create_%s_table.down.sql", ts, table)),
+				genMigrationDown(table),
+				false,
+			},
+		)
+	}
+	files = append(files,
+		genFile{relOf(queryRes, ""), genQuery(engine, title, table, insertCols, updateCols), false},
+		genFile{relOf(repoRes, ""), genRepoImpl(ic), true},
+		genFile{
+			filepath.Join(repoRes.Dir, "mapper", manifest.Snake(name)+".go"),
 			genMapper(ic, cols, insertCols, updateCols),
 			true,
 		},
-	}
+	)
 
 	for _, f := range files {
+		abs, pErr := g.outPath(f.rel)
+		if pErr != nil {
+			return pErr
+		}
+		if gErr := g.guardOverwrite(f.rel, abs); gErr != nil {
+			return gErr
+		}
 		content := f.content
 		if f.goCode {
 			formatted, fmtErr := format.Source([]byte(content))
@@ -119,14 +133,14 @@ func (g *ComponentGenerator) generateSQLCRepository(name, engine string) error {
 			}
 			content = string(formatted)
 		}
-		if wErr := writeFile(filepath.Join(g.baseDir, f.rel), content); wErr != nil {
+		if wErr := writeFile(abs, content); wErr != nil {
 			return wErr
 		}
-		fmt.Fprintf(os.Stdout, "   📄 %s\n", f.rel)
+		fmt.Fprintf(g.Out, "   📄 %s\n", f.rel)
 	}
 
-	fmt.Fprintf(os.Stdout, "✅ Generated sqlc repository: %sRepository (%s)\n", title, engine)
-	fmt.Fprintf(os.Stdout, "   ▶ run `make gen` (sqlc) then wire %sRepository into your DI provider\n", title)
+	fmt.Fprintf(g.Out, "✅ Generated sqlc repository: %sRepository (%s)\n", title, engine)
+	fmt.Fprintf(g.Out, "   ▶ run `make gen` (sqlc) then wire %sRepository into your DI provider\n", title)
 	return nil
 }
 
@@ -173,7 +187,7 @@ func parseEntityStruct(path, structName string) ([]entityField, error) {
 			typ := exprToTypeString(f.Type)
 			for _, nm := range f.Names {
 				if nm.IsExported() {
-					fields = append(fields, entityField{Name: nm.Name, GoType: typ, Column: snakeCase(nm.Name)})
+					fields = append(fields, entityField{Name: nm.Name, GoType: typ, Column: manifest.Snake(nm.Name)})
 				}
 			}
 		}
@@ -534,7 +548,20 @@ func pick(cond bool, ifTrue, ifFalse string) string {
 	return ifFalse
 }
 
-func plural(s string) string { return s + "s" }
+// plural forms the table name from a snake_case entity (category -> categories,
+// box -> boxes, order -> orders). Good enough for scaffolding; rename the table
+// in the migration if English disagrees.
+func plural(s string) string {
+	switch {
+	case strings.HasSuffix(s, "y") && len(s) > 1 && !strings.ContainsRune("aeiou", rune(s[len(s)-2])):
+		return s[:len(s)-1] + "ies"
+	case strings.HasSuffix(s, "s"), strings.HasSuffix(s, "x"), strings.HasSuffix(s, "z"),
+		strings.HasSuffix(s, "ch"), strings.HasSuffix(s, "sh"):
+		return s + "es"
+	default:
+		return s + "s"
+	}
+}
 
 // relOf returns a resolved target's path relative to the project root (Dir +
 // File), using fallback when the layout entry has no File pattern.
@@ -583,24 +610,4 @@ func pgPlaceholders(start, n int) string {
 
 func qmPlaceholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
-}
-
-// snakeCase converts a Go identifier to snake_case, keeping acronyms intact
-// (ID -> id, UserID -> user_id, HTTPServer -> http_server).
-func snakeCase(s string) string {
-	var b strings.Builder
-	runes := []rune(s)
-	for i, r := range runes {
-		if unicode.IsUpper(r) {
-			prevLower := i > 0 && (unicode.IsLower(runes[i-1]) || unicode.IsDigit(runes[i-1]))
-			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
-			if i > 0 && (prevLower || nextLower) {
-				b.WriteByte('_')
-			}
-			b.WriteRune(unicode.ToLower(r))
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }

@@ -31,6 +31,7 @@ func TestResolve(t *testing.T) {
 	}{
 		{"entity", "entity", "Order", "", "internal/domain/entity", "order.go", "entity"},
 		{"entity snake", "entity", "OrderItem", "", "internal/domain/entity", "order_item.go", "entity"},
+		{"entity acronym", "entity", "HTTPServer", "", "internal/domain/entity", "http_server.go", "entity"},
 		{"port", "port", "Order", "", "internal/domain", "order.go", "domain"},
 		{"usecase lower dir", "usecase", "Order", "", "internal/usecase/order", "", "order"},
 		{
@@ -153,5 +154,22 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestSnake pins the acronym-aware rule shared with the sqlc generator so
+// the entity file, table and mapper names agree.
+func TestSnake(t *testing.T) {
+	cases := map[string]string{
+		"ID": "id", "UserID": "user_id", "CreatedAt": "created_at",
+		"HTTPServer": "http_server", "Name": "name", "OrderItem": "order_item",
+	}
+	for in, want := range cases {
+		if got := Snake(in); got != want {
+			t.Errorf("Snake(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := Title("order"); got != "Order" {
+		t.Errorf("Title = %q", got)
 	}
 }

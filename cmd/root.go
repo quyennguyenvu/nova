@@ -9,8 +9,9 @@ import (
 // Execute runs the root command.
 func Execute() {
 	var rootCmd = &cobra.Command{
-		Use:   "nova",
-		Short: "Nova — Go Clean Architecture project generator",
+		Use:          "nova",
+		SilenceUsage: true, // a validation error should not dump the full usage text
+		Short:        "Nova — Go Clean Architecture project generator",
 		Long: `
 Nova generates production-ready Go projects following Clean Architecture principles.
 	

@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -23,27 +26,26 @@ Run without arguments for interactive mode, or use flags to skip prompts.
 Examples:
 	nova new
 	nova new myproject --module=github.com/myorg/myproject --transport=http
-	nova new myproject --http-framework=fiber --database=postgres --db-driver=pgx`,
+	nova new myproject --http-framework=fiber --database=postgres --cache=redis`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runNew,
 	}
 
 	f := newCmd.Flags()
-	f.String("module", "", "Go module name (e.g. github.com/myorg/myproject)")
-	f.String("type", "", "Project type: api, worker, cron, cli")
-	f.String("transport", "", "Transport layer: http, grpc, cron, cli, worker")
-	f.String("http-framework", "", "HTTP framework: fiber, gin, chi, echo, nethttp")
-	f.Bool("grpc-gateway", false, "Include gRPC-Gateway")
-	f.String("database", "", "Database: postgres, mysql, sqlite, mongodb, none")
-	f.String("db-driver", "", "Database driver: pgx, sqlx, gorm, database/sql")
-	f.String("query", "", "Query generation: sqlc, raw, gorm")
-	f.String("cache", "", "Cache: redis, bigcache, none")
-	f.String("search", "", "Search engine: elasticsearch, none")
-	f.String("queue", "", "Message queue: kafka, rabbitmq, nats, none")
-	f.String("config", "", "Configuration format: yaml, toml, env")
-	f.String("di", "", "Dependency injection: wire, fx")
-	f.Bool("docker", false, "Include Docker setup")
-	f.String("ci", "", "CI/CD: github, none")
+	f.String("module", "", "Go module path (e.g. github.com/myorg/myproject)")
+	f.String("transport", "", "Transport layer: "+strings.Join(config.Transports, ", "))
+	f.String("http-framework", "", "HTTP framework: "+strings.Join(config.HTTPFrameworks, ", "))
+	f.String("database", "", "Database: "+strings.Join(config.Databases, ", "))
+	f.String("db-driver", "", "Database driver (pgx for postgres, database/sql for mysql; defaults per engine)")
+	f.String("query", "", "Query generation: sqlc (default for SQL engines)")
+	f.String("cache", "", "Cache: "+strings.Join(config.Caches, ", "))
+	f.String("search", "", "Search engine: "+strings.Join(config.Searches, ", "))
+	f.String("queue", "", "Message queue: "+strings.Join(config.MessageQueues, ", "))
+	f.String("config", "", "Configuration format: "+strings.Join(config.ConfigFormats, ", "))
+	f.String("di", "", "Dependency injection: "+strings.Join(config.DIs, ", "))
+	f.Bool("docker", true, "Include Docker setup (--docker=false to skip)")
+	f.String("ci", "github", "CI/CD: "+strings.Join(config.CIs, ", "))
+	f.Bool("force", false, "Generate into a non-empty directory, overwriting files that already exist")
 
 	return newCmd
 }
@@ -62,7 +64,9 @@ func runNew(cmd *cobra.Command, args []string) error {
 	})
 
 	if flagsSet {
-		applyFlags(cmd, cfg)
+		if err := applyFlags(cmd, cfg); err != nil {
+			return err
+		}
 	} else {
 		fmt.Fprintln(os.Stdout, "🚀 Nova — Go Clean Architecture Project Generator")
 		fmt.Fprintln(os.Stdout)
@@ -74,6 +78,9 @@ func runNew(cmd *cobra.Command, args []string) error {
 	// Set module name from project name if not explicitly set
 	if cfg.ModuleName == "" {
 		cfg.ModuleName = fmt.Sprintf("github.com/myorg/%s", cfg.ProjectName)
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 
 	fmt.Fprintf(os.Stdout, "\n📦 Generating project: %s\n", cfg.ProjectName)
@@ -98,6 +105,10 @@ func runNew(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generator init: %w", err)
 	}
 	outputDir := cfg.ProjectName
+	force, _ := cmd.Flags().GetBool("force")
+	if dirErr := checkTargetDir(outputDir, force); dirErr != nil {
+		return dirErr
+	}
 
 	if genErr := gen.Generate(outputDir); genErr != nil {
 		return fmt.Errorf("generation failed: %w", genErr)
@@ -136,49 +147,55 @@ func nextSteps(cfg *config.ProjectConfig) []string {
 	return steps
 }
 
-func applyFlags(cmd *cobra.Command, cfg *config.ProjectConfig) {
-	if v, _ := cmd.Flags().GetString("module"); v != "" {
-		cfg.ModuleName = v
+func applyFlags(cmd *cobra.Command, cfg *config.ProjectConfig) error {
+	flags := cmd.Flags()
+	for flag, field := range map[string]*string{
+		"module":         &cfg.ModuleName,
+		"transport":      &cfg.Transport,
+		"http-framework": &cfg.HTTPFramework,
+		"database":       &cfg.Database,
+		"db-driver":      &cfg.DBDriver,
+		"query":          &cfg.QueryGen,
+		"cache":          &cfg.Cache,
+		"search":         &cfg.Search,
+		"queue":          &cfg.MessageQueue,
+		"config":         &cfg.ConfigFormat,
+		"di":             &cfg.DI,
+	} {
+		if v, _ := flags.GetString(flag); v != "" {
+			*field = v
+		}
 	}
-	if v, _ := cmd.Flags().GetString("transport"); v != "" {
-		cfg.Transport = v
+	// Booleans must honour an explicit false, so test Changed rather than value.
+	if flags.Changed("docker") {
+		cfg.IncludeDocker, _ = flags.GetBool("docker")
 	}
-	if v, _ := cmd.Flags().GetString("http-framework"); v != "" {
-		cfg.HTTPFramework = v
+	if flags.Changed("ci") {
+		switch v, _ := flags.GetString("ci"); v {
+		case "github":
+			cfg.IncludeCI = true
+		case "none":
+			cfg.IncludeCI = false
+		default:
+			return fmt.Errorf("ci %q is not supported (valid: %s)", v, strings.Join(config.CIs, ", "))
+		}
 	}
-	if v, _ := cmd.Flags().GetBool("grpc-gateway"); v {
-		cfg.GRPCGateway = v
-	}
-	if v, _ := cmd.Flags().GetString("database"); v != "" {
-		cfg.Database = v
-	}
-	if v, _ := cmd.Flags().GetString("db-driver"); v != "" {
-		cfg.DBDriver = v
-	}
-	if v, _ := cmd.Flags().GetString("query"); v != "" {
-		cfg.QueryGen = v
-	}
-	if v, _ := cmd.Flags().GetString("cache"); v != "" {
-		cfg.Cache = v
-	}
-	if v, _ := cmd.Flags().GetString("search"); v != "" {
-		cfg.Search = v
-	}
-	if v, _ := cmd.Flags().GetString("queue"); v != "" {
-		cfg.MessageQueue = v
-	}
-	if v, _ := cmd.Flags().GetString("config"); v != "" {
-		cfg.ConfigFormat = v
-	}
-	if v, _ := cmd.Flags().GetString("di"); v != "" {
-		cfg.DI = v
-	}
-	if v, _ := cmd.Flags().GetBool("docker"); v {
-		cfg.IncludeDocker = v
-	}
-	if v, _ := cmd.Flags().GetString("ci"); v == "github" {
-		cfg.IncludeCI = true
-	} else if v == "none" {
-		cfg.IncludeCI = false
+	return nil
+}
+
+// checkTargetDir refuses to render into a directory that already has content
+// unless --force was given: Generate overwrites file by file and would
+// silently clobber edits.
+func checkTargetDir(dir string, force bool) error {
+	entries, err := os.ReadDir(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("inspect %s: %w", dir, err)
+	case len(entries) == 0 || force:
+		return nil
+	default:
+		return fmt.Errorf("%s already exists and is not empty; re-run with --force to overwrite", dir)
 	}
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -14,6 +15,10 @@ import (
 )
 
 const addMaxArgs = 2
+
+// componentNameRE: the name becomes a Go identifier, a package name and a
+// file name, so only letters and digits starting with a letter are safe.
+var componentNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 
 func addCommand() *cobra.Command {
 	var addCmd = &cobra.Command{
@@ -48,6 +53,7 @@ Examples:
 	}
 
 	addCmd.Flags().String("type", "", "Repository database engine: postgres, mysql")
+	addCmd.Flags().Bool("force", false, "Overwrite feature files that already exist")
 
 	return addCmd
 }
@@ -72,15 +78,16 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if vErr := validateComponent(&c, m.Stack.Database); vErr != nil {
+	if vErr := validateComponent(&c, m); vErr != nil {
 		return vErr
 	}
 
 	gen := generator.NewComponentGenerator(m.Root, m)
+	gen.Force, _ = cmd.Flags().GetBool("force")
 	return dispatchAdd(gen, &c)
 }
 
-func validateComponent(c *prompt.Component, defaultDB string) error {
+func validateComponent(c *prompt.Component, m *manifest.Manifest) error {
 	c.Type = strings.ToLower(c.Type)
 	if !slices.Contains(prompt.SupportedComponents, c.Type) {
 		return fmt.Errorf(
@@ -91,8 +98,18 @@ func validateComponent(c *prompt.Component, defaultDB string) error {
 	if c.Name == "" {
 		return errors.New("component name is required")
 	}
+	if !componentNameRE.MatchString(c.Name) {
+		return fmt.Errorf(
+			"component name %q must be a Go identifier (letters and digits, starting with a letter)", c.Name,
+		)
+	}
+	if m.Module == "" {
+		return errors.New(
+			"cannot determine the module path: run inside a Go module (go.mod) or set `module:` in nova.yaml",
+		)
+	}
 	if c.DB == "" {
-		c.DB = defaultDB
+		c.DB = m.Stack.Database
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package generator
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,9 @@ func newComponentGen(t *testing.T, m *manifest.Manifest) (*ComponentGenerator, s
 	if m.Module == "" {
 		m.Module = "example.com/test"
 	}
-	return NewComponentGenerator(dir, m), dir
+	gen := NewComponentGenerator(dir, m)
+	gen.Out = io.Discard
+	return gen, dir
 }
 
 func TestGenerateEntityDefaultLayout(t *testing.T) {
@@ -176,14 +179,14 @@ func TestMapFieldTypes(t *testing.T) {
 	}
 }
 
-func TestSnakeCaseAcronyms(t *testing.T) {
+func TestPlural(t *testing.T) {
 	cases := map[string]string{
-		"ID": "id", "UserID": "user_id", "CreatedAt": "created_at",
-		"HTTPServer": "http_server", "Name": "name",
+		"order": "orders", "category": "categories", "box": "boxes",
+		"status": "statuses", "day": "days", "batch": "batches",
 	}
 	for in, want := range cases {
-		if got := snakeCase(in); got != want {
-			t.Errorf("snakeCase(%q) = %q, want %q", in, got, want)
+		if got := plural(in); got != want {
+			t.Errorf("plural(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -555,5 +558,76 @@ func assertFileContains(t *testing.T, path, want string) {
 	}
 	if !strings.Contains(string(data), want) {
 		t.Errorf("file %s does not contain %q", path, want)
+	}
+}
+
+// TestGenerateEntityRefusesOverwriteWithoutForce pins that feature files are
+// the user's to edit after generation: a re-run must stop, and --force must
+// be the only way through.
+func TestGenerateEntityRefusesOverwriteWithoutForce(t *testing.T) {
+	gen, dir := newComponentGen(t, manifest.Default())
+	if err := gen.GenerateEntity("Order"); err != nil {
+		t.Fatalf("GenerateEntity: %v", err)
+	}
+	path := filepath.Join(dir, "internal/domain/entity/order.go")
+	if err := os.WriteFile(path, []byte("package entity\n\n// USER EDIT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := gen.GenerateEntity("Order"); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("second GenerateEntity: want --force error, got %v", err)
+	}
+	assertFileContains(t, path, "USER EDIT")
+	gen.Force = true
+	if err := gen.GenerateEntity("Order"); err != nil {
+		t.Fatalf("GenerateEntity --force: %v", err)
+	}
+	assertFileContains(t, path, "type Order struct")
+}
+
+// TestOutPathRefusesEscape pins the root confinement: a layout (or name) that
+// resolves above the project root must fail instead of writing there.
+func TestOutPathRefusesEscape(t *testing.T) {
+	m := manifest.Default()
+	m.Layout["entity"] = manifest.Target{Dir: "../outside", File: "{snake}.go", Package: "entity"}
+	gen, dir := newComponentGen(t, m)
+	if err := gen.GenerateEntity("Order"); err == nil || !strings.Contains(err.Error(), "outside the project root") {
+		t.Fatalf("want escape error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "outside", "order.go")); err == nil {
+		t.Error("a file was written outside the project root")
+	}
+}
+
+// TestGenerateRepositorySkipsExistingMigration pins that re-running the sqlc
+// repository with --force refreshes impl/mapper/query but does not add a
+// second create-table migration.
+func TestGenerateRepositorySkipsExistingMigration(t *testing.T) {
+	gen, dir := newComponentGen(t, manifest.Default())
+	if err := gen.GenerateEntity("Order"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gen.GenerateRepository("Order", "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	gen.Force = true
+	if err := gen.GenerateRepository("Order", "postgres"); err != nil {
+		t.Fatalf("second GenerateRepository --force: %v", err)
+	}
+	ups, _ := filepath.Glob(filepath.Join(dir, "sqlc/migrations/*_create_orders_table.up.sql"))
+	if len(ups) != 1 {
+		t.Errorf("want exactly one orders migration, got %d: %v", len(ups), ups)
+	}
+}
+
+// TestGenerateRepositoryRejectsForeignEngine pins that --type cannot silently
+// drop a mysql repository (and mysql DDL) into a postgres project.
+func TestGenerateRepositoryRejectsForeignEngine(t *testing.T) {
+	gen, _ := newComponentGen(t, manifest.Default()) // stack: postgres
+	if err := gen.GenerateEntity("Order"); err != nil {
+		t.Fatal(err)
+	}
+	err := gen.GenerateRepository("Order", "mysql")
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("want engine mismatch error, got %v", err)
 	}
 }

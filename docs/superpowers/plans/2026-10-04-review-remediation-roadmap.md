@@ -40,7 +40,7 @@ Phases 4 and 5 are independent of each other. Phases 2 and 3 are independent of 
 
 Applied and verified in the working tree (uncommitted): `make test` is `-short`; `make test-all` is `-parallel 2 -timeout 30m`; the matrix harness passes `GOFLAGS=-mod=mod -p=2` to child `go` commands; `run.concurrency: 4` in both golangci configs; `GOGC=50` on both lint targets; "Resource limits" section in CLAUDE.md; "Machine resources" section in `~/.claude/CLAUDE.md`. Measured: full matrix 58 s and 0.45 GB peak with a warm cache.
 
-## Phase 1: generated output builds and lints
+## Phase 1: generated output builds and lints (done 2026-10-05, commit `635595b`)
 
 Detailed plan: [2026-10-04-phase1-generated-output-builds-and-lints.md](2026-10-04-phase1-generated-output-builds-and-lints.md).
 
@@ -56,6 +56,8 @@ Findings fixed:
 Exit criteria: `make test-all` includes `TestGeneratedProjectBootstrap` running the real `make gen` → `go build` → `golangci-lint run` sequence on fiber+postgres+wire, gin+mysql+wire, worker+postgres+kafka+wire, and echo+none+fx, all green; `TestRenderedGoIsGofmtClean` green; no-DB rows in `TestGenerateMatrix` green.
 
 ## Phase 2: CLI hardening (nova itself)
+
+Detailed plan: [2026-10-07-phase2-cli-hardening.md](2026-10-07-phase2-cli-hardening.md).
 
 Findings:
 

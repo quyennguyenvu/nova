@@ -1,36 +1,35 @@
 # 1. CLI options
 
-What `nova new` asks, which flag maps to each answer, and what happens when you pick an option that isn't implemented yet. ([index](README.md))
+What `nova new` asks, which flag maps to each answer, and how invalid or unimplemented choices are rejected. ([index](README.md))
 
 ## Interactive prompts
 
-`nova new` with no flags asks the questions below, in this order — see [internal/prompt/prompt.go](../internal/prompt/prompt.go) (`RunInteractive`). Each has a matching `nova new` flag; passing **any** flag skips every prompt and fills the rest from `config.DefaultConfig()`.
+`nova new` with no flags asks the questions below, in this order — see [internal/prompt/prompt.go](../internal/prompt/prompt.go) (`RunInteractive`). Each has a matching `nova new` flag; passing **any** flag skips every prompt and fills the rest from `config.DefaultConfig()`. The choices offered are exactly the option sets in [internal/config/options.go](../internal/config/options.go).
 
-| Prompt                | Flag               | Options (default first)                        | Implemented today                 |
-| --------------------- | ------------------ | ---------------------------------------------- | --------------------------------- |
-| Project name          | positional arg     | —                                              | yes                               |
-| Go module name        | `--module`         | —                                              | yes                               |
-| Transport layer       | `--transport`      | `http`, `grpc`, `worker`, `cron`, `cli`        | `http`, `grpc`, `worker`          |
-| HTTP framework        | `--http-framework` | `fiber`, `gin`, `chi`, `echo`, `nethttp`       | all but `nethttp`                 |
-| Include gRPC-Gateway? | `--grpc-gateway`   | yes/no (asked only for `grpc`)                 | flag is stored, emits nothing     |
-| Database              | `--database`       | `postgres`, `mysql`, `sqlite`, `mongodb`, none | `postgres`, `mysql`, `none`       |
-| Database driver       | `--db-driver`      | `pgx`, `sqlx`, `gorm`, `database/sql`          | `pgx` (mysql uses `database/sql`) |
-| Query generation      | `--query`          | `sqlc`, `raw`, `gorm`                          | `sqlc`                            |
-| Cache                 | `--cache`          | `redis`, `bigcache`, none                      | `redis`, `none`                   |
-| Search engine         | `--search`         | none, `elasticsearch`                          | both                              |
-| Message queue         | `--queue`          | `kafka`, `rabbitmq`, `nats`, none              | `kafka`, `rabbitmq`, `none`       |
-| Configuration format  | `--config`         | `yaml`, `toml`                                 | `yaml`                            |
-| Dependency injection  | `--di`             | `wire`, `fx`                                   | both                              |
-| Include Docker setup? | `--docker`         | yes/no                                         | yes                               |
-| Include CI/CD?        | `--ci=github`      | yes/no                                         | yes                               |
+| Prompt                | Flag               | Values (default first)                               |
+| --------------------- | ------------------ | ---------------------------------------------------- |
+| Project name          | positional arg     | letters, digits, `.`, `_`, `-` (default `myproject`) |
+| Go module name        | `--module`         | a Go module path (default `github.com/myorg/<name>`) |
+| Transport layer       | `--transport`      | `http`, `grpc`, `worker`                             |
+| HTTP framework        | `--http-framework` | `fiber`, `gin`, `chi`, `echo`                        |
+| Database              | `--database`       | `postgres`, `mysql`, `none`                          |
+| Cache                 | `--cache`          | `redis`, `none`                                      |
+| Search engine         | `--search`         | `none`, `elasticsearch`                              |
+| Message queue         | `--queue`          | `none` (`kafka` for workers), `kafka`, `rabbitmq`    |
+| Dependency injection  | `--di`             | `wire`, `fx`                                         |
+| Include Docker setup? | `--docker`         | `true`; pass `--docker=false` to skip                |
+| Include CI/CD?        | `--ci`             | `github`, `none`                                     |
+
+Three flags have no prompt because only one value is implemented per engine: `--db-driver` (`pgx` for postgres, `database/sql` for mysql), `--query` (`sqlc`) and `--config` (`yaml`). Leave them unset; `Validate` fills them in. `--force` lets `nova new` render into a directory that already has files.
 
 The Makefile, the lint config and the git pre-commit hook are always emitted — there is no prompt for them.
 
-## Unimplemented options fail in three different ways
+## Validation
 
-Check this before filing a bug:
+Every value goes through `ProjectConfig.Validate()` ([internal/config/options.go](../internal/config/options.go)) before a single file is written, and `generator.New()` runs the same check so a config built in code cannot bypass it. The error lists every problem at once, for example `transport "cron" is not supported (valid: http, grpc, worker)`.
 
-- `nethttp`, `sqlite`, `mongodb` are rejected up front — `generator.New()` whitelists frameworks (`fiber`/`gin`/`chi`/`echo`), databases (`postgres`/`mysql`/`none`) and DI (`wire`/`fx`), and returns an error for anything else.
-- `--database=none` renders an in-memory `UserRepository` (`internal/adapter/repository/memory/`) so the User CRUD, handlers and DI graph still build and run; data lives only for the lifetime of the process. The health probe has no dependency to check in that configuration and mirrors liveness.
-- `cron` and `cli` generate a project **that does not compile**: no `cmd/`, no `internal/app/`, no transport package, and (with `--di=wire`) a `wire.go` referencing an `App` graph that was never emitted. Same for a flag-driven run that never sets `--transport`, since `DefaultConfig()` leaves it empty.
-- `sqlx`/`gorm`/`database/sql`, `raw`/`gorm` queries, `bigcache` and `toml` are accepted and then **silently ignored** — the templates only branch on `pgx`+`sqlc`, `redis` and `yaml`. `nats` is the one that fails latest: the publisher compiles and returns `locale.Unimplemented` at runtime.
+- Rejected as not implemented: the `cron` and `cli` transports, `nethttp`, `sqlite`, `mongodb`, `sqlx`, `gorm`, `raw`, `bigcache`, `nats`, `toml` and `env`. The former `--type` and `--grpc-gateway` flags were removed.
+- `--transport` is required when any flag is given; a `worker` also needs `--queue kafka` or `rabbitmq`.
+- Project names must match `[A-Za-z0-9][A-Za-z0-9._-]*` (no spaces, quotes or path separators) and `--module` must look like a Go module path, so the rendered Go, YAML and Makefile always parse.
+- `--database=none` blanks `--db-driver`/`--query` and renders an in-memory `UserRepository` (`internal/adapter/repository/memory/`) so the User CRUD, handlers and DI graph still build and run; data lives only for the lifetime of the process. The health probe has no dependency to check in that configuration and mirrors liveness.
+- A target directory that already contains files is refused unless `--force` is given.

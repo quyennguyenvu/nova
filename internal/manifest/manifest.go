@@ -221,14 +221,15 @@ func expand(pattern, name, db, cache string) string {
 	}
 	return strings.NewReplacer(
 		"{lower}", strings.ToLower(name),
-		"{snake}", snake(name),
-		"{title}", title(name),
+		"{snake}", Snake(name),
+		"{title}", Title(name),
 		"{db}", db,
 		"{cache}", cache,
 	).Replace(pattern)
 }
 
-func title(s string) string {
+// Title upper-cases the first rune: order -> Order.
+func Title(s string) string {
 	if s == "" {
 		return s
 	}
@@ -237,13 +238,24 @@ func title(s string) string {
 	return string(r)
 }
 
-func snake(s string) string {
-	var out []rune
-	for i, r := range s {
-		if unicode.IsUpper(r) && i > 0 {
-			out = append(out, '_')
+// Snake converts a Go identifier to snake_case, keeping acronyms intact
+// (ID -> id, UserID -> user_id, HTTPServer -> http_server). It is the one
+// rule for the {snake} placeholder, the sqlc table and column names and the
+// mapper file name, so they always agree.
+func Snake(s string) string {
+	var b strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		if unicode.IsUpper(r) {
+			prevLower := i > 0 && (unicode.IsLower(runes[i-1]) || unicode.IsDigit(runes[i-1]))
+			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+			if i > 0 && (prevLower || nextLower) {
+				b.WriteByte('_')
+			}
+			b.WriteRune(unicode.ToLower(r))
+		} else {
+			b.WriteRune(r)
 		}
-		out = append(out, unicode.ToLower(r))
 	}
-	return string(out)
+	return b.String()
 }

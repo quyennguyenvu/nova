@@ -16,7 +16,6 @@ type ProjectConfig struct {
 	// Transport
 	Transport     string `json:"transport"`      // "http", "grpc", "cron", "cli"
 	HTTPFramework string `json:"http_framework"` // "fiber", "gin", "chi", "echo", "nethttp"
-	GRPCGateway   bool   `json:"grpc_gateway"`
 
 	// Database
 	Database string `json:"database"`  // "postgres", "mysql", "sqlite", "mongodb", "none"

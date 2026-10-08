@@ -71,8 +71,10 @@ proto-gen:
 tidy:
 	go mod tidy
 
+{{- if eq .QueryGen "sqlc"}}
 # Order matters: sqlc must emit dbgen before tidy can resolve its import, and
 # wire needs a tidied module to type-check the injector.
+{{- end}}
 .PHONY: gen
 gen:{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}} tidy{{if .UseWire}} wire-gen{{end}}{{if .HasGRPC}} proto-gen{{end}}
 

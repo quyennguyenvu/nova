@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
-	"os"
 	"path/filepath"
 	"text/template"
 )
@@ -28,12 +27,17 @@ type renderSpec struct {
 // feature doesn't overwrite shared scaffolding the user may have edited).
 func (g *ComponentGenerator) renderTemplates(specs []renderSpec, data any) error {
 	for _, s := range specs {
-		out := filepath.Join(g.baseDir, s.outRel)
+		out, pErr := g.outPath(s.outRel)
+		if pErr != nil {
+			return pErr
+		}
 		if s.skipIfExists {
-			if _, statErr := os.Stat(out); statErr == nil {
-				fmt.Fprintf(os.Stdout, "   ↩︎  exists, skipped %s\n", s.outRel)
+			if fileExists(out) {
+				fmt.Fprintf(g.Out, "   ↩︎  exists, skipped %s\n", s.outRel)
 				continue
 			}
+		} else if gErr := g.guardOverwrite(s.outRel, out); gErr != nil {
+			return gErr
 		}
 		rendered, err := renderTemplateString(s.tmpl, data)
 		if err != nil {
@@ -46,7 +50,7 @@ func (g *ComponentGenerator) renderTemplates(specs []renderSpec, data any) error
 		if wErr := writeFile(out, string(formatted)); wErr != nil {
 			return wErr
 		}
-		fmt.Fprintf(os.Stdout, "   📄 %s\n", s.outRel)
+		fmt.Fprintf(g.Out, "   📄 %s\n", s.outRel)
 	}
 	return nil
 }

@@ -2,30 +2,33 @@ package generator
 
 import (
 	"fmt"
-	"go/ast"
 	"go/format"
-	"go/parser"
-	"go/token"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
-	"unicode"
 
+	"github.com/quyennguyenvu/nova/internal/config"
+	"github.com/quyennguyenvu/nova/internal/gosrc"
 	"github.com/quyennguyenvu/nova/internal/manifest"
 )
 
 // ComponentGenerator generates individual components in an existing project.
 // Output paths and package names come from the manifest, so it can target
-// projects with non-standard layouts (see internal/manifest).
+// projects with non-standard layouts (see internal/manifest). Force lets
+// feature files overwrite existing ones; shared files are always left alone.
 type ComponentGenerator struct {
 	baseDir  string
 	manifest *manifest.Manifest
+	Force    bool
+	Out      io.Writer // progress output; os.Stdout by default
 }
 
 // NewComponentGenerator creates a component generator rooted at baseDir, using
 // m to resolve where each component's files go.
 func NewComponentGenerator(baseDir string, m *manifest.Manifest) *ComponentGenerator {
-	return &ComponentGenerator{baseDir: baseDir, manifest: m}
+	return &ComponentGenerator{baseDir: baseDir, manifest: m, Out: os.Stdout}
 }
 
 // GenerateEntity creates a new entity plus its repository-interface port. The
@@ -45,7 +48,7 @@ func (g *ComponentGenerator) GenerateEntity(name string) error {
 	data := tmplData{
 		ModuleName:   g.manifest.Module,
 		Package:      entityRes.Package,
-		Title:        toTitle(name),
+		Title:        manifest.Title(name),
 		Lower:        strings.ToLower(name),
 		PortPkg:      portRes.Package,
 		EntityImport: g.manifest.Module + "/" + entityRes.Dir,
@@ -58,7 +61,7 @@ func (g *ComponentGenerator) GenerateEntity(name string) error {
 		return rErr
 	}
 
-	fmt.Fprintf(os.Stdout, "✅ Generated entity: %s\n", data.Title)
+	fmt.Fprintf(g.Out, "✅ Generated entity: %s\n", data.Title)
 	return nil
 }
 
@@ -70,7 +73,7 @@ func (g *ComponentGenerator) GenerateUseCase(name string) error {
 	if err != nil {
 		return err
 	}
-	data := tmplData{Package: res.Package, Title: toTitle(name), Lower: strings.ToLower(name)}
+	data := tmplData{Package: res.Package, Title: manifest.Title(name), Lower: strings.ToLower(name)}
 	specs := []renderSpec{
 		{"skel/usecase/service.go.tmpl", filepath.Join(res.Dir, "service.go"), false},
 		{"skel/usecase/dto.go.tmpl", filepath.Join(res.Dir, "dto.go"), false},
@@ -79,7 +82,7 @@ func (g *ComponentGenerator) GenerateUseCase(name string) error {
 		return rErr
 	}
 
-	fmt.Fprintf(os.Stdout, "✅ Generated use case: %s\n", res.Package)
+	fmt.Fprintf(g.Out, "✅ Generated use case: %s\n", res.Package)
 	return nil
 }
 
@@ -94,13 +97,13 @@ func (g *ComponentGenerator) GenerateHandler(name string) error {
 		return err
 	}
 	fw := g.manifest.Stack.HTTPFramework
-	if !supportedFrameworks[fw] {
+	if !slices.Contains(config.HTTPFrameworks, fw) {
 		return fmt.Errorf(
 			"add handler: unsupported http_framework %q in nova.yaml (valid: fiber, gin, chi, echo)",
 			fw,
 		)
 	}
-	data := tmplData{Package: res.Package, Title: toTitle(name), Lower: strings.ToLower(name)}
+	data := tmplData{Package: res.Package, Title: manifest.Title(name), Lower: strings.ToLower(name)}
 	if rErr := g.renderTemplates([]renderSpec{
 		{"skel/handler/" + fw + "_handler.go.tmpl", relOf(res, "handler.go"), false},
 		{"skel/handler/dto.go.tmpl", relOf(res, "dto.go"), false},
@@ -110,7 +113,7 @@ func (g *ComponentGenerator) GenerateHandler(name string) error {
 		return rErr
 	}
 
-	fmt.Fprintf(os.Stdout, "✅ Generated handler: %sHandler (%s)\n", data.Title, fw)
+	fmt.Fprintf(g.Out, "✅ Generated handler: %sHandler (%s)\n", data.Title, fw)
 	return nil
 }
 
@@ -150,7 +153,7 @@ func (g *ComponentGenerator) GenerateWorker(name string) error {
 	data := tmplData{
 		ModuleName:    g.manifest.Module,
 		Package:       res.Package,
-		Title:         toTitle(name),
+		Title:         manifest.Title(name),
 		Lower:         lower,
 		Topic:         lower + ".event",
 		MessageQueue:  broker,
@@ -183,12 +186,15 @@ func (g *ComponentGenerator) GenerateWorker(name string) error {
 		return rErr
 	}
 
-	fmt.Fprintf(os.Stdout, "✅ Generated runnable worker service + %s feature handler\n", lower)
+	fmt.Fprintf(g.Out, "✅ Generated runnable worker service + %s feature handler\n", lower)
 	fmt.Fprintf(
-		os.Stdout,
+		g.Out,
 		"   ▶ run `go mod tidy` then `go run main.go worker` (broker addr via env, e.g. KAFKA_BROKERS)\n",
 	)
-	fmt.Fprintf(os.Stdout, "   ▶ add more feature handlers to the slice in internal/app/worker.go\n")
+	fmt.Fprintf(
+		g.Out,
+		"   ▶ add more feature handlers to provideWorkerHandlers in internal/infrastructure/di/provider.go\n",
+	)
 	return nil
 }
 
@@ -200,7 +206,7 @@ func (g *ComponentGenerator) registerWorkerCommand() error {
 	raw, err := os.ReadFile(rootPath)
 	if err != nil {
 		fmt.Fprintf(
-			os.Stdout,
+			g.Out,
 			"   ⚠️  cmd/root.go not found — register workerCommand() in your root command manually\n",
 		)
 		return nil //nolint:nilerr // absence is tolerated; the hint covers it
@@ -213,7 +219,7 @@ func (g *ComponentGenerator) registerWorkerCommand() error {
 	idx := strings.Index(src, marker)
 	if idx == -1 {
 		fmt.Fprintf(
-			os.Stdout,
+			g.Out,
 			"   ⚠️  could not locate root.AddCommand( in cmd/root.go — register workerCommand() manually\n",
 		)
 		return nil
@@ -227,7 +233,7 @@ func (g *ComponentGenerator) registerWorkerCommand() error {
 	if wErr := os.WriteFile(rootPath, []byte(out), 0o600); wErr != nil {
 		return fmt.Errorf("update cmd/root.go: %w", wErr)
 	}
-	fmt.Fprintf(os.Stdout, "   ✏️  registered workerCommand() in cmd/root.go\n")
+	fmt.Fprintf(g.Out, "   ✏️  registered workerCommand() in cmd/root.go\n")
 	return nil
 }
 
@@ -247,7 +253,7 @@ func (g *ComponentGenerator) scaffoldWorkerDI(data tmplData) error {
 	abs := filepath.Join(g.baseDir, diDir)
 	if _, err := os.Stat(abs); err != nil {
 		fmt.Fprintf(
-			os.Stdout,
+			g.Out,
 			"   ⚠️  %s not found — wire RunWorker into your DI graph manually (InitializeWorker → *WorkerApp)\n",
 			diDir,
 		)
@@ -307,7 +313,7 @@ func (g *ComponentGenerator) scaffoldWorkerDI(data tmplData) error {
 	}
 	if !useFx {
 		fmt.Fprintf(
-			os.Stdout,
+			g.Out,
 			"   ▶ wire scaffold written — add provider sets to InitializeWorker, then run `wire ./...`\n",
 		)
 	}
@@ -326,16 +332,20 @@ func (g *ComponentGenerator) mergeOrWriteDI(tmpl, targetRel, fallbackRel string,
 	}
 	targetAbs := filepath.Join(g.baseDir, targetRel)
 	if _, statErr := os.Stat(targetAbs); statErr != nil {
-		if wErr := writeFile(filepath.Join(g.baseDir, fallbackRel), src); wErr != nil {
+		fallbackAbs, pErr := g.outPath(fallbackRel)
+		if pErr != nil {
+			return pErr
+		}
+		if wErr := writeFile(fallbackAbs, src); wErr != nil {
 			return wErr
 		}
-		fmt.Fprintf(os.Stdout, "   📄 %s\n", fallbackRel)
+		fmt.Fprintf(g.Out, "   📄 %s\n", fallbackRel)
 		return nil
 	}
-	if mErr := mergeGoDecls(targetAbs, src); mErr != nil {
+	if mErr := gosrc.MergeDecls(targetAbs, src); mErr != nil {
 		return fmt.Errorf("merge worker DI into %s: %w", targetRel, mErr)
 	}
-	fmt.Fprintf(os.Stdout, "   ✏️  merged worker DI into %s\n", targetRel)
+	fmt.Fprintf(g.Out, "   ✏️  merged worker DI into %s\n", targetRel)
 	return nil
 }
 
@@ -375,6 +385,16 @@ func (g *ComponentGenerator) GenerateRepository(name, repoType string) error {
 	if err := g.requireEntity(name); err != nil {
 		return err
 	}
+	if repoType != g.manifest.Stack.Database {
+		res, _ := g.manifest.Resolve("repository", name, repoType)
+		if !fileExists(filepath.Join(g.baseDir, res.Dir)) {
+			return fmt.Errorf(
+				"--type=%s does not match the project's database (%s) and %s does not exist; "+
+					"use the project's engine or add that adapter package first",
+				repoType, g.manifest.Stack.Database, res.Dir,
+			)
+		}
+	}
 
 	if g.manifest.Stack.QueryGen == "sqlc" && (repoType == enginePostgres || repoType == engineMySQL) {
 		return g.generateSQLCRepository(name, repoType)
@@ -384,14 +404,14 @@ func (g *ComponentGenerator) GenerateRepository(name, repoType string) error {
 	if err != nil {
 		return err
 	}
-	data := tmplData{Package: res.Package, Title: toTitle(name), Lower: strings.ToLower(name)}
+	data := tmplData{Package: res.Package, Title: manifest.Title(name), Lower: strings.ToLower(name)}
 	if rErr := g.renderTemplates([]renderSpec{
 		{"skel/repository/stub.go.tmpl", relOf(res, ""), false},
 	}, data); rErr != nil {
 		return rErr
 	}
 
-	fmt.Fprintf(os.Stdout, "✅ Generated repository: %sRepository (%s)\n", data.Title, res.Package)
+	fmt.Fprintf(g.Out, "✅ Generated repository: %sRepository (%s)\n", data.Title, res.Package)
 	return nil
 }
 
@@ -407,7 +427,7 @@ func (g *ComponentGenerator) requireEntity(name string) error {
 	if _, statErr := os.Stat(path); statErr != nil {
 		return fmt.Errorf(
 			"entity %s not found at %s — run `nova add entity %s` first",
-			toTitle(name), path, toTitle(name),
+			manifest.Title(name), path, manifest.Title(name),
 		)
 	}
 	return nil
@@ -433,140 +453,24 @@ func (g *ComponentGenerator) path(r manifest.Resolved, fallbackFile string) stri
 	return filepath.Join(g.baseDir, r.Dir, file)
 }
 
-// mergeGoDecls splices the declarations rendered into scaffoldSrc onto the end
-// of the existing Go file at absPath: every top-level declaration after the
-// scaffold's import block is appended, and any import the scaffold needs but
-// the file lacks is injected into the file's import group (a fresh group is
-// created when the file has none). The merged source is gofmt'd before writing.
-// Both inputs must already parse.
-func mergeGoDecls(absPath, scaffoldSrc string) error {
-	target, err := os.ReadFile(absPath)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", absPath, err)
+// outPath resolves rel under baseDir and refuses anything that escapes it, so
+// a hostile name or nova.yaml layout cannot write outside the project.
+func (g *ComponentGenerator) outPath(rel string) (string, error) {
+	abs := filepath.Join(g.baseDir, rel)
+	inside, err := filepath.Rel(g.baseDir, abs)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("refusing to write outside the project root: %s", rel)
 	}
-
-	declBlock, scaffoldImports, err := splitGoScaffold(scaffoldSrc)
-	if err != nil {
-		return err
-	}
-	if declBlock == "" {
-		return nil // nothing to merge
-	}
-
-	merged, err := injectImports(string(target), absPath, scaffoldImports)
-	if err != nil {
-		return err
-	}
-	merged = strings.TrimRight(merged, "\n") + "\n\n" + declBlock
-	if !strings.HasSuffix(merged, "\n") {
-		merged += "\n"
-	}
-	formatted, err := format.Source([]byte(merged))
-	if err != nil {
-		return fmt.Errorf("format merged %s: %w", absPath, err)
-	}
-	//nolint:gosec // absPath = baseDir + fixed di file name; not user-tainted.
-	if wErr := os.WriteFile(absPath, formatted, 0o600); wErr != nil {
-		return fmt.Errorf("write %s: %w", absPath, wErr)
-	}
-	return nil
+	return abs, nil
 }
 
-// splitGoScaffold parses rendered Go source and returns (1) the text of every
-// top-level declaration that is not the import block — from the first such
-// declaration (including its doc comment) to EOF — and (2) the imports those
-// declarations bring along.
-func splitGoScaffold(src string) (string, []*ast.ImportSpec, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "scaffold.go", src, parser.ParseComments)
-	if err != nil {
-		return "", nil, fmt.Errorf("parse scaffold: %w", err)
-	}
-	start := -1
-	for _, d := range f.Decls {
-		if gd, ok := d.(*ast.GenDecl); ok && gd.Tok == token.IMPORT {
-			continue
-		}
-		pos := d.Pos()
-		if doc := declDoc(d); doc != nil {
-			pos = doc.Pos()
-		}
-		if off := fset.Position(pos).Offset; start == -1 || off < start {
-			start = off
-		}
-	}
-	if start == -1 {
-		return "", nil, nil
-	}
-	return src[start:], f.Imports, nil
-}
-
-// declDoc returns the doc comment group attached to a top-level declaration, or
-// nil when it has none.
-func declDoc(d ast.Decl) *ast.CommentGroup {
-	switch decl := d.(type) {
-	case *ast.GenDecl:
-		return decl.Doc
-	case *ast.FuncDecl:
-		return decl.Doc
-	default:
+// guardOverwrite refuses to replace an existing feature file unless Force is
+// set: these files are the user's to edit after generation.
+func (g *ComponentGenerator) guardOverwrite(rel, abs string) error {
+	if g.Force || !fileExists(abs) {
 		return nil
 	}
-}
-
-// injectImports adds every import in want that src does not already declare,
-// returning the updated source. Missing imports go into the file's existing
-// parenthesised import group; if the file has none, a new group is inserted
-// after the package clause. gofmt (run by the caller) re-sorts the result.
-func injectImports(src, name string, want []*ast.ImportSpec) (string, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, name, src, parser.ParseComments)
-	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", name, err)
-	}
-
-	have := make(map[string]bool, len(f.Imports))
-	for _, imp := range f.Imports {
-		have[importPath(imp)] = true
-	}
-	var lines []string
-	for _, imp := range want {
-		if have[importPath(imp)] {
-			continue
-		}
-		spec := imp.Path.Value
-		if imp.Name != nil {
-			spec = imp.Name.Name + " " + spec
-		}
-		lines = append(lines, "\t"+spec)
-		have[importPath(imp)] = true
-	}
-	if len(lines) == 0 {
-		return src, nil
-	}
-	block := strings.Join(lines, "\n")
-
-	if grp := importGroup(f); grp != nil && grp.Lparen.IsValid() {
-		at := fset.Position(grp.Rparen).Offset
-		return src[:at] + block + "\n" + src[at:], nil
-	}
-	at := fset.Position(f.Name.End()).Offset
-	return src[:at] + "\n\nimport (\n" + block + "\n)" + src[at:], nil
-}
-
-// importGroup returns the file's import declaration, or nil when it has none.
-func importGroup(f *ast.File) *ast.GenDecl {
-	for _, d := range f.Decls {
-		if gd, ok := d.(*ast.GenDecl); ok && gd.Tok == token.IMPORT {
-			return gd
-		}
-	}
-	return nil
-}
-
-// importPath returns an import spec's unquoted path, the key used to dedupe.
-func importPath(imp *ast.ImportSpec) string {
-	return strings.Trim(imp.Path.Value, `"`)
+	return fmt.Errorf("%s already exists; re-run with --force to overwrite", rel)
 }
 
 // fileExists reports whether path names an existing file or directory.
@@ -599,13 +503,4 @@ func writeFile(path, content string) error {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-func toTitle(s string) string {
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
 }

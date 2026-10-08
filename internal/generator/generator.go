@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,68 +35,15 @@ const (
 type Generator struct {
 	cfg  *config.ProjectConfig
 	tmpl *template.Template
+	Out  io.Writer // progress output; os.Stdout by default
 }
 
-// supportedFrameworks is the whitelist for cfg.HTTPFramework (`nova new`) and
-// manifest.Stack.HTTPFramework (`nova add handler`). Each value must have a
-// matching `<framework>_router.go.tmpl` + middleware + handler set in
-// internal/generator/templates/ AND a `<framework>_{handler,registrar}.go.tmpl`
-// in internal/generator/skel/handler/. Add new frameworks here in lockstep with
-// the template files.
-//
-//nolint:gochecknoglobals // immutable validation set; treated as a const.
-var supportedFrameworks = map[string]bool{
-	"fiber": true,
-	"gin":   true,
-	"chi":   true,
-	"echo":  true,
-}
-
-// supportedDatabases lists the choices generator.New() will accept for
-// cfg.Database. Empty string means "no database" (also valid).
-//
-//nolint:gochecknoglobals // immutable validation set; treated as a const.
-var supportedDatabases = map[string]bool{
-	"":         true,
-	"none":     true,
-	"postgres": true,
-	"mysql":    true,
-}
-
-// supportedDI is the whitelist for cfg.DI. "wire" renders wire.go (+ wire_gen.go
-// via `make gen`); "fx" renders fx.go, which wires the graph at runtime with
-// Uber fx and needs no code generation. Both expose the same Initialize* entry
-// points so the app layer is identical regardless of the choice.
-// Values outside this set — the removed "manual", or a typo — fail fast in New()
-// instead of rendering a project with no Initialize* functions.
-//
-//nolint:gochecknoglobals // immutable validation set; treated as a const.
-var supportedDI = map[string]bool{
-	"wire": true,
-	"fx":   true,
-}
-
-// New creates a new Generator. It fails fast on misconfigured cfg.Framework /
-// cfg.Database / cfg.DI so a typo (e.g. "echo2") surfaces here instead of producing a
-// half-rendered project with cryptic "template not found in embedded FS" errors.
+// New creates a new Generator. It validates cfg first so a typo (e.g. "echo2")
+// or an unimplemented option fails here instead of producing a half-rendered
+// project with cryptic "template not found in embedded FS" errors.
 func New(cfg *config.ProjectConfig) (*Generator, error) {
-	if cfg.HasHTTP() && !supportedFrameworks[cfg.HTTPFramework] {
-		return nil, fmt.Errorf(
-			"generator: unsupported HTTPFramework %q (valid: fiber, gin, chi, echo)",
-			cfg.HTTPFramework,
-		)
-	}
-	if !supportedDatabases[cfg.Database] {
-		return nil, fmt.Errorf(
-			"generator: unsupported Database %q (valid: postgres, mysql, none)",
-			cfg.Database,
-		)
-	}
-	if !supportedDI[cfg.DI] {
-		return nil, fmt.Errorf(
-			"generator: unsupported DI %q (valid: wire, fx)",
-			cfg.DI,
-		)
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("generator: %w", err)
 	}
 
 	funcMap := template.FuncMap{
@@ -109,6 +57,7 @@ func New(cfg *config.ProjectConfig) (*Generator, error) {
 	return &Generator{
 		cfg:  cfg,
 		tmpl: template.New("").Funcs(funcMap),
+		Out:  os.Stdout,
 	}, nil
 }
 
@@ -741,6 +690,6 @@ func (g *Generator) renderFile(tmplPath, outPath string) error {
 		return fmt.Errorf("failed to write file %s: %w", outPath, writeErr)
 	}
 
-	fmt.Fprintf(os.Stdout, "   📄 %s\n", outPath)
+	fmt.Fprintf(g.Out, "   📄 %s\n", outPath)
 	return nil
 }

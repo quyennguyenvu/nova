@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -259,6 +260,7 @@ func renderAndVet(t *testing.T, cfg *config.ProjectConfig, wireStub string) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	gen.Out = io.Discard
 	if genErr := gen.Generate(dir); genErr != nil {
 		t.Fatalf("Generate: %v", genErr)
 	}
@@ -618,19 +620,19 @@ func TestFxDISelection(t *testing.T) {
 	}
 }
 
-// TestNewRejectsUnsupportedDI guards the supportedDI whitelist: removed or
+// TestNewRejectsUnsupportedDI guards the DI option set: removed or
 // typo'd DI strategies must fail fast in New() rather than render a project
 // with no Initialize* functions. "manual" was removed; "" is never valid.
 func TestNewRejectsUnsupportedDI(t *testing.T) {
 	t.Parallel()
 	for _, di := range []string{"manual", "", "spring"} {
-		cfg := baseMatrixConfig("postgres", di)
+		cfg := httpMatrixConfig("fiber", "postgres", di)
 		if _, err := New(cfg); err == nil {
 			t.Errorf("New() with DI=%q: want error, got nil", di)
 		}
 	}
 	for _, di := range []string{"wire", "fx"} {
-		cfg := baseMatrixConfig("postgres", di)
+		cfg := httpMatrixConfig("fiber", "postgres", di)
 		if _, err := New(cfg); err != nil {
 			t.Errorf("New() with DI=%q: want nil, got %v", di, err)
 		}
@@ -1204,6 +1206,7 @@ func renderProject(t *testing.T, cfg *config.ProjectConfig) string {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	gen.Out = io.Discard
 	if genErr := gen.Generate(dir); genErr != nil {
 		t.Fatalf("Generate: %v", genErr)
 	}
