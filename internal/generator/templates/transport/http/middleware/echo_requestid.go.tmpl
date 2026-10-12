@@ -5,21 +5,21 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"{{.ModuleName}}/pkg/httputil"
+	"{{.ModuleName}}/pkg/requestid"
 )
 
 // RequestID injects a unique request ID into the request headers and its context.
-// The ID is carried through ctx (see httputil.RequestIDFrom) and echoed back to
+// The ID is carried through ctx (see requestid.From) and echoed back to
 // the client in the X-Request-ID header and the response body's "requestId".
 func RequestID() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			id := c.Request().Header.Get(httputil.RequestIDHeader)
-			if id == "" {
+			if !requestid.Valid(id) {
 				id = uuid.New().String()
 			}
 			c.Response().Header().Set(httputil.RequestIDHeader, id)
-			c.Set("request_id", id)
-			c.SetRequest(c.Request().WithContext(httputil.WithRequestID(c.Request().Context(), id)))
+			c.SetRequest(c.Request().WithContext(requestid.With(c.Request().Context(), id)))
 			return next(c)
 		}
 	}

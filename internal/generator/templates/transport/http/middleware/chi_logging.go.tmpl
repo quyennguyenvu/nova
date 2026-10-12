@@ -4,12 +4,13 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel/trace"
 
 	"{{.ModuleName}}/pkg/errors"
-	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/logctx"
 	"{{.ModuleName}}/pkg/observability"
+	"{{.ModuleName}}/pkg/requestid"
 )
 
 func traceIDOr(sc trace.SpanContext) string {
@@ -49,7 +50,7 @@ func Logging(base observability.Logger) func(http.Handler) http.Handler {
 
 			start := time.Now()
 			ctx := r.Context()
-			reqID := httputil.RequestIDFrom(ctx)
+			reqID := requestid.From(ctx)
 			sc := trace.SpanContextFromContext(ctx)
 
 			// URL.Path is path-only (no query string) — keep it that way so
@@ -66,6 +67,7 @@ func Logging(base observability.Logger) func(http.Handler) http.Handler {
 				With("path", r.URL.Path)
 			ctx = logctx.With(ctx, scoped)
 			ctx = errors.PrepareAppErrorContext(ctx)
+			ctx = prepareAuthSlot(ctx)
 			r = r.WithContext(ctx)
 
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -79,9 +81,13 @@ func Logging(base observability.Logger) func(http.Handler) http.Handler {
 			}
 			fields := []any{
 				"status", rec.status,
+				"route", chi.RouteContext(r.Context()).RoutePattern(),
 				"duration_ms", time.Since(start).Milliseconds(),
 				"client_ip", r.RemoteAddr,
 				"user_agent", r.UserAgent(),
+			}
+			if p := principalFromSlot(ctx); p != nil {
+				fields = append(fields, "user_id", p.UserID)
 			}
 			if app := errors.AppErrorFromContext(ctx); app != nil {
 				fields = append(fields, "app_code", app.Code)

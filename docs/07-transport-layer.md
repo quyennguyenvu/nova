@@ -276,7 +276,7 @@ func WriteError(c *fiber.Ctx, app *errors.AppError) error {
     errors.StashAppError(ctx, app)
     lang := locale.LanguageFromContext(ctx)
     resp := httputil.ErrorResponseFromApp(app, lang)
-    resp.RequestID = httputil.RequestIDFrom(ctx)
+    resp.RequestID = requestid.From(ctx)
     return c.Status(app.Code).JSON(resp)
 }
 ```
@@ -310,11 +310,11 @@ Seven middlewares, each rendered from a `{framework}_{name}.go.tmpl` variant.
 
 ### requestid.go
 
-Honours an inbound `X-Request-ID`, generates a UUID otherwise, echoes it in the response header, and puts it in ctx via `httputil.WithRequestID` so the logger and the envelope both find it.
+Reuses an inbound `X-Request-ID` only when `requestid.Valid` accepts it (1–128 characters of `[A-Za-z0-9._-]`), generates a UUID otherwise, echoes it in the response header, and puts it in ctx via `requestid.With` so the logger and the envelope both find it. The header name is the only HTTP-specific part (`httputil.RequestIDHeader`); the gRPC interceptor and the worker set the same ctx value from their own carriers.
 
 ### logging.go — one line per request
 
-Builds the request-scoped logger, installs the `AppError` stash slot, and emits exactly one access log at the end.
+Builds the request-scoped logger, installs the `AppError` stash slot and the principal slot (`principal.go`, filled by `Auth`), and emits exactly one access log at the end.
 
 ```go
 scoped := base.
@@ -324,14 +324,17 @@ scoped := base.
     With("path", c.Path())
 ctx = logctx.With(ctx, scoped)
 ctx = errors.PrepareAppErrorContext(ctx)
+ctx = prepareAuthSlot(ctx)
 ```
 
-Four decisions in this file are worth keeping when you extend it:
+Six decisions in this file are worth keeping when you extend it:
 
 - **`c.Path()`, never `c.OriginalURL()`.** `Path()` excludes the query string, so a secret in `?token=…` never reaches structured logs. There is a comment saying so; don't "improve" it.
 - **`client_ip`/`user_agent` are on the access line only**, not on the scoped logger. They're entry-point facts; repeating them on every inner log line is pure volume.
 - **`/healthz`, `/readyz` and `OPTIONS` emit no line.** Kubernetes probes every few seconds and preflights carry no app signal — both would drown real traffic. They still run through `RequestID` and `Recovery`, so the safety net is intact; only the log line is suppressed.
 - **Level follows status**: `Info` < 400, `Warn` 4xx, `Error` 5xx or a returned error.
+- **`route` and `path` are both on the access line.** `path` is the raw request path (also on the scoped logger); `route` is the matched pattern (`/api/v1/users/:id`) for low-cardinality dashboards. All four frameworks agree on this.
+- **`user_id` comes from `Auth` through a slot.** `Auth` runs inside `Logging` and derives a child context only inner handlers see, so the only way the access line can say who called is the mutable slot `Logging` installs and `Auth` fills (`rememberPrincipal`).
 
 When the stash holds an `AppError` the line gains `app_code` (+ `app_locale`), and gains `app_err`/`app_trace` only when there is something to diagnose — a 5xx, or any error carrying an inner cause. A plain validation 400 stays lean, so client-driven noise doesn't move your error-rate alerts.
 
@@ -499,7 +502,7 @@ The liveness/readiness split matters operationally: coupling liveness to the dat
 // 3. Implement the generated service interfaces here
 ```
 
-The server bootstrap, DI graph and entry point are real; only the service implementation is yours to write. `transport/grpc/interceptor/` is the gRPC counterpart to HTTP middleware — [04](04-placement-rationale.md#why-middleware-is-under-transporthttp-not-transport) explains why they can't share a package.
+The server bootstrap, DI graph and entry point are real; only the service implementation is yours to write. `transport/grpc/interceptor/` is the gRPC counterpart to HTTP middleware: `RequestID` (incoming metadata `x-request-id`, validated like the HTTP header), `Logging` (one `rpc` line per call with `code`, `duration_ms` and the request/trace ids) and `Recovery` (panic → `codes.Internal`, stack logged). `NewGRPCServer` chains them and adds the `otelgrpc` stats handler for spans — [04](04-placement-rationale.md#why-middleware-is-under-transporthttp-not-transport) explains why they can't share a package.
 
 ## internal/transport/worker/
 
@@ -534,7 +537,7 @@ type Consumer interface {
 
 `Worker` holds a topic-keyed handler map built from the injected `[]Handler`, derives `Topics()` from it, and `Start(ctx)` blocks on `consumer.Subscribe`. Adding a feature is: implement `Handler`, list it in `provideWorkerHandlers` ([11](11-di-and-entrypoints.md)). The consumer is selected at generation time — `kafka_consumer.go` (sarama consumer group) or `rabbitmq_consumer.go` — and the orchestrator never learns which.
 
-Per-message dispatch attaches a topic-scoped logger to ctx, so the usecase and repository below emit correlated fields without any extra plumbing — the worker equivalent of the HTTP `Logging` middleware.
+Consumers hand `dispatch` a broker-neutral `Message` (topic, payload, key, correlation headers, Kafka partition/offset or RabbitMQ delivery tag/message id). `Worker.dispatch` adopts the producer's `traceparent` and `x-request-id` headers, scopes the logger with the topic, the position and those ids, times the handler, and emits one `worker: message handled|failed` line with `duration_ms` (and `errors.LogFields` on failure) — the worker equivalent of the HTTP access log. Inner layers still log through `logctx.From(ctx)` with the same correlation fields; handlers do not log success themselves.
 
 ### The ack decision is the interesting part
 

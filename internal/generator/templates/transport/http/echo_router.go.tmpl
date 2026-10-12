@@ -8,6 +8,9 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
+	// The replacement module (labstack/echo-opentelemetry) targets echo v5; stay on
+	// the contrib package until this project moves to v5.
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho" //nolint:staticcheck // SA1019: echo v4
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
@@ -37,6 +40,11 @@ func NewRouter(
 	e := echo.New()
 	e.HideBanner = true
 
+	// Tracing first so RequestID and Logging see the server span (trace_id).
+	e.Use(otelecho.Middleware(
+		cfg.AppName,
+		otelecho.WithSkipper(func(c echo.Context) bool { return isProbe(c.Request().URL.Path) }),
+	))
 	e.Use(middleware.RequestID())
 	e.Use(middleware.Logging(log))
 	e.Use(middleware.Recovery())
@@ -48,6 +56,9 @@ func NewRouter(
 	})
 	e.GET("/readyz", func(c echo.Context) error {
 		status := checker.Readiness(c.Request().Context())
+		if !status.OK {
+			log.Warn("readiness check failed", "details", status.Details)
+		}
 		code := http.StatusOK
 		if !status.OK {
 			code = http.StatusServiceUnavailable
@@ -61,3 +72,7 @@ func NewRouter(
 
 	return e
 }
+
+// isProbe reports whether path is a health probe. Probes stay out of traces
+// (and access logs) because they carry no application signal.
+func isProbe(path string) bool { return path == "/healthz" || path == "/readyz" }

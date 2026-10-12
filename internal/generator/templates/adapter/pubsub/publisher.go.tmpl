@@ -12,13 +12,35 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 {{- end}}
+{{- if or (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+{{- end}}
 
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/pkg/errors"
+{{- if or (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
+	"{{.ModuleName}}/pkg/requestid"
+{{- end}}
 {{- if eq .MessageQueue "nats"}}
 	"{{.ModuleName}}/pkg/locale"
 {{- end}}
 )
+
+{{- if or (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
+
+// correlationHeaders carries the request id and W3C trace context of the
+// publishing request onto the message, so the consumer's log lines and spans
+// join the HTTP request that produced the event.
+func correlationHeaders(ctx context.Context) map[string]string {
+	headers := map[string]string{}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(headers))
+	if reqID := requestid.From(ctx); reqID != "" {
+		headers["x-request-id"] = reqID
+	}
+	return headers
+}
+{{- end}}
 
 {{- if eq .MessageQueue "kafka"}}
 
@@ -34,7 +56,7 @@ func NewPublisher(producer sarama.SyncProducer) *Publisher {
 // Ensure interface compliance at compile time
 var _ domain.UserPublisher = (*Publisher)(nil)
 
-func (p *Publisher) publish(ctx context.Context, topic string, payload any) error {
+func (p *Publisher) publish(ctx context.Context, topic, key string, payload any) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return errors.Wrapf(ctxErr, "publish to %s: context done", topic)
 	}
@@ -43,9 +65,16 @@ func (p *Publisher) publish(ctx context.Context, topic string, payload any) erro
 		return errors.Wrapf(err, "publish to %s: marshal event", topic)
 	}
 
+	headers := correlationHeaders(ctx)
+	recordHeaders := make([]sarama.RecordHeader, 0, len(headers))
+	for k, v := range headers {
+		recordHeaders = append(recordHeaders, sarama.RecordHeader{Key: []byte(k), Value: []byte(v)})
+	}
 	_, _, err = p.producer.SendMessage(&sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.ByteEncoder(data),
+		Topic:   topic,
+		Key:     sarama.StringEncoder(key), // same key, same partition: per-aggregate ordering
+		Value:   sarama.ByteEncoder(data),
+		Headers: recordHeaders,
 	})
 	if err != nil {
 		return errors.Wrapf(err, "publish to %s", topic)
@@ -84,13 +113,18 @@ func NewPublisher(conn *amqp.Connection) (*Publisher, error) {
 // Ensure interface compliance at compile time
 var _ domain.UserPublisher = (*Publisher)(nil)
 
-func (p *Publisher) publish(ctx context.Context, routingKey string, payload any) error {
+func (p *Publisher) publish(ctx context.Context, routingKey, _ string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return errors.Wrapf(err, "publish to %s: marshal event", routingKey)
 	}
+	headers := amqp.Table{}
+	for k, v := range correlationHeaders(ctx) {
+		headers[k] = v
+	}
 	if pubErr := p.ch.PublishWithContext(ctx, rabbitmqExchange, routingKey, false, false, amqp.Publishing{
 		ContentType: "application/json",
+		Headers:     headers,
 		Body:        data,
 	}); pubErr != nil {
 		return errors.Wrapf(pubErr, "publish to %s", routingKey)
@@ -119,7 +153,7 @@ func NewPublisher() *Publisher {
 
 var _ domain.UserPublisher = (*Publisher)(nil)
 
-func (p *Publisher) publish(ctx context.Context, subject string, payload any) error {
+func (p *Publisher) publish(ctx context.Context, subject, _ string, payload any) error {
 	return errors.L(locale.Unimplemented).WithCause(errors.New("nats publisher not implemented"))
 }
 

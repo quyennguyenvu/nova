@@ -271,3 +271,38 @@ func readEmbedded(name string, cfg *Config) error {
 	}
 	return cleanenv.ParseYAML(bytes.NewReader(data), cfg)
 }
+
+// Summary returns the loaded configuration as log fields with every secret
+// omitted, so the first log line of a process shows what it actually runs
+// with. Only fields that exist in this build are included.
+func (c *Config) Summary() []any {
+	fields := []any{
+		"log_level", c.Log.Level,
+		"log_format", c.Log.Format,
+		"tracing_endpoint", c.Tracing.Endpoint,
+		"tracing_sample_ratio", c.Tracing.SampleRatio,
+	}
+{{- if .HasHTTP}}
+	fields = append(fields, "http_port", c.HTTP.Port)
+{{- end}}
+{{- if .HasGRPC}}
+	fields = append(fields, "grpc_port", c.GRPC.Port)
+{{- end}}
+{{- if .HasDatabase}}
+	fields = append(fields, "db_host", c.Database.Host, "db_port", c.Database.Port, "db_name", c.Database.Name)
+{{- end}}
+{{- if eq .Database "postgres"}}
+	fields = append(fields, "db_ssl_mode", c.Database.SSLMode)
+{{- end}}
+{{- if .HasRedis}}
+	fields = append(fields, "redis_mode", c.Redis.Mode, "redis_addrs", c.Redis.Addrs)
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+	fields = append(fields, "kafka_brokers", c.Kafka.Brokers, "kafka_consumer_group", c.Kafka.ConsumerGroupID)
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+	// The RabbitMQ URL carries credentials and is never logged.
+	fields = append(fields, "rabbitmq_exchange", c.RabbitMQ.Exchange)
+{{- end}}
+	return fields
+}

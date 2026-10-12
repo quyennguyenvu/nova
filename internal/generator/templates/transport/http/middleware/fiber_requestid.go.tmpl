@@ -5,20 +5,20 @@ import (
 	"github.com/google/uuid"
 
 	"{{.ModuleName}}/pkg/httputil"
+	"{{.ModuleName}}/pkg/requestid"
 )
 
 // RequestID injects a unique request ID into the request headers and its context.
-// The ID is carried through ctx (see httputil.RequestIDFrom) and echoed back to
+// The ID is carried through ctx (see requestid.From) and echoed back to
 // the client in the X-Request-ID header and the response body's "requestId".
 func RequestID() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id := c.Get(httputil.RequestIDHeader)
-		if id == "" {
+		if !requestid.Valid(id) {
 			id = uuid.New().String()
 		}
 		c.Set(httputil.RequestIDHeader, id)
-		c.Locals("request_id", id)
-		c.SetUserContext(httputil.WithRequestID(c.UserContext(), id))
+		c.SetUserContext(requestid.With(c.UserContext(), id))
 		return c.Next()
 	}
 }

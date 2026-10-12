@@ -48,6 +48,5 @@ func (h *Handler) Handle(ctx context.Context, payload []byte) error {
 	if err := h.audit.RecordUserCreated(ctx, input); err != nil {
 		return errors.Wrapf(err, "handle user.created user_id=%d", msg.UserID)
 	}
-	log.Info("user.created: recorded", "user_id", msg.UserID)
 	return nil
 }

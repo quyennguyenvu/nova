@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
@@ -37,6 +38,11 @@ func NewRouter(
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 
+	// Tracing first so RequestID and Logging see the server span (trace_id).
+	engine.Use(otelgin.Middleware(
+		cfg.AppName,
+		otelgin.WithFilter(func(r *http.Request) bool { return !isProbe(r.URL.Path) }),
+	))
 	engine.Use(middleware.RequestID())
 	engine.Use(middleware.Logging(log))
 	engine.Use(middleware.Recovery())
@@ -48,6 +54,9 @@ func NewRouter(
 	})
 	engine.GET("/readyz", func(c *gin.Context) {
 		status := checker.Readiness(c.Request.Context())
+		if !status.OK {
+			log.Warn("readiness check failed", "details", status.Details)
+		}
 		code := http.StatusOK
 		if !status.OK {
 			code = http.StatusServiceUnavailable
@@ -61,3 +70,7 @@ func NewRouter(
 
 	return engine
 }
+
+// isProbe reports whether path is a health probe. Probes stay out of traces
+// (and access logs) because they carry no application signal.
+func isProbe(path string) bool { return path == "/healthz" || path == "/readyz" }

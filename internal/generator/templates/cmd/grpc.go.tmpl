@@ -10,8 +10,8 @@ func grpcCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "grpc",
 		Short: "Start the gRPC server",
-		Run: func(*cobra.Command, []string) {
-			app.RunGRPCServer()
+		RunE: func(*cobra.Command, []string) error {
+			return app.RunGRPCServer()
 		},
 	}
 }

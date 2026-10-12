@@ -63,7 +63,7 @@ import (
 // a missing public key when the worker doesn't need JWTs).
 var infraSet = wire.NewSet(
 	config.Load,
-	wire.FieldsOf(new(*config.Config), "Log", "JWT", "Security"),
+	wire.FieldsOf(new(*config.Config), "JWT", "Security"),
 	logger.New,
 	// Transport depends on the observability.Logger port; bind it to the
 	// concrete *logger.Logger here so the App bundle + infra consumers keep

@@ -28,6 +28,7 @@ func Auth(tokenSvc *jwtsec.TokenService) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		rememberPrincipal(c.Request.Context(), principal)
 		c.Request = c.Request.WithContext(identity.WithUserPrincipal(c.Request.Context(), principal))
 		c.Next()
 	}

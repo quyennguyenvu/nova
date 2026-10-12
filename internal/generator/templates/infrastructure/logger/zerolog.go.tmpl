@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/pkgerrors"
@@ -34,25 +35,35 @@ type Logger struct {
 	zl zerolog.Logger
 }
 
-// New builds a Logger from Config. Writes to stdout.
-func New(cfg config.LogConfig) *Logger {
-	return NewWithWriter(cfg, os.Stdout)
+// New builds a Logger from the app config and writes to stdout. Every line
+// carries service/version/env so aggregated logs identify the emitting
+// process, and the first line is a redacted summary of the loaded config.
+func New(cfg *config.Config) *Logger {
+	l := NewWithWriter(cfg, os.Stdout)
+	l.Info("config loaded", cfg.Summary()...)
+	return l
 }
 
 // NewWithWriter is useful for tests.
-func NewWithWriter(cfg config.LogConfig, w io.Writer) *Logger {
+func NewWithWriter(cfg *config.Config, w io.Writer) *Logger {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 	zerolog.CallerMarshalFunc = shortCaller
+	// Sub-second precision: lines within one second must stay orderable, and
+	// duration_ms is finer than a second-precision clock.
+	zerolog.TimeFieldFormat = time.RFC3339Nano
 
 	writer := w
-	if strings.EqualFold(cfg.Format, "console") {
+	if strings.EqualFold(cfg.Log.Format, "console") {
 		writer = zerolog.ConsoleWriter{Out: w}
 	}
 
 	zl := zerolog.New(writer).
-		Level(parseLevel(cfg.Level)).
+		Level(parseLevel(cfg.Log.Level)).
 		With().
 		Timestamp().
+		Str("service", cfg.AppName).
+		Str("version", cfg.AppVersion).
+		Str("env", cfg.AppEnv).
 		Logger()
 
 	return &Logger{zl: zl}
@@ -68,6 +79,9 @@ func Nop() *Logger {
 // interface — inner layers fork via logctx.From(ctx).With(...) without
 // importing this package.
 func (l *Logger) With(key string, value any) observability.Logger {
+	if err, ok := value.(error); ok {
+		return &Logger{zl: l.zl.With().AnErr(key, err).Logger()}
+	}
 	return &Logger{zl: l.zl.With().Interface(key, value).Logger()}
 }
 
@@ -88,6 +102,12 @@ func emit(ev *zerolog.Event, msg string, kv []any) {
 	for i := 0; i < len(kv); i += 2 {
 		key, ok := kv[i].(string)
 		if !ok {
+			continue
+		}
+		// An error would JSON-marshal to {} through Interface; AnErr renders
+		// its message (and stack, when the error carries one).
+		if err, isErr := kv[i+1].(error); isErr {
+			ev = ev.AnErr(key, err)
 			continue
 		}
 		ev = ev.Interface(key, kv[i+1])

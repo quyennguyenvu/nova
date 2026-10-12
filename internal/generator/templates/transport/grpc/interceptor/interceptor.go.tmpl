@@ -1,0 +1,107 @@
+// Package interceptor holds the unary gRPC interceptors that mirror the HTTP
+// middleware chain: request id, one access line per call, and panic
+// recovery. infrastructure/server.NewGRPCServer installs them.
+package interceptor
+
+import (
+	"context"
+	"runtime/debug"
+	"time"
+
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
+	"{{.ModuleName}}/pkg/observability"
+	"{{.ModuleName}}/pkg/requestid"
+)
+
+// requestIDMetadataKey is the incoming metadata key clients use to propagate a
+// correlation id; it mirrors the HTTP X-Request-ID header.
+const requestIDMetadataKey = "x-request-id"
+
+// RequestID adopts a valid inbound x-request-id or mints one, echoes it in the
+// response headers, and stores it in ctx through the same plumbing the HTTP
+// layer uses (requestid.From).
+func RequestID() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		id := ""
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if vals := md.Get(requestIDMetadataKey); len(vals) > 0 {
+				id = vals[0]
+			}
+		}
+		if !requestid.Valid(id) {
+			id = uuid.New().String()
+		}
+		_ = grpc.SetHeader(ctx, metadata.Pairs(requestIDMetadataKey, id))
+		return next(requestid.With(ctx, id), req)
+	}
+}
+
+// Logging attaches a request-scoped logger to ctx and emits one line per call
+// with the gRPC status code, duration and any AppError detail. Server faults
+// log at error, client-side codes at warn.
+func Logging(base observability.Logger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		start := time.Now()
+		scoped := base.
+			With("request_id", requestid.From(ctx)).
+			With("trace_id", traceIDOr(trace.SpanContextFromContext(ctx))).
+			With("method", info.FullMethod)
+		ctx = logctx.With(ctx, scoped)
+
+		resp, err := next(ctx, req)
+
+		code := status.Code(err)
+		fields := []any{"code", code.String(), "duration_ms", time.Since(start).Milliseconds()}
+		switch {
+		case err == nil:
+			scoped.Info("rpc", fields...)
+		case isServerFault(code):
+			scoped.Error("rpc", append(fields, errors.LogFields(err)...)...)
+		default:
+			scoped.Warn("rpc", append(fields, errors.LogFields(err)...)...)
+		}
+		return resp, err
+	}
+}
+
+// Recovery converts a handler panic into codes.Internal and logs the stack, so
+// one bad request cannot take the process down.
+func Recovery() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (resp any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				logctx.From(ctx).Error("rpc: panic recovered",
+					"method", info.FullMethod,
+					"panic", r,
+					"stack", string(debug.Stack()),
+				)
+				err = status.Error(codes.Internal, "internal error")
+			}
+		}()
+		return next(ctx, req)
+	}
+}
+
+func isServerFault(code codes.Code) bool {
+	switch code {
+	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+func traceIDOr(sc trace.SpanContext) string {
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
+}

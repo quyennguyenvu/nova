@@ -35,7 +35,9 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	cleanup := func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancel()
-		_ = fxApp.Stop(stopCtx)
+		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
+			log.Error("fx: stop", "err", stopErr)
+		}
 	}
 	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil
 }

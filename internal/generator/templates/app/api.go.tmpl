@@ -2,13 +2,15 @@ package app
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"{{.ModuleName}}/internal/infrastructure/di"
+	"{{.ModuleName}}/pkg/errors"
 )
 
 // RunHTTPServer boots the HTTP server, blocks until the OS signals shutdown or
@@ -23,14 +25,18 @@ func RunHTTPServer() error {
 	if err != nil {
 		return fmt.Errorf("initialize http server: %w", err)
 	}
-	defer cleanup()
 
 	log := app.Logger
 	server := app.Server
+	defer func() {
+		start := time.Now()
+		cleanup()
+		log.Info("shutdown complete", "duration_ms", time.Since(start).Milliseconds())
+	}()
 
 	errChan := make(chan error, 1)
 	go func() {
-		if startErr := server.Start(); startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
+		if startErr := server.Start(); startErr != nil && !stderrors.Is(startErr, http.ErrServerClosed) {
 			errChan <- startErr
 		}
 	}()
@@ -39,7 +45,7 @@ func RunHTTPServer() error {
 	case <-ctx.Done():
 		log.Info("shutdown signal received")
 	case startErr := <-errChan:
-		log.Error("server stopped with error", "error", startErr)
+		log.Error("server stopped with error", errors.LogFields(startErr)...)
 		return startErr
 	}
 

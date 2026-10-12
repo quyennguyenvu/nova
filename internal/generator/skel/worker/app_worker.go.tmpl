@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"{{.ModuleName}}/internal/infrastructure/di"
+	"{{.ModuleName}}/pkg/errors"
 )
 
 // RunWorker boots the consumer worker, blocks until the OS signals shutdown
@@ -25,14 +27,18 @@ func RunWorker() error {
 	if err != nil {
 		return fmt.Errorf("initialize worker: %w", err)
 	}
-	defer cleanup()
 
 	log := app.Logger
 	worker := app.Worker
+	defer func() {
+		start := time.Now()
+		cleanup()
+		log.Info("shutdown complete", "duration_ms", time.Since(start).Milliseconds())
+	}()
 
 	errChan := make(chan error, 1)
 	go func() {
-		if startErr := worker.Start(ctx); startErr != nil && !errors.Is(startErr, context.Canceled) {
+		if startErr := worker.Start(ctx); startErr != nil && !stderrors.Is(startErr, context.Canceled) {
 			errChan <- startErr
 		}
 	}()
@@ -41,13 +47,13 @@ func RunWorker() error {
 	case <-ctx.Done():
 		log.Info("worker: shutdown signal received")
 	case startErr := <-errChan:
-		log.Error("worker: stopped with error", "error", startErr)
+		log.Error("worker: stopped with error", errors.LogFields(startErr)...)
 		return startErr
 	}
 
 	log.Info("worker: shutting down")
 	if stopErr := worker.Stop(); stopErr != nil {
-		log.Error("worker: stop failed", "error", stopErr)
+		log.Error("worker: stop failed", errors.LogFields(stopErr)...)
 	}
 	return nil
 }

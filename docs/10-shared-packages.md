@@ -299,22 +299,30 @@ The **framework-free** half of the HTTP response story. Its framework-bound coun
 
 ```go
 // requestId is the same value as the X-Request-ID response header (see
-// RequestIDHeader). Surfacing it in the body lets a client quote one ID when
-// reporting an issue; grepping the logs for that request_id replays the whole
-// request — every log line the request produced carries it, with caller
-// file:line — so you can see what ran and where it errored.
+// RequestIDHeader); the value itself travels in ctx via pkg/requestid.
+// Surfacing it in the body lets a client quote one ID when reporting an issue;
+// grepping the logs for that request_id replays the whole request — every log
+// line the request produced carries it, with caller file:line — so you can see
+// what ran and where it errored.
 ```
 
 That paragraph is the operational payoff of the whole logging design: one envelope field turns a user's screenshot into a complete server-side replay.
 
-### Request ID lives here, not in transport
+The package is HTTP-only and is rendered only for HTTP projects. It owns the envelope and the `X-Request-ID` header name (`RequestIDHeader`); the correlation value itself lives in `pkg/requestid` so the worker and the gRPC interceptors never import the HTTP envelope.
+
+## pkg/requestid
+
+The transport-neutral home of the correlation ID. Rendered for every project.
 
 ```go
-// RequestIDFrom returns the request ID attached to ctx, or "" if none. Safe to
-// call from any layer (usecase, repository) that needs to log or propagate the
-// ID to downstream services — it lives here, not in transport, so inner layers
-// can reach it without importing a transport package.
+// Package requestid carries the per-request correlation ID through
+// context.Context. It is transport-neutral: the HTTP RequestID middleware, the
+// gRPC RequestID interceptor and the worker dispatcher all set it at their
+// boundary, the publishers copy it onto outgoing messages, and any inner layer
+// can read it without importing a transport package.
 ```
+
+`With(ctx, id)` / `From(ctx)` follow the `pkg/logctx` naming. `Valid(id)` guards the reuse of an inbound id (1–128 characters of `[A-Za-z0-9._-]`); each boundary mints a UUID when it rejects one. The carriers stay with their transports: the HTTP header name in `pkg/httputil`, the gRPC metadata key in `transport/grpc/interceptor`, the message header in `transport/worker`. The publishers copy the current id onto outgoing messages as the `x-request-id` header so a consumer-side line joins the request that produced the event.
 
 ### Two pagination metas, two audiences
 
@@ -376,6 +384,8 @@ The port lives in `pkg/`, the implementation in `internal/infrastructure/logger`
 ```
 
 **Reserved keys: `time`, `level`, `caller`, plus `message`.** Passing one produces a duplicate JSON field, which most log pipelines resolve unpredictably.
+
+The implementation also stamps `service`, `version` and `env` on every line, and renders any `error` value through zerolog's `AnErr` — so an error never serializes as `{}` — under whatever key you pass; the convention is `err`.
 
 Tracing and metrics deliberately have no port here:
 

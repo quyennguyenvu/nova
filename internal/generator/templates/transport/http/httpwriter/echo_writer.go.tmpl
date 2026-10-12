@@ -13,12 +13,13 @@ import (
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/locale"
+	"{{.ModuleName}}/pkg/requestid"
 )
 
 // WriteJSON writes a successful JSON response wrapped in the standard envelope.
 func WriteJSON(c echo.Context, status int, data any) error {
 	resp := httputil.SuccessResponse(data)
-	resp.RequestID = httputil.RequestIDFrom(c.Request().Context())
+	resp.RequestID = requestid.From(c.Request().Context())
 	return c.JSON(status, resp)
 }
 
@@ -27,7 +28,7 @@ func WriteJSON(c echo.Context, status int, data any) error {
 // cursor form, or a httputil.PageMeta for the admin offset form).
 func WriteListJSON(c echo.Context, status int, data, meta any) error {
 	resp := httputil.SuccessListResponse(data, meta)
-	resp.RequestID = httputil.RequestIDFrom(c.Request().Context())
+	resp.RequestID = requestid.From(c.Request().Context())
 	return c.JSON(status, resp)
 }
 
@@ -42,7 +43,7 @@ func WriteError(c echo.Context, app *errors.AppError) error {
 	errors.StashAppError(ctx, app)
 	lang := locale.LanguageFromContext(ctx)
 	resp := httputil.ErrorResponseFromApp(app, lang)
-	resp.RequestID = httputil.RequestIDFrom(ctx)
+	resp.RequestID = requestid.From(ctx)
 	return c.JSON(app.Code, resp)
 }
 

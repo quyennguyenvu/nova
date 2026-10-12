@@ -8,9 +8,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"{{.ModuleName}}/pkg/errors"
-	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/logctx"
 	"{{.ModuleName}}/pkg/observability"
+	"{{.ModuleName}}/pkg/requestid"
 )
 
 func traceIDOr(sc trace.SpanContext) string {
@@ -38,7 +38,7 @@ func Logging(base observability.Logger) gin.HandlerFunc {
 
 		start := time.Now()
 		ctx := c.Request.Context()
-		reqID := httputil.RequestIDFrom(ctx)
+		reqID := requestid.From(ctx)
 		sc := trace.SpanContextFromContext(ctx)
 
 		// URL.Path is path-only (no query string) — keep it that way so
@@ -55,6 +55,7 @@ func Logging(base observability.Logger) gin.HandlerFunc {
 			With("path", c.Request.URL.Path)
 		ctx = logctx.With(ctx, scoped)
 		ctx = errors.PrepareAppErrorContext(ctx)
+		ctx = prepareAuthSlot(ctx)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
@@ -68,10 +69,14 @@ func Logging(base observability.Logger) gin.HandlerFunc {
 		}
 		fields := []any{
 			"status", status,
+			"route", c.FullPath(),
 			"duration_ms", time.Since(start).Milliseconds(),
 			"err", c.Errors.String(),
 			"client_ip", c.ClientIP(),
 			"user_agent", c.Request.UserAgent(),
+		}
+		if p := principalFromSlot(ctx); p != nil {
+			fields = append(fields, "user_id", p.UserID)
 		}
 		if app := errors.AppErrorFromContext(ctx); app != nil {
 			fields = append(fields, "app_code", app.Code)

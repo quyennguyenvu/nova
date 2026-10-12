@@ -167,6 +167,8 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   └── locale_vi.go
 │   ├── logctx/
 │   │   └── logctx.go                       # Context-attached logger (With(ctx) / From(ctx))
+│   ├── requestid/
+│   │   └── requestid.go                    # Correlation ID in ctx (With / From / Valid) — HTTP, gRPC and worker set it
 │   └── observability/
 │       └── observability.go                # Logger port — implementations live in infrastructure/
 │

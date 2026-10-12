@@ -97,7 +97,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, e
 	}); pubErr != nil {
 		logctx.From(ctx).Error("publish user.created failed",
 			"user_id", user.ID,
-			"error", pubErr,
+			"err", pubErr,
 		)
 	}
 

@@ -69,7 +69,6 @@ const stopTimeout = 15 * time.Second
 func infraModule() fx.Option {
 	return fx.Provide(
 		config.Load,
-		provideLogConfig,
 		provideJWTConfig,
 		provideSecurityConfig,
 		logger.New,
@@ -221,7 +220,9 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 	cleanup := func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancel()
-		_ = fxApp.Stop(stopCtx)
+		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
+			log.Error("fx: stop", "err", stopErr)
+		}
 	}
 	return &HTTPApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
 }
@@ -251,7 +252,9 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 	cleanup := func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancel()
-		_ = fxApp.Stop(stopCtx)
+		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
+			log.Error("fx: stop", "err", stopErr)
+		}
 	}
 	return &GRPCApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
 }
@@ -284,7 +287,9 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	cleanup := func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancel()
-		_ = fxApp.Stop(stopCtx)
+		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
+			log.Error("fx: stop", "err", stopErr)
+		}
 	}
 	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil
 }

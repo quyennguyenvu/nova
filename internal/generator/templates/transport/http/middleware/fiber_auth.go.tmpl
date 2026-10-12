@@ -25,6 +25,7 @@ func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 		if err != nil {
 			return httpwriter.WriteError(c, errors.ToAppError(err))
 		}
+		rememberPrincipal(c.UserContext(), principal)
 		c.SetUserContext(identity.WithUserPrincipal(c.UserContext(), principal))
 		return c.Next()
 	}

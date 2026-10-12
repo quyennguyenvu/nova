@@ -1,0 +1,49 @@
+// Package requestid carries the per-request correlation ID through
+// context.Context. It is transport-neutral: the HTTP RequestID middleware, the
+// gRPC RequestID interceptor and the worker dispatcher all set it at their
+// boundary, the publishers copy it onto outgoing messages, and any inner layer
+// can read it without importing a transport package. The HTTP header name
+// stays in pkg/httputil, the gRPC metadata key in transport/grpc/interceptor
+// and the message header in transport/worker — this package only owns the
+// value.
+package requestid
+
+import "context"
+
+type ctxKey struct{}
+
+// With returns a copy of ctx carrying id as the request correlation ID.
+func With(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, ctxKey{}, id)
+}
+
+// From returns the request ID attached to ctx, or "" if none. Safe to call
+// from any layer (usecase, repository) that needs to log or propagate the ID
+// to downstream services.
+func From(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// maxLen bounds an inbound ID so a hostile client cannot bloat log lines or
+// smuggle delimiters into dashboards.
+const maxLen = 128
+
+// Valid reports whether an inbound ID may be reused as-is: 1–128 characters
+// from [A-Za-z0-9._-]. Anything else is replaced by a freshly generated ID at
+// the transport boundary.
+func Valid(id string) bool {
+	if id == "" || len(id) > maxLen {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}

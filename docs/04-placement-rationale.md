@@ -39,6 +39,7 @@ import (
     "{module}/pkg/errors"                     // *errors.AppError, StashAppError
     "{module}/pkg/httputil"
     "{module}/pkg/locale"
+    "{module}/pkg/requestid"
 )
 ```
 

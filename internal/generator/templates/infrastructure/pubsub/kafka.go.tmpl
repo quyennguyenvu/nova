@@ -26,7 +26,7 @@ func NewKafkaProducer(cfg config.KafkaConfig, log *logger.Logger) (sarama.SyncPr
 	cleanup := func() {
 		log.Info("[kafka] shutting down producer ...")
 		if closeErr := producer.Close(); closeErr != nil {
-			log.Error("[kafka] failed to close producer", "error", closeErr)
+			log.Error("[kafka] failed to close producer", "err", closeErr)
 		} else {
 			log.Info("[kafka] producer shutdown complete")
 		}
@@ -61,7 +61,7 @@ func NewKafkaConsumerGroup(cfg config.KafkaConfig, log *logger.Logger) (sarama.C
 	cleanup := func() {
 		log.Info("[kafka] shutting down consumer group ...")
 		if closeErr := group.Close(); closeErr != nil {
-			log.Error("[kafka] failed to close consumer group", "error", closeErr)
+			log.Error("[kafka] failed to close consumer group", "err", closeErr)
 		} else {
 			log.Info("[kafka] consumer group shutdown complete")
 		}

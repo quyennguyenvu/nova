@@ -59,7 +59,6 @@ import (
 // out of *config.Config by a dedicated provider — the equivalent of Wire's
 // wire.FieldsOf(new(*config.Config), "<Field>").
 
-func provideLogConfig(c *config.Config) config.LogConfig           { return c.Log }
 func provideJWTConfig(c *config.Config) config.JWTConfig           { return c.JWT }
 func provideSecurityConfig(c *config.Config) config.SecurityConfig { return c.Security }
 
@@ -107,8 +106,13 @@ func provideRabbitMQConfigPtr(c *config.Config) *config.RabbitMQConfig { return 
 // cleanup in reverse construction order — the fx equivalent of Wire's
 // aggregated cleanup func.
 
-func provideTracer(lc fx.Lifecycle, ctx context.Context, cfg tracing.Config) (trace.Tracer, error) {
-	tracer, cleanup, err := tracing.Provider(ctx, cfg)
+func provideTracer(
+	lc fx.Lifecycle,
+	ctx context.Context,
+	cfg tracing.Config,
+	log observability.Logger,
+) (trace.Tracer, error) {
+	tracer, cleanup, err := tracing.Provider(ctx, cfg, log)
 	if err != nil {
 		return nil, err
 	}

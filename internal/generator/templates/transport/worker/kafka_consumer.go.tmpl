@@ -27,7 +27,17 @@ func NewKafkaConsumer(group sarama.ConsumerGroup, log observability.Logger) Cons
 }
 
 func (c *kafkaConsumer) Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error {
-	handler := &kafkaSessionHandler{dispatch: dispatch, log: c.log}
+	handler := &kafkaSessionHandler{dispatch: dispatch}
+
+	// sarama reports partition/offset/broker errors here only because
+	// Return.Errors is set (infrastructure/pubsub); undrained they are lost
+	// and the channel eventually blocks. The goroutine ends when the group
+	// is closed.
+	go func() {
+		for err := range c.group.Errors() {
+			c.log.Error("kafka: consumer group error", "err", err)
+		}
+	}()
 
 	// sarama's Consume returns each time a rebalance occurs. Loop until
 	// the parent context is cancelled (clean shutdown) or the consumer
@@ -55,7 +65,6 @@ func (c *kafkaConsumer) Close() error {
 // rebalance the session.
 type kafkaSessionHandler struct {
 	dispatch DispatchFunc
-	log      observability.Logger
 }
 
 func (*kafkaSessionHandler) Setup(sarama.ConsumerGroupSession) error   { return nil }
@@ -64,25 +73,37 @@ func (*kafkaSessionHandler) Cleanup(sarama.ConsumerGroupSession) error { return 
 func (h *kafkaSessionHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for {
 		select {
-		case msg, ok := <-claim.Messages():
+		case m, ok := <-claim.Messages():
 			if !ok {
 				return nil
 			}
-			if err := h.dispatch(sess.Context(), msg.Topic, msg.Value); err != nil {
-				// Surface to sarama; the session will rebalance and the
-				// message will be redelivered (committed offset is not
-				// advanced because we don't MarkMessage on error).
-				h.log.Error("kafka: dispatch failed",
-					"topic", msg.Topic,
-					"partition", msg.Partition,
-					"offset", msg.Offset,
-					"err", err.Error(),
-				)
+			msg := Message{
+				Topic:     m.Topic,
+				Payload:   m.Value,
+				Key:       string(m.Key),
+				Headers:   kafkaHeaders(m.Headers),
+				Partition: m.Partition,
+				Offset:    m.Offset,
+			}
+			if err := h.dispatch(sess.Context(), msg); err != nil {
+				// The worker logged the failure with its correlation fields.
+				// Surface to sarama: the session rebalances and the message is
+				// redelivered because the offset is not advanced (no MarkMessage).
 				return err
 			}
-			sess.MarkMessage(msg, "")
+			sess.MarkMessage(m, "")
 		case <-sess.Context().Done():
 			return nil
 		}
 	}
+}
+
+func kafkaHeaders(hs []*sarama.RecordHeader) map[string]string {
+	out := make(map[string]string, len(hs))
+	for _, h := range hs {
+		if h != nil {
+			out[string(h.Key)] = string(h.Value)
+		}
+	}
+	return out
 }

@@ -15,6 +15,7 @@ import (
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/httputil"
 	"{{.ModuleName}}/pkg/locale"
+	"{{.ModuleName}}/pkg/requestid"
 )
 
 // WriteJSON writes a successful JSON response wrapped in the standard envelope.
@@ -51,7 +52,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, app *errors.AppError) {
 	errors.StashAppError(ctx, app)
 	lang := locale.LanguageFromContext(ctx)
 	resp := httputil.ErrorResponseFromApp(app, lang)
-	resp.RequestID = httputil.RequestIDFrom(ctx)
+	resp.RequestID = requestid.From(ctx)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(app.Code)
 	_ = json.NewEncoder(w).Encode(resp)

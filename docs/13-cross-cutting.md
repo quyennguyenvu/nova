@@ -6,24 +6,24 @@ Templates should never omit these. **Adding a new HTTP framework variant means r
 
 ## The list
 
-| Feature                     | Where it lives                                                                                       |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Graceful shutdown           | `internal/app/*.go` + every constructor's cleanup ([11](11-di-and-entrypoints.md#how-cleanup-works)) |
-| Context propagation         | `context.Context` first arg through every layer                                                      |
-| Structured logging          | `pkg/observability.Logger` port → `infrastructure/logger/zerolog.go`                                 |
-| Request-scoped logger       | `pkg/logctx` — `logctx.From(ctx)` in inner layers                                                    |
-| Request ID                  | `middleware/requestid.go` + `pkg/httputil.WithRequestID`                                             |
-| Health endpoints            | `transport/http/health/checker.go` — `/healthz`, `/readyz`                                           |
-| OpenTelemetry tracing       | `infrastructure/tracing/otel.go`; `trace_id` on every log line                                       |
-| Input validation            | `go-playground/validator` via `httpwriter.Bind` / `BindQuery`                                        |
-| Error handling + i18n       | `pkg/errors` (AppError, status table) + `pkg/locale` (codes, translations)                           |
-| API versioning              | URL path — `transport/http/v1/v1.go` (`/api/v1`)                                                     |
-| CORS                        | `middleware/cors.go`, config-driven, never `*`                                                       |
-| Login rate limiting         | `middleware/loginlimit.go`, applied to the auth route only                                           |
-| Request/response access log | `middleware/logging.go` — exactly one line per request                                               |
-| Panic recovery              | `middleware/recovery.go` — 500 in the standard envelope                                              |
-| Auth                        | `middleware/auth.go` + `infrastructure/jwt` (RS256)                                                  |
-| Transaction management      | `domain.TxManager` → `adapter/repository/{db}/tx_manager.go`                                         |
+| Feature                     | Where it lives                                                                                                                   |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Graceful shutdown           | `internal/app/*.go` + every constructor's cleanup ([11](11-di-and-entrypoints.md#how-cleanup-works))                             |
+| Context propagation         | `context.Context` first arg through every layer                                                                                  |
+| Structured logging          | `pkg/observability.Logger` port → `infrastructure/logger/zerolog.go`                                                             |
+| Request-scoped logger       | `pkg/logctx` — `logctx.From(ctx)` in inner layers                                                                                |
+| Request ID                  | `middleware/requestid.go` + `pkg/requestid.With`                                                                                 |
+| Health endpoints            | `transport/http/health/checker.go` — `/healthz`, `/readyz`                                                                       |
+| OpenTelemetry tracing       | `infrastructure/tracing/otel.go` + the framework's OTel middleware, installed first in `router.go`; `trace_id` on every log line |
+| Input validation            | `go-playground/validator` via `httpwriter.Bind` / `BindQuery`                                                                    |
+| Error handling + i18n       | `pkg/errors` (AppError, status table) + `pkg/locale` (codes, translations)                                                       |
+| API versioning              | URL path — `transport/http/v1/v1.go` (`/api/v1`)                                                                                 |
+| CORS                        | `middleware/cors.go`, config-driven, never `*`                                                                                   |
+| Login rate limiting         | `middleware/loginlimit.go`, applied to the auth route only                                                                       |
+| Request/response access log | `middleware/logging.go` — exactly one line per request                                                                           |
+| Panic recovery              | `middleware/recovery.go` — 500 in the standard envelope                                                                          |
+| Auth                        | `middleware/auth.go` + `infrastructure/jwt` (RS256)                                                                              |
+| Transaction management      | `domain.TxManager` → `adapter/repository/{db}/tx_manager.go`                                                                     |
 
 **Not shipped**, despite appearing in earlier drafts: a Prometheus `/metrics` endpoint, and a general-purpose (non-login) rate limiter.
 
@@ -37,7 +37,7 @@ Five distinct things travel through ctx, each with an unexported key type in the
 
 | Value           | Set by                 | Read by                     | Package                   |
 | --------------- | ---------------------- | --------------------------- | ------------------------- |
-| Request ID      | `middleware.RequestID` | logger, response envelope   | `pkg/httputil`            |
+| Request ID      | `middleware.RequestID` | logger, response envelope   | `pkg/requestid`           |
 | Scoped logger   | `middleware.Logging`   | any inner layer             | `pkg/logctx`              |
 | Language        | `middleware.Locale`    | `httpwriter.WriteError`     | `pkg/locale`              |
 | Principal       | `middleware.Auth`      | handlers                    | `domain/identity`         |
@@ -73,11 +73,11 @@ Why this and not log-at-each-layer:
 
 - **One line per failed request**, so error-rate alerting counts requests, not layers.
 - **The frame trail replaces the stack**: `app_trace` shows `user/service.go:67 → v1/user/handler.go:36` — the path through *your* code, which is the part you read.
-- **Correlation is free**: `request_id` and `trace_id` are on the scoped logger, so every line the request did emit joins up, and `requestId` in the response body lets a user hand you the key.
+- **Correlation is free**: `request_id` and `trace_id` are on the scoped logger, so every line the request did emit joins up, and `requestId` in the response body lets a user hand you the key. The access line adds `route` (the matched pattern) and, after `Auth`, `user_id`.
 
 The three deliberate exceptions are all "the error is being swallowed, so it must be logged here": the best-effort event publish ([06](06-usecase-layer.md)), cache read/refill failures ([08](08-adapter-layer.md)), and panic recovery. A swallowed error that isn't logged is invisible.
 
-For transports with no access-log middleware (the worker), `errors.LogFields(err)` emits the same field names so one log query works across both ([10](10-shared-packages.md#logfields--for-transports-without-middleware)).
+The worker has its own boundary line: `Worker.dispatch` logs `worker: message handled|failed` once per message with the topic, the broker position (Kafka partition/offset or RabbitMQ delivery tag), the producer's `request_id`/`trace_id` and `duration_ms`, using `errors.LogFields(err)` for the failure fields so one log query works across HTTP and worker ([10](10-shared-packages.md#logfields--for-transports-without-middleware)).
 
 ### 3. Classify at the origin, translate at the edge
 
@@ -129,21 +129,21 @@ Each of these is documented at its source: [06](06-usecase-layer.md#login--unifo
 
 ```bash
 Request
-  │  X-Request-ID (or generated)          ─────▶ ctx + response header + body.requestId
-  │  traceparent                          ─────▶ OTel span context → trace_id
+  │  X-Request-ID (validated, else generated) ─▶ ctx + response header + body.requestId
+  │  traceparent                          ─────▶ OTel server span (middleware runs first) → trace_id
   ▼
 scoped logger = base.With(request_id, trace_id, method, path)
   │
   ├── inner layers: logctx.From(ctx).Warn(…)          ← correlated, no plumbing
   │
   ▼
-one access line: status, duration_ms, client_ip, user_agent,
+one access line: status, route, duration_ms, client_ip, user_agent, [user_id],
                  [app_code, app_locale, app_err, app_trace]
 ```
 
 Three properties this buys:
 
-- **Log → trace in one click**: `trace_id` is on every line, so a log search jumps to Jaeger/Tempo.
+- **Log → trace in one click**: `trace_id` is on every line once a span exists — the framework's OTel middleware runs before everything else, so an inbound `traceparent` or a configured exporter is enough — and a log search jumps to Jaeger/Tempo.
 - **User report → full replay**: the `requestId` in the response body is the log search key.
 - **Signal, not volume**: probes and `OPTIONS` emit no line; a plain validation 400 omits `app_err`/`app_trace`, so client-driven noise doesn't move error-rate alerts.
 

@@ -55,7 +55,7 @@ Findings fixed:
 
 Exit criteria: `make test-all` includes `TestGeneratedProjectBootstrap` running the real `make gen` → `go build` → `golangci-lint run` sequence on fiber+postgres+wire, gin+mysql+wire, worker+postgres+kafka+wire, and echo+none+fx, all green; `TestRenderedGoIsGofmtClean` green; no-DB rows in `TestGenerateMatrix` green.
 
-## Phase 2: CLI hardening (nova itself)
+## Phase 2: CLI hardening (nova itself) (done 2026-10-08, commit `4858cc8`)
 
 Detailed plan: [2026-10-07-phase2-cli-hardening.md](2026-10-07-phase2-cli-hardening.md).
 
@@ -75,6 +75,8 @@ Plan shape: `ProjectConfig.Validate()` driven by one option registry consumed by
 Exit criteria: every value the CLI advertises either renders a project that passes `TestGeneratedProjectBootstrap` or is rejected with a one-line error before any file is written; adversarial names and paths are rejected; `cmd` and `prompt` have tests.
 
 ## Phase 3: observability
+
+Detailed plan: [2026-10-08-phase3-observability.md](2026-10-08-phase3-observability.md).
 
 Findings (generated project):
 

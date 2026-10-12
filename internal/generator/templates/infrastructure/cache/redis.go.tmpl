@@ -44,7 +44,7 @@ func New(cfg config.RedisConfig, log *logger.Logger) (*Client, func(), error) {
 
 	cleanup := func() {
 		if err := uc.Close(); err != nil {
-			log.Error("failed to close redis client", "error", err)
+			log.Error("failed to close redis client", "err", err)
 		}
 	}
 

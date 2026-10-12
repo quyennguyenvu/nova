@@ -31,7 +31,7 @@ func NewRabbitMQChannel(conn *amqp.Connection, log *logger.Logger) (*amqp.Channe
 	cleanup := func() {
 		log.Info("[rabbitmq] closing channel ...")
 		if closeErr := ch.Close(); closeErr != nil {
-			log.Error("[rabbitmq] failed to close channel", "error", closeErr)
+			log.Error("[rabbitmq] failed to close channel", "err", closeErr)
 		}
 	}
 	return ch, cleanup, nil

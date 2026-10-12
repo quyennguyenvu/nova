@@ -28,6 +28,7 @@ func Auth(tokenSvc *jwtsec.TokenService) echo.MiddlewareFunc {
 			if err != nil {
 				return httpwriter.WriteError(c, errors.ToAppError(err))
 			}
+			rememberPrincipal(c.Request().Context(), principal)
 			req := c.Request()
 			c.SetRequest(req.WithContext(identity.WithUserPrincipal(req.Context(), principal)))
 			return next(c)

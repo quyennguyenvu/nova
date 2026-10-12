@@ -405,10 +405,21 @@ func (g *Generator) transportFiles() []templateFile {
 			"internal/transport/http/middleware/loginlimit.go",
 			cfg.HasHTTP(),
 		},
+		// Principal slot shared by Auth and Logging — framework-agnostic.
+		{
+			"templates/transport/http/middleware/principal.go.tmpl",
+			"internal/transport/http/middleware/principal.go",
+			cfg.HasHTTP(),
+		},
 		// gRPC handler
 		{
 			"templates/transport/grpc/user_handler.go.tmpl",
 			"internal/transport/grpc/user.go",
+			cfg.HasGRPC(),
+		},
+		{
+			"templates/transport/grpc/interceptor/interceptor.go.tmpl",
+			"internal/transport/grpc/interceptor/interceptor.go",
 			cfg.HasGRPC(),
 		},
 		// Pubsub adapters live in adapterFiles() — not duplicated here.
@@ -571,6 +582,8 @@ func (g *Generator) pkgFiles() []templateFile {
 	return []templateFile{
 		{"templates/pkg/errors/errors.go.tmpl", "pkg/errors/errors.go", true},
 		{"templates/pkg/httputil/response.go.tmpl", "pkg/httputil/response.go", cfg.HasHTTP()},
+		// Request-id context plumbing shared by HTTP, gRPC, the worker and the publishers.
+		{"templates/pkg/requestid/requestid.go.tmpl", "pkg/requestid/requestid.go", true},
 		{"templates/pkg/locale/locale.go.tmpl", "pkg/locale/locale.go", true},
 		{"templates/pkg/locale/locale_en.go.tmpl", "pkg/locale/locale_en.go", true},
 		{"templates/pkg/locale/locale_vi.go.tmpl", "pkg/locale/locale_vi.go", true},

@@ -1,0 +1,38 @@
+package middleware
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/domain/identity"
+)
+
+// principalSlot lets the Auth middleware hand the authenticated principal back
+// up to the Logging middleware, which runs outside it. identity.WithUserPrincipal
+// derives a child context that only inner handlers see, so the access log
+// needs this mutable slot to learn who made the request.
+type principalSlot struct {
+	p *identity.UserPrincipal
+}
+
+type principalSlotKey struct{}
+
+// prepareAuthSlot installs an empty slot; Logging calls it before next().
+func prepareAuthSlot(ctx context.Context) context.Context {
+	return context.WithValue(ctx, principalSlotKey{}, &principalSlot{})
+}
+
+// rememberPrincipal records p for the access log. No-op when Logging did not
+// run (a route mounted outside the middleware chain).
+func rememberPrincipal(ctx context.Context, p *identity.UserPrincipal) {
+	if slot, ok := ctx.Value(principalSlotKey{}).(*principalSlot); ok {
+		slot.p = p
+	}
+}
+
+// principalFromSlot returns the principal Auth recorded, or nil.
+func principalFromSlot(ctx context.Context) *identity.UserPrincipal {
+	if slot, ok := ctx.Value(principalSlotKey{}).(*principalSlot); ok {
+		return slot.p
+	}
+	return nil
+}

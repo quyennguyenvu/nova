@@ -2,9 +2,17 @@ package worker
 
 import (
 	"context"
+	"time"
 
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/logctx"
 	"{{.ModuleName}}/pkg/observability"
+	"{{.ModuleName}}/pkg/requestid"
 )
 
 // Consumer is the broker-side abstraction. Implementations live in
@@ -18,9 +26,28 @@ type Consumer interface {
 	Close() error
 }
 
+// Message is the broker-neutral view of one delivery. Consumers fill the
+// fields their broker knows (Kafka: Key/Partition/Offset; RabbitMQ:
+// DeliveryTag/MessageID); Headers carry the producer's correlation ids.
+type Message struct {
+	Topic       string
+	Payload     []byte
+	Key         string
+	Headers     map[string]string
+	Partition   int32  // Kafka only; -1 when unknown
+	Offset      int64  // Kafka only
+	DeliveryTag uint64 // RabbitMQ only
+	MessageID   string // RabbitMQ MessageId when the producer set one
+}
+
 // DispatchFunc is the per-message callback the Consumer invokes after
 // receipt. Workers use a single bound dispatch closure that routes by topic.
-type DispatchFunc func(ctx context.Context, topic string, payload []byte) error
+type DispatchFunc func(ctx context.Context, msg Message) error
+
+// HeaderRequestID is the message header carrying the producer-side request
+// id, so a consumer log line joins the HTTP request that caused it. The
+// publisher (adapter/pubsub) sets it; W3C trace context travels alongside.
+const HeaderRequestID = "x-request-id"
 
 // Worker owns one Consumer and a topic-keyed Handler set. The lifecycle is
 // driven by Start(ctx) (blocks) / Stop() (closes the consumer).
@@ -62,15 +89,60 @@ func (w *Worker) Stop() error {
 	return w.consumer.Close()
 }
 
-func (w *Worker) dispatch(ctx context.Context, topic string, payload []byte) error {
-	h, ok := w.handlers[topic]
+// dispatch routes one message to its handler and emits exactly one outcome
+// line carrying the broker position, the producer's correlation ids and the
+// handler duration — the worker-side counterpart of the HTTP access log.
+func (w *Worker) dispatch(ctx context.Context, msg Message) error {
+	h, ok := w.handlers[msg.Topic]
 	if !ok {
 		// Unknown topic — log and ack so we don't poison-pill the partition.
 		// Tighten by returning an error if your broker has a DLQ configured.
-		w.log.Warn("worker: dropping message, no handler for topic", "topic", topic, "size", len(payload))
+		w.log.Warn("worker: dropping message, no handler for topic", "topic", msg.Topic, "size", len(msg.Payload))
 		return nil
 	}
-	scoped := w.log.With("topic", topic).With("size", len(payload))
+
+	// Adopt the producer's trace context and request id so this line joins
+	// the upstream request; mint an id when the producer sent none.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(msg.Headers))
+	reqID := msg.Headers[HeaderRequestID]
+	if !requestid.Valid(reqID) {
+		reqID = uuid.New().String()
+	}
+	ctx = requestid.With(ctx, reqID)
+
+	scoped := w.log.
+		With("topic", msg.Topic).
+		With("request_id", reqID).
+		With("trace_id", traceIDOr(trace.SpanContextFromContext(ctx))).
+		With("size", len(msg.Payload))
+	if msg.Key != "" {
+		scoped = scoped.With("key", msg.Key)
+	}
+	if msg.Partition >= 0 {
+		scoped = scoped.With("partition", msg.Partition).With("offset", msg.Offset)
+	}
+	if msg.DeliveryTag > 0 {
+		scoped = scoped.With("delivery_tag", msg.DeliveryTag)
+	}
+	if msg.MessageID != "" {
+		scoped = scoped.With("message_id", msg.MessageID)
+	}
 	ctx = logctx.With(ctx, scoped)
-	return h.Handle(ctx, payload)
+
+	start := time.Now()
+	err := h.Handle(ctx, msg.Payload)
+	fields := []any{"duration_ms", time.Since(start).Milliseconds()}
+	if err != nil {
+		scoped.Error("worker: message failed", append(fields, errors.LogFields(err)...)...)
+		return err
+	}
+	scoped.Info("worker: message handled", fields...)
+	return nil
+}
+
+func traceIDOr(sc trace.SpanContext) string {
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/riandyrn/otelchi"
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
@@ -37,6 +38,12 @@ func NewRouter(
 ) chi.Router {
 	router := chi.NewRouter()
 
+	// Tracing first so RequestID and Logging see the server span (trace_id).
+	router.Use(otelchi.Middleware(
+		cfg.AppName,
+		otelchi.WithChiRoutes(router),
+		otelchi.WithFilter(func(r *http.Request) bool { return !isProbe(r.URL.Path) }),
+	))
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logging(log))
 	router.Use(middleware.Recovery)
@@ -48,6 +55,9 @@ func NewRouter(
 	})
 	router.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		status := checker.Readiness(r.Context())
+		if !status.OK {
+			log.Warn("readiness check failed", "details", status.Details)
+		}
 		code := http.StatusOK
 		if !status.OK {
 			code = http.StatusServiceUnavailable
@@ -84,3 +94,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// isProbe reports whether path is a health probe. Probes stay out of traces
+// (and access logs) because they carry no application signal.
+func isProbe(path string) bool { return path == "/healthz" || path == "/readyz" }

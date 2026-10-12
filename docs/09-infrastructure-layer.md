@@ -207,6 +207,8 @@ type Logger struct {
 
 The port is in `pkg/observability` so inner layers can log via `logctx.From(ctx)` without importing infrastructure ([10](10-shared-packages.md)). This is one of the two ports implemented outside `adapter/` — logging is cross-cutting, not a business operation ([03](03-architecture-rules.md#ports-implemented-outside-adapter)).
 
+`New(cfg *config.Config)` takes the whole config: level and format come from `cfg.Log`, every line is stamped with `service`, `version` and `env` from the app fields, timestamps are RFC 3339 with nanoseconds, and the first line a process emits is `config loaded` with `cfg.Summary()` — every non-secret setting it runs with. `production.yaml` keeps `log.level: info` so access and lifecycle lines survive in production.
+
 Two details that exist because wrapping a logger usually breaks its caller reporting:
 
 ```go
@@ -322,6 +324,8 @@ if cfg.Endpoint == "" {
 Note the propagator is still installed in the no-op path, so inbound `traceparent` headers keep flowing through the service even with export disabled — you don't break a distributed trace by running one hop without a collector.
 
 `Shutdown` flushes pending spans; without calling it, the last spans before exit are lost. `SampleRatio` defaults to 0.1 in `base.yaml`.
+
+`Provider(ctx, cfg, log)` wraps `New` for DI and logs a flush failure at shutdown. The provider alone creates no spans: the HTTP routers install the framework's OTel middleware first (`otelfiber`, `otelgin`, `otelchi`, `otelecho`) and `NewGRPCServer` adds the `otelgrpc` stats handler, so every request has a server span and `trace_id` on its log lines.
 
 ## Nothing here knows about business rules
 
