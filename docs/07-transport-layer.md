@@ -40,22 +40,27 @@ func NewRouter(
     registrars []Registrar,
 ) *fiber.App {
     app := fiber.New(fiber.Config{
-        BodyLimit:         cfg.HTTP.BodyLimit,
-        ReadBufferSize:    cfg.HTTP.ReadBufferSize,
-        ReadTimeout:       cfg.HTTP.ReadTimeout,
-        WriteTimeout:      cfg.HTTP.WriteTimeout,
-        ProxyHeader:       fiber.HeaderXForwardedFor,
-        EnablePrintRoutes: cfg.AppEnv == config.EnvLocal,
+        BodyLimit:               cfg.HTTP.BodyLimit,
+        ReadBufferSize:          cfg.HTTP.ReadBufferSize,
+        ReadTimeout:             cfg.HTTP.ReadTimeout,
+        WriteTimeout:            cfg.HTTP.WriteTimeout,
+        ErrorHandler:            httpwriter.HandleError,    // framework errors answer in the envelope
+        ProxyHeader:             fiber.HeaderXForwardedFor,
+        EnableTrustedProxyCheck: true,                      // X-Forwarded-For only from…
+        TrustedProxies:          cfg.HTTP.TrustedProxies,   // …the proxies listed in config
+        EnablePrintRoutes:       cfg.AppEnv == config.EnvLocal,
     })
 
+    app.Use(otelfiber.Middleware(…))                      // server span; probes skipped
     app.Use(middleware.RequestID())
     app.Use(middleware.Logging(log))
     app.Use(middleware.Recovery())
+    app.Use(middleware.Timeout(cfg.HTTP.RequestTimeout))  // deadline on every request ctx
     app.Use(middleware.CORS(cfg.HTTP.CORS))
     app.Use(middleware.Locale())
 
     app.Get("/healthz", …)   // checker.Liveness()
-    app.Get("/readyz",  …)   // checker.Readiness(ctx) → 200 or 503
+    app.Get("/readyz",  …)   // checker.Readiness(ctx) → 200 or 503; the error is logged, the body says "fail"
 
     for _, r := range registrars {
         r.Register(app.Group(r.Prefix()))
@@ -66,13 +71,19 @@ func NewRouter(
 
 **Middleware order is load-bearing**, not alphabetical:
 
-| Position | Middleware  | Why here                                                             |
-| -------- | ----------- | -------------------------------------------------------------------- |
-| 1        | `RequestID` | Every later layer (including the logger) must see the ID             |
-| 2        | `Logging`   | Wraps everything below to measure duration and emit **one** log line |
-| 3        | `Recovery`  | Inside `Logging`, so a panic still produces an access log            |
-| 4        | `CORS`      | After the observability layers, before app logic                     |
-| 5        | `Locale`    | Populates ctx language for `httpwriter.WriteError` to read back      |
+| Position | Middleware  | Why here                                                                                   |
+| -------- | ----------- | ------------------------------------------------------------------------------------------ |
+| 1        | `RequestID` | Every later layer (including the logger) must see the ID                                   |
+| 2        | `Logging`   | Wraps everything below to measure duration and emit **one** log line                       |
+| 3        | `Recovery`  | Inside `Logging`, so a panic still produces an access log                                  |
+| 4        | `Timeout`   | Inside `Recovery`, so a deadline panic is still caught; puts `http.request_timeout` on ctx |
+| 5        | `BodyLimit` | gin, chi and echo only — fiber caps the body in `fiber.Config`; over the cap is 413        |
+| 6        | `CORS`      | After the observability layers, before app logic                                           |
+| 7        | `Locale`    | Populates ctx language for `httpwriter.WriteError` to read back                            |
+
+chi installs one more middleware before all of these: `ClientIP`, which resolves the client address through `http.trusted_proxies` and rewrites `RemoteAddr` so the span, the access line and the login limiter read the same value. fiber, gin and echo do the same natively (`TrustedProxies`, `SetTrustedProxies`, `IPExtractor`); with no trusted proxies every framework ignores `X-Forwarded-For`.
+
+Framework-raised errors take one path per framework into the same envelope: fiber's `ErrorHandler` and echo's `HTTPErrorHandler` are `httpwriter.HandleError`, gin's `NoRoute`/`NoMethod` (with `RedirectTrailingSlash` off, so `/api/v1/users` is served rather than redirected) and chi's `NotFound`/`MethodNotAllowed` call `httpwriter.WriteError` with `errors.FromStatus(code)`. A client never sees a framework's plain-text 404.
 
 `registrars` is a **slice, not a map**, so mount order is deterministic — map iteration order would make route shadowing nondeterministic between restarts.
 
@@ -241,15 +252,15 @@ func (r *Registrar) Register(router fiber.Router) {
 
 Shipped route table:
 
-| Method   | Path                   | Auth | Notes                      |
-| -------- | ---------------------- | ---- | -------------------------- |
-| `POST`   | `/api/v1/login`        | —    | Per-IP rate limited        |
-| `POST`   | `/api/v1/users`        | —    | Registration               |
-| `GET`    | `/api/v1/public/users` | —    | Cursor-paginated directory |
-| `GET`    | `/api/v1/users`        | ✔    | Page-based admin list      |
-| `GET`    | `/api/v1/users/:id`    | ✔    |                            |
-| `PUT`    | `/api/v1/users/:id`    | ✔    |                            |
-| `DELETE` | `/api/v1/users/:id`    | ✔    | 204, no envelope           |
+| Method   | Path                   | Auth | Notes                             |
+| -------- | ---------------------- | ---- | --------------------------------- |
+| `POST`   | `/api/v1/login`        | —    | Per-IP rate limited               |
+| `POST`   | `/api/v1/users`        | —    | Registration, per-IP rate limited |
+| `GET`    | `/api/v1/public/users` | —    | Cursor-paginated directory        |
+| `GET`    | `/api/v1/users`        | ✔    | Page-based admin list             |
+| `GET`    | `/api/v1/users/:id`    | ✔    |                                   |
+| `PUT`    | `/api/v1/users/:id`    | ✔    | Own id only (403 otherwise)       |
+| `DELETE` | `/api/v1/users/:id`    | ✔    | Own id only; 204, no envelope     |
 
 ## internal/transport/http/httpwriter/writer.go
 
@@ -306,7 +317,7 @@ Uniform messages mean a client can't probe struct field names or binder internal
 
 ## internal/transport/http/middleware/
 
-Seven middlewares, each rendered from a `{framework}_{name}.go.tmpl` variant.
+Eight middlewares are rendered for every framework from `{framework}_{name}.go.tmpl` variants (`requestid`, `logging`, `recovery`, `timeout`, `cors`, `locale`, `auth`, `loginlimit`), plus `bodylimit` for gin, chi and echo and `clientip` for chi, where the framework has no native equivalent.
 
 ### requestid.go
 
@@ -330,9 +341,9 @@ ctx = prepareAuthSlot(ctx)
 Six decisions in this file are worth keeping when you extend it:
 
 - **`c.Path()`, never `c.OriginalURL()`.** `Path()` excludes the query string, so a secret in `?token=…` never reaches structured logs. There is a comment saying so; don't "improve" it.
-- **`client_ip`/`user_agent` are on the access line only**, not on the scoped logger. They're entry-point facts; repeating them on every inner log line is pure volume.
+- **`client_ip`/`user_agent` are on the access line only**, not on the scoped logger. They're entry-point facts; repeating them on every inner log line is pure volume. `client_ip` is the address the framework resolved through the trusted-proxy list (chi: `RemoteAddr` after `ClientIP`), without a port.
 - **`/healthz`, `/readyz` and `OPTIONS` emit no line.** Kubernetes probes every few seconds and preflights carry no app signal — both would drown real traffic. They still run through `RequestID` and `Recovery`, so the safety net is intact; only the log line is suppressed.
-- **Level follows status**: `Info` < 400, `Warn` 4xx, `Error` 5xx or a returned error.
+- **Level follows status**: `Info` < 400, `Warn` 4xx, `Error` 5xx. fiber and echo resolve a returned error inside the middleware (`c.App().ErrorHandler`, `c.Error`) before reading the status, so a router 404 logs as a 404 at `Warn` rather than a 200 at `Error`.
 - **`route` and `path` are both on the access line.** `path` is the raw request path (also on the scoped logger); `route` is the matched pattern (`/api/v1/users/:id`) for low-cardinality dashboards. All four frameworks agree on this.
 - **`user_id` comes from `Auth` through a slot.** `Auth` runs inside `Logging` and derives a child context only inner handlers see, so the only way the access line can say who called is the mutable slot `Logging` installs and `Auth` fills (`rememberPrincipal`).
 
@@ -355,9 +366,13 @@ The `net/http`-based variants (chi, gin, echo) _do_ track whether headers were w
 ### cors.go
 
 ```go
-// CORS reads allowed origins/methods/headers from config — never default to
-// "*" in scaffolded code; each deployment enumerates origins explicitly.
+// CORS reads allowed origins/methods/headers from config; each deployment
+// enumerates its origins explicitly. An empty origin list means no
+// cross-origin access at all, so nothing is installed: fiber's cors
+// middleware would otherwise treat the empty list as "*".
 ```
+
+The empty-list guard is what keeps the `base.yaml` default honest: fiber and echo both read an empty origin list as `*`, so the middleware is simply not installed. gin and chi, whose CORS is hand-rolled, add `Vary: Origin` on every response so a shared cache never serves one origin's answer to another.
 
 ### locale.go
 
@@ -382,39 +397,41 @@ Extracts the bearer token, verifies it, and attaches the principal:
 ```go
 func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
     return func(c *fiber.Ctx) error {
-        token := bearerToken(c.Get("Authorization"))
+        token := bearerToken(c.Get(fiber.HeaderAuthorization))
         if token == "" {
+            c.Set(fiber.HeaderWWWAuthenticate, challengeMissing)
             return httpwriter.WriteError(c, errors.L(locale.Unauthorized).
                 WithCause(errors.New("missing bearer token")))
         }
         principal, err := tokenSvc.ParseAndVerifyAccessToken(c.UserContext(), token)
         if err != nil {
-            return httpwriter.WriteError(c, errors.ToAppError(err))
+            app := errors.ToAppError(err)
+            if app.Code == fiber.StatusUnauthorized {
+                c.Set(fiber.HeaderWWWAuthenticate, challengeInvalid)
+            }
+            return httpwriter.WriteError(c, app)
         }
+        rememberPrincipal(c.UserContext(), principal)
         c.SetUserContext(identity.WithUserPrincipal(c.UserContext(), principal))
         return c.Next()
     }
 }
 ```
 
+`bearerToken` compares the scheme case-insensitively (RFC 9110), and every 401 carries an RFC 6750 challenge: `Bearer` when the credential is missing, `Bearer error="invalid_token"` when it was rejected.
+
 Handlers read the caller via `identity.UserPrincipalFromContext(ctx)` — they never see a token, and the usecase layer never learns that JWT exists.
 
 ### loginlimit.go
 
-A per-source-IP token bucket (`golang.org/x/time/rate`) defaulting to 5/minute with burst 5, and returning `errors.L(locale.TooManyRequests)`. Two honest caveats live in the code:
+A per-source-IP token bucket (`golang.org/x/time/rate`) defaulting to 5/minute with burst 5. A rejected request answers `429` with `errors.L(locale.TooManyRequests)` and a `Retry-After` header (whole seconds until the bucket refills). Buckets idle for ten minutes are evicted on the first call after each one-minute sweep, so the map is bounded by recent clients rather than by the life of the process. The registrar applies a separate instance to `POST /login` and `POST /users`, so registration cannot be used to probe or flood either. The client IP is whatever the framework resolved through the trusted-proxy list, never a raw header.
 
 ```go
-// ipLimiter holds a per-source-IP token bucket. The visitors map grows with
-// distinct client IPs — acceptable for typical low-cardinality login traffic.
-// Swap for an LRU/expiring cache if /login attracts traffic from many IPs
-// (CDN egress, bot farms).
-```
-
-```go
-// LoginRateLimit returns a per-IP token-bucket limiter intended for the
-// /login route. Apply only to that route — global rate limiting belongs
-// upstream (CDN, reverse proxy) where it can shed traffic before reaching
-// the app.
+// ipLimiter holds one token bucket per client IP. Buckets idle for longer
+// than visitorTTL are dropped by the first call after each sweepEvery
+// interval, so memory is bounded by the clients seen recently rather than
+// over the life of the process. It is per-process: N replicas allow N× the
+// limit; global rate limiting belongs upstream (CDN, reverse proxy).
 ```
 
 The limiter is in-process, so N replicas means N× the limit. It raises the cost of credential stuffing; it is not a substitute for an edge WAF.
@@ -460,6 +477,8 @@ Request (Accept-Language: vi-VN)
 ```
 
 The status is decided **when the error is created**, not at the boundary: `errors.L` looks the code up in `localeHTTPStatus` and stores it as `AppError.Code` ([10](10-shared-packages.md#pkgerrors)). That's what lets a gRPC or worker transport reuse the same classification without duplicating a status table.
+
+Errors the framework raises itself take a parallel path: `errors.FromStatus(code)` picks the canonical locale code for a 404, 405 or 413 so the response uses the same envelope and translation, and an unmapped status becomes 500 rather than leaking the framework's own message. A request deadline that expires (`middleware.Timeout`) surfaces as `context.DeadlineExceeded`, which `classify` maps to 504.
 
 **Where each piece lives:**
 

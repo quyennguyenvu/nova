@@ -34,6 +34,14 @@ http:
   read_buffer_size: 8192
   body_limit: 10485760 # 10 MB
   shutdown_timeout: 10s
+  # Deadline on every request's context; keep it below write_timeout so a
+  # stalled dependency fails the request in the envelope, not at the socket.
+  request_timeout: 20s
+  # Reverse proxies (CIDR or IP) whose X-Forwarded-For is believed. Empty means
+  # the app faces clients directly: the TCP peer is the client IP and forwarded
+  # headers are ignored, so a client cannot spoof its address to the login
+  # limiter or the access log. Set SERVER_TRUSTED_PROXIES per deployment.
+  trusted_proxies: []
   cors:
     # Production deployments MUST set CORS_ALLOW_ORIGINS (comma-separated env
     # var) to enumerate every allowed origin. Empty here means EVERY

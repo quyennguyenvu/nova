@@ -1,0 +1,64 @@
+package middleware
+
+import (
+	"net"
+	"net/http"
+	"strings"
+)
+
+// ClientIP resolves the client address once per request and rewrites
+// r.RemoteAddr to the bare IP, so every later layer (access log, login
+// limiter) reads one consistent value. X-Forwarded-For is honoured only when
+// the TCP peer is one of the trusted proxies; the client is then the
+// right-most entry that is not itself a trusted proxy. With no trusted
+// proxies the header is ignored, so a client cannot spoof its address.
+func ClientIP(trusted []*net.IPNet) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.RemoteAddr = clientIP(r, trusted)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func clientIP(r *http.Request, trusted []*net.IPNet) string {
+	peer := hostOnly(r.RemoteAddr)
+	if len(trusted) == 0 || !inNets(peer, trusted) {
+		return peer
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return peer
+	}
+	hops := strings.Split(xff, ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		ip := strings.TrimSpace(hops[i])
+		if net.ParseIP(ip) == nil {
+			return peer // malformed header: fall back to the peer
+		}
+		if i == 0 || !inNets(ip, trusted) {
+			return ip
+		}
+	}
+	return peer
+}
+
+func hostOnly(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+func inNets(ip string, nets []*net.IPNet) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}

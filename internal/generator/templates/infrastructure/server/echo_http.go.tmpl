@@ -31,6 +31,10 @@ func NewHTTPServer(
 	e *echo.Echo,
 ) (*HTTPServer, func(), error) {
 	addr := fmt.Sprintf(":%s", cfg.Port)
+	// echo.Start serves through e.Server, which echo.New leaves without
+	// timeouts; set them here so slow clients cannot hold connections open.
+	e.Server.ReadTimeout = cfg.ReadTimeout
+	e.Server.WriteTimeout = cfg.WriteTimeout
 	s := &HTTPServer{echo: e, addr: addr, cfg: cfg, logger: log}
 
 	cleanup := func() {

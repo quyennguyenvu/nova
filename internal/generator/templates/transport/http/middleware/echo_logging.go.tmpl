@@ -68,8 +68,14 @@ func Logging(base observability.Logger) echo.MiddlewareFunc {
 			c.SetRequest(req.WithContext(ctx))
 
 			err := next(c)
+			if err != nil {
+				// Resolve the error here so the status on the access line is
+				// the one the client receives; echo would otherwise run
+				// HTTPErrorHandler after this middleware returns.
+				c.Error(err)
+			}
 			logAccess(ctx, scoped, c, err, start)
-			return err
+			return nil
 		}
 	}
 }
@@ -80,7 +86,7 @@ func Logging(base observability.Logger) echo.MiddlewareFunc {
 func logAccess(ctx context.Context, scoped observability.Logger, c echo.Context, err error, start time.Time) {
 	status := c.Response().Status
 	ev := scoped.Info
-	if err != nil || status >= 500 {
+	if status >= 500 {
 		ev = scoped.Error
 	} else if status >= 400 {
 		ev = scoped.Warn

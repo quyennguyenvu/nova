@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"math"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
@@ -12,43 +15,95 @@ import (
 	"{{.ModuleName}}/pkg/locale"
 )
 
+// ipLimiter holds one token bucket per client IP. Buckets idle for longer
+// than visitorTTL are dropped by the first call after each sweepEvery
+// interval, so memory is bounded by the clients seen recently rather than
+// over the life of the process. It is per-process: N replicas allow N× the
+// limit; global rate limiting belongs upstream (CDN, reverse proxy).
 type ipLimiter struct {
-	mu       sync.Mutex
-	visitors map[string]*rate.Limiter
-	rps      rate.Limit
-	burst    int
+	mu        sync.Mutex
+	visitors  map[string]*visitor
+	rps       rate.Limit
+	burst     int
+	lastSweep time.Time
 }
+
+type visitor struct {
+	lim      *rate.Limiter
+	lastSeen time.Time
+}
+
+const (
+	visitorTTL = 10 * time.Minute
+	sweepEvery = time.Minute
+)
 
 func newIPLimiter(cfg config.LoginRateLimitConfig) *ipLimiter {
 	rps := rate.Limit(cfg.RPS)
 	if rps <= 0 {
-		rps = rate.Limit(5.0 / 60.0)
+		rps = rate.Limit(5.0 / 60.0) // 5 per minute
 	}
 	burst := cfg.Burst
 	if burst <= 0 {
 		burst = 5
 	}
-	return &ipLimiter{visitors: make(map[string]*rate.Limiter), rps: rps, burst: burst}
+	return &ipLimiter{visitors: make(map[string]*visitor), rps: rps, burst: burst, lastSweep: time.Now()}
 }
 
-func (l *ipLimiter) allow(ip string) bool {
+// allow reports whether ip may proceed now and, when it may not, how long
+// until its bucket has a token again (the Retry-After value).
+func (l *ipLimiter) allow(ip string) (bool, time.Duration) {
+	now := time.Now()
 	l.mu.Lock()
-	lim, ok := l.visitors[ip]
-	if !ok {
-		lim = rate.NewLimiter(l.rps, l.burst)
-		l.visitors[ip] = lim
+	defer l.mu.Unlock()
+	if now.Sub(l.lastSweep) >= sweepEvery {
+		l.sweep(now)
 	}
-	l.mu.Unlock()
-	return lim.Allow()
+	v, ok := l.visitors[ip]
+	if !ok {
+		v = &visitor{lim: rate.NewLimiter(l.rps, l.burst)}
+		l.visitors[ip] = v
+	}
+	v.lastSeen = now
+	res := v.lim.ReserveN(now, 1)
+	if delay := res.DelayFrom(now); delay > 0 {
+		res.CancelAt(now)
+		return false, delay
+	}
+	return true, 0
 }
 
-// LoginRateLimit returns a per-IP token-bucket limiter intended for the
-// /login route. The visitors map grows with distinct client IPs — swap for
-// an LRU cache if /login is exposed to high-cardinality traffic.
+func (l *ipLimiter) sweep(now time.Time) {
+	for ip, v := range l.visitors {
+		if now.Sub(v.lastSeen) > visitorTTL {
+			delete(l.visitors, ip)
+		}
+	}
+	l.lastSweep = now
+}
+
+// retryAfter renders a wait as the whole seconds Retry-After carries, never
+// less than one.
+func retryAfter(d time.Duration) string {
+	secs := int(math.Ceil(d.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	return strconv.Itoa(secs)
+}
+
+// LoginRateLimit returns a per-IP token-bucket limiter for a credential
+// endpoint (login, registration). Each call builds its own buckets, so the
+// routes do not share a budget. Apply only to those routes — global rate
+// limiting belongs upstream where it can shed traffic before reaching the
+// app. c.ClientIP() honours X-Forwarded-For only from the configured trusted
+// proxies.
 func LoginRateLimit(cfg config.LoginRateLimitConfig) gin.HandlerFunc {
 	l := newIPLimiter(cfg)
 	return func(c *gin.Context) {
-		if !l.allow(c.ClientIP()) {
+		ok, wait := l.allow(c.ClientIP())
+		if !ok {
+			c.Header("Retry-After", retryAfter(wait))
 			httpwriter.WriteError(
 				c,
 				errors.L(locale.TooManyRequests).WithCause(errors.New("login rate limit exceeded")),

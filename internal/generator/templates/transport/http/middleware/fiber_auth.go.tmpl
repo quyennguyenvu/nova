@@ -12,18 +12,31 @@ import (
 	"{{.ModuleName}}/pkg/locale"
 )
 
+// RFC 6750 §3 challenges: a missing credential gets the bare scheme, a
+// rejected one names the reason.
+const (
+	challengeMissing = `Bearer`
+	challengeInvalid = `Bearer error="invalid_token"`
+)
+
 // Auth verifies the bearer token via the JWT verifier and attaches the
 // resolved *identity.UserPrincipal to the request context. Inner handlers
-// read it via identity.UserPrincipalFromContext.
+// read it via identity.UserPrincipalFromContext. Every 401 carries a
+// WWW-Authenticate challenge.
 func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		token := bearerToken(c.Get("Authorization"))
+		token := bearerToken(c.Get(fiber.HeaderAuthorization))
 		if token == "" {
+			c.Set(fiber.HeaderWWWAuthenticate, challengeMissing)
 			return httpwriter.WriteError(c, errors.L(locale.Unauthorized).WithCause(errors.New("missing bearer token")))
 		}
 		principal, err := tokenSvc.ParseAndVerifyAccessToken(c.UserContext(), token)
 		if err != nil {
-			return httpwriter.WriteError(c, errors.ToAppError(err))
+			app := errors.ToAppError(err)
+			if app.Code == fiber.StatusUnauthorized {
+				c.Set(fiber.HeaderWWWAuthenticate, challengeInvalid)
+			}
+			return httpwriter.WriteError(c, app)
 		}
 		rememberPrincipal(c.UserContext(), principal)
 		c.SetUserContext(identity.WithUserPrincipal(c.UserContext(), principal))
@@ -31,9 +44,11 @@ func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 	}
 }
 
+// bearerToken extracts the credential from an Authorization header. The
+// scheme is case-insensitive (RFC 9110 §11.1).
 func bearerToken(h string) string {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(h, prefix) {
+	const prefix = "bearer "
+	if len(h) < len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
 		return ""
 	}
 	return strings.TrimSpace(h[len(prefix):])

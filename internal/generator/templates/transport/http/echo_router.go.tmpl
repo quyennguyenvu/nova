@@ -14,6 +14,7 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 	"{{.ModuleName}}/pkg/observability"
 )
@@ -29,6 +30,11 @@ type Registrar interface {
 }
 
 // NewRouter builds the echo instance: middleware → probes → registrars at their prefixes.
+// Timeout sits inside Recovery so a deadline panic is still caught; BodyLimit
+// follows it so the failure mode matches the other net/http frameworks.
+// Every error that escapes a handler — the router's 404/405, a handler's
+// returned error — goes through httpwriter.HandleError so the client always
+// sees the standard envelope.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
 func NewRouter(
@@ -39,6 +45,8 @@ func NewRouter(
 ) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
+	e.HTTPErrorHandler = httpwriter.HandleError
+	e.IPExtractor = ipExtractor(cfg.HTTP)
 
 	// Tracing first so RequestID and Logging see the server span (trace_id).
 	e.Use(otelecho.Middleware(
@@ -48,6 +56,8 @@ func NewRouter(
 	e.Use(middleware.RequestID())
 	e.Use(middleware.Logging(log))
 	e.Use(middleware.Recovery())
+	e.Use(middleware.Timeout(cfg.HTTP.RequestTimeout))
+	e.Use(middleware.BodyLimit(cfg.HTTP.BodyLimit))
 	e.Use(middleware.CORS(cfg.HTTP.CORS))
 	e.Use(middleware.Locale())
 
@@ -55,9 +65,9 @@ func NewRouter(
 		return c.JSON(http.StatusOK, checker.Liveness())
 	})
 	e.GET("/readyz", func(c echo.Context) error {
-		status := checker.Readiness(c.Request().Context())
-		if !status.OK {
-			log.Warn("readiness check failed", "details", status.Details)
+		status, err := checker.Readiness(c.Request().Context())
+		if err != nil {
+			log.Warn("readiness check failed", "err", err)
 		}
 		code := http.StatusOK
 		if !status.OK {
@@ -71,6 +81,22 @@ func NewRouter(
 	}
 
 	return e
+}
+
+// ipExtractor honours X-Forwarded-For only from the proxies listed in config.
+// echo's default extractor believes the header from anyone, and its XFF
+// extractor trusts private ranges unless told otherwise, so with no trusted
+// proxies the TCP peer is the client and the header is ignored.
+func ipExtractor(cfg config.HTTPConfig) echo.IPExtractor {
+	nets, _ := cfg.TrustedProxyNets() // entries are validated by config.Load
+	if len(nets) == 0 {
+		return echo.ExtractIPDirect()
+	}
+	opts := []echo.TrustOption{echo.TrustLoopback(false), echo.TrustLinkLocal(false), echo.TrustPrivateNet(false)}
+	for _, n := range nets {
+		opts = append(opts, echo.TrustIPRange(n))
+	}
+	return echo.ExtractIPFromXFFHeader(opts...)
 }
 
 // isProbe reports whether path is a health probe. Probes stay out of traces

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -72,38 +73,44 @@ func Logging(base observability.Logger) func(http.Handler) http.Handler {
 
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
-
-			ev := scoped.Info
-			if rec.status >= 500 {
-				ev = scoped.Error
-			} else if rec.status >= 400 {
-				ev = scoped.Warn
-			}
-			fields := []any{
-				"status", rec.status,
-				"route", chi.RouteContext(r.Context()).RoutePattern(),
-				"duration_ms", time.Since(start).Milliseconds(),
-				"client_ip", r.RemoteAddr,
-				"user_agent", r.UserAgent(),
-			}
-			if p := principalFromSlot(ctx); p != nil {
-				fields = append(fields, "user_id", p.UserID)
-			}
-			if app := errors.AppErrorFromContext(ctx); app != nil {
-				fields = append(fields, "app_code", app.Code)
-				if app.Locale != 0 {
-					fields = append(fields, "app_locale", int(app.Locale))
-				}
-				// Surface the inner cause + trace whenever there's something to
-				// diagnose: a server fault (5xx), or any error that wrapped an
-				// underlying cause. A plain validation 4xx carries no inner Err,
-				// so its line stays lean (app_code already names the client
-				// mistake) and error-rate alerts stay free of client-driven noise.
-				if app.Err != nil || rec.status >= 500 {
-					fields = append(fields, "app_err", app.Error(), "app_trace", app.Trace())
-				}
-			}
-			ev("request", fields...)
+			logAccess(ctx, scoped, r, rec.status, start)
 		})
 	}
+}
+
+// logAccess emits the single access line for a request. Severity follows the
+// status; AppError detail is appended whenever there is something to diagnose.
+// r.RemoteAddr is the bare client IP resolved by middleware.ClientIP.
+func logAccess(ctx context.Context, scoped observability.Logger, r *http.Request, status int, start time.Time) {
+	ev := scoped.Info
+	if status >= http.StatusInternalServerError {
+		ev = scoped.Error
+	} else if status >= http.StatusBadRequest {
+		ev = scoped.Warn
+	}
+	fields := []any{
+		"status", status,
+		"route", chi.RouteContext(r.Context()).RoutePattern(),
+		"duration_ms", time.Since(start).Milliseconds(),
+		"client_ip", r.RemoteAddr,
+		"user_agent", r.UserAgent(),
+	}
+	if p := principalFromSlot(ctx); p != nil {
+		fields = append(fields, "user_id", p.UserID)
+	}
+	if app := errors.AppErrorFromContext(ctx); app != nil {
+		fields = append(fields, "app_code", app.Code)
+		if app.Locale != 0 {
+			fields = append(fields, "app_locale", int(app.Locale))
+		}
+		// Surface the inner cause + trace whenever there's something to
+		// diagnose: a server fault (5xx), or any error that wrapped an
+		// underlying cause. A plain validation 4xx carries no inner Err, so
+		// its line stays lean (app_code already names the client mistake)
+		// and error-rate alerts stay free of client-driven noise.
+		if app.Err != nil || status >= http.StatusInternalServerError {
+			fields = append(fields, "app_err", app.Error(), "app_trace", app.Trace())
+		}
+	}
+	ev("request", fields...)
 }

@@ -244,6 +244,7 @@ The split is the same one described in [09](09-infrastructure-layer.md#config--o
 
 - **JWT keys**, with the `openssl` commands to generate a pair inline, and a note that only the issuing service sets `JWT_PRIVATE_KEY`.
 - **`CORS_ALLOW_ORIGINS`**, empty, with "production MUST set this. Never `*`".
+- **`SERVER_TRUSTED_PROXIES`**, empty: the load balancers whose `X-Forwarded-For` is believed; empty means forwarded headers are ignored and the TCP peer is the client.
 - **Discrete DB fields** (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) rather than a `DATABASE_URL` — the DSN is assembled escape-safely in code ([09](09-infrastructure-layer.md#database--connection-factory)).
 - **`MIGRATE_DATABASE_URL`** separately, flagged "used by Makefile (migrate) and sqlc — not read by the Go config".
 

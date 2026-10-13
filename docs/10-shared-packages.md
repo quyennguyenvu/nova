@@ -144,6 +144,8 @@ A frame is `runtime.Caller` only — no `runtime.Callers` walk, no symbolization
 | 503    | `ServiceUnavailable`                 |
 | 504    | `GatewayTimeout`                     |
 
+`FromStatus(code)` is the inverse for errors the framework raises itself (the router's 404/405, the server's 413): it picks the canonical code per status so those responses use the same envelope and translation, and an unmapped status becomes 500 rather than leaking the framework's message. `classify` also maps `context.DeadlineExceeded` to 504, which is how an expired request deadline (`middleware.Timeout`) reaches the client.
+
 Because the table is framework-free, a gRPC or worker transport maps the same code to the same meaning without a second table. **Adding a locale code means adding a row here** — omitting it silently yields 500.
 
 ### classify and ToAppError

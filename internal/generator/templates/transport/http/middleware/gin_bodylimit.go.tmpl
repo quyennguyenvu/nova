@@ -1,0 +1,22 @@
+package middleware
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+// BodyLimit caps the request body at limit bytes. Reading past the limit
+// fails with *http.MaxBytesError, which httpwriter.Bind maps to 413, and
+// net/http closes the connection so the client stops sending. gin has no
+// equivalent of fiber's BodyLimit, so this is where the cap lives. A
+// non-positive limit leaves the body unbounded.
+func BodyLimit(limit int) gin.HandlerFunc {
+	if limit <= 0 {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, int64(limit))
+		c.Next()
+	}
+}

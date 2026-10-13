@@ -107,7 +107,20 @@ cors:
   allow_origins: []
 ```
 
-The insecure-by-default trap is inverted here: an unconfigured deployment rejects all cross-origin traffic (visibly broken) rather than accepting all of it (invisibly unsafe). `development.yaml` ships localhost origins so dev tooling works without editing base.
+The insecure-by-default trap is inverted here: an unconfigured deployment rejects all cross-origin traffic (visibly broken) rather than accepting all of it (invisibly unsafe). The middleware is not installed at all when the list is empty, which is what stops fiber and echo from falling back to their `*` default. `development.yaml` ships localhost origins so dev tooling works without editing base.
+
+```yaml
+  # Deadline on every request's context; keep it below write_timeout so a
+  # stalled dependency fails the request in the envelope, not at the socket.
+  request_timeout: 20s
+  # Reverse proxies (CIDR or IP) whose X-Forwarded-For is believed. Empty means
+  # the app faces clients directly: the TCP peer is the client IP and forwarded
+  # headers are ignored, so a client cannot spoof its address to the login
+  # limiter or the access log. Set SERVER_TRUSTED_PROXIES per deployment.
+  trusted_proxies: []
+```
+
+`trusted_proxies` follows the same inversion: empty means forwarded headers are ignored and the TCP peer is the client. List the load balancers' CIDRs per deployment through `SERVER_TRUSTED_PROXIES`; `config.Load` rejects anything that is not an IP or CIDR, so a typo fails at boot rather than silently trusting nobody. `request_timeout` is the deadline every request's context carries (`middleware.Timeout`); keep it below `write_timeout` so a stalled dependency fails in the envelope before the socket does.
 
 `tracing.endpoint: ""` follows the same idea from the other direction — empty means a no-op tracer, so the app runs with no collector instead of failing.
 

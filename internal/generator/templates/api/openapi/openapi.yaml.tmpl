@@ -9,7 +9,11 @@ servers:
     description: Local development
 
 # Authenticated endpoints carry `Authorization: Bearer <accessToken>` issued
-# by POST /api/v1/login. Public endpoints are explicitly marked.
+# by POST /api/v1/login; the scheme is case-insensitive. Public endpoints are
+# explicitly marked. Every JSON body is the standard envelope: success, data or
+# error, optional meta, and requestId (the X-Request-ID the response carries).
+# A body over the configured limit is refused with 413 and a request that
+# outlives the server's deadline answers 504, on every route.
 security:
   - bearerAuth: []
 
@@ -21,20 +25,28 @@ paths:
       responses:
         "200":
           description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProbeStatus"
 
   /readyz:
     get:
-      summary: Readiness probe — checks DB / cache connectivity
+      summary: Readiness probe — pings every configured dependency
       security: []
       responses:
         "200":
           description: All dependencies reachable
-        "503":
-          description: One or more dependencies failed
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ProbeStatus"
+        "503":
+          description: At least one dependency failed; details names it as "fail", never its error text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProbeStatus"
 
   /api/v1/login:
     post:
@@ -53,18 +65,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LoginResponseEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
-          description: Invalid credentials
+          description: Invalid credentials (the same answer and timing for an unknown email)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "429":
-          description: Too many login attempts
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/TooManyRequests"
 
   /api/v1/users:
     post:
@@ -84,55 +96,92 @@ paths:
               schema:
                 $ref: "#/components/schemas/UserResponseEnvelope"
         "400":
-          description: Invalid input
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/BadRequest"
         "409":
           description: Email already exists
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
     get:
-      summary: List users
+      summary: List users (page-based admin form)
       parameters:
-        - name: limit
+        - name: page
           in: query
+          description: 1-based page number; values below 1 read as 1
+          schema:
+            type: integer
+            default: 1
+        - name: perPage
+          in: query
+          description: Page size; values outside 1–500 fall back to 10
           schema:
             type: integer
             default: 10
             maximum: 500
-        - name: offset
+        - name: email
           in: query
+          description: Exact-match email filter
           schema:
-            type: integer
-            default: 0
+            type: string
+            format: email
       responses:
         "200":
-          description: List of users
+          description: One page of users plus page meta
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserListResponseEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
-          description: Unauthenticated
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/public/users:
+    get:
+      summary: Public directory (cursor-paginated, email and name only)
+      security: []
+      parameters:
+        - name: cursor
+          in: query
+          description: Opaque token from the previous page's meta.nextCursor; omit for the first page
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Page size; values outside 1–500 fall back to 10
+          schema:
+            type: integer
+            default: 10
+            maximum: 500
+      responses:
+        "200":
+          description: One page of the directory plus cursor meta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicUserListResponseEnvelope"
+        "400":
+          description: Malformed cursor
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
   /api/v1/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
     get:
       summary: Get user by ID
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
       responses:
         "200":
           description: User found
@@ -140,21 +189,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserResponseEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: User not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/NotFound"
     put:
-      summary: Update user
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+      summary: Update the authenticated user's own profile
       requestBody:
         required: true
         content:
@@ -168,18 +210,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserResponseEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
     delete:
-      summary: Delete user
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+      summary: Delete the authenticated user's own account
       responses:
         "204":
-          description: User deleted
+          description: User deleted (no body)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
 components:
   securitySchemes:
@@ -187,6 +240,60 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+
+  headers:
+    Retry-After:
+      description: Seconds to wait before retrying
+      schema:
+        type: integer
+    WWW-Authenticate:
+      description: RFC 6750 bearer challenge, e.g. `Bearer error="invalid_token"`
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Malformed body, query or path parameter
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing or invalid bearer token
+      headers:
+        WWW-Authenticate:
+          $ref: "#/components/headers/WWW-Authenticate"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Authenticated as a different user
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: No such user
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    PayloadTooLarge:
+      description: Body exceeds the configured limit (http.body_limit)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooManyRequests:
+      description: Credential endpoint throttled for this client address
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/Retry-After"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
     # ── Request bodies ────────────────────────────────────────────
@@ -203,7 +310,7 @@ components:
       properties:
         email: { type: string, format: email }
         name: { type: string, minLength: 2, maxLength: 100 }
-        password: { type: string, minLength: 8 }
+        password: { type: string, minLength: 8, maxLength: 72, description: "At most 72 bytes (the bcrypt bound)" }
 
     UpdateUserInput:
       type: object
@@ -220,6 +327,12 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 
+    PublicUserResponse:
+      type: object
+      properties:
+        email: { type: string }
+        name: { type: string }
+
     LoginResponse:
       type: object
       properties:
@@ -228,12 +341,38 @@ components:
         expiresIn: { type: integer, format: int64, description: "Lifetime in seconds (RFC 6749 expires_in)" }
         user: { $ref: "#/components/schemas/UserResponse" }
 
+    PageMeta:
+      type: object
+      description: Page-based (admin) pagination; page and perPage echo the clamped values actually queried
+      properties:
+        page: { type: integer }
+        perPage: { type: integer }
+        totalPage: { type: integer }
+        totalRecord: { type: integer, format: int64 }
+
+    CursorMeta:
+      type: object
+      description: Keyset (public) pagination; nextCursor is empty once hasMore is false
+      properties:
+        hasMore: { type: boolean }
+        nextCursor: { type: string }
+
+    ProbeStatus:
+      type: object
+      properties:
+        ok: { type: boolean }
+        details:
+          type: object
+          description: Per-check outcome, "ok" or "fail"
+          additionalProperties: { type: string }
+
     # ── Response envelopes ────────────────────────────────────────
     UserResponseEnvelope:
       type: object
       properties:
         success: { type: boolean }
         data: { $ref: "#/components/schemas/UserResponse" }
+        requestId: { type: string }
 
     UserListResponseEnvelope:
       type: object
@@ -242,12 +381,25 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/UserResponse" }
+        meta: { $ref: "#/components/schemas/PageMeta" }
+        requestId: { type: string }
+
+    PublicUserListResponseEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/PublicUserResponse" }
+        meta: { $ref: "#/components/schemas/CursorMeta" }
+        requestId: { type: string }
 
     LoginResponseEnvelope:
       type: object
       properties:
         success: { type: boolean }
         data: { $ref: "#/components/schemas/LoginResponse" }
+        requestId: { type: string }
 
     ErrorResponse:
       type: object
@@ -256,5 +408,6 @@ components:
         error:
           type: object
           properties:
-            code: { type: integer, description: "HTTP status or locale code identifier" }
-            message: { type: string }
+            code: { type: integer, description: "Locale code identifier (negative), stable across languages" }
+            message: { type: string, description: "Translated per Accept-Language" }
+        requestId: { type: string }

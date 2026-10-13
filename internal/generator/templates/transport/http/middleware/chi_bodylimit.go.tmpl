@@ -1,0 +1,19 @@
+package middleware
+
+import "net/http"
+
+// BodyLimit caps the request body at limit bytes. Reading past the limit
+// fails with *http.MaxBytesError, which httpwriter.Bind maps to 413, and
+// net/http closes the connection so the client stops sending. A non-positive
+// limit leaves the body unbounded.
+func BodyLimit(limit int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if limit <= 0 {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, int64(limit))
+			next.ServeHTTP(w, r)
+		})
+	}
+}

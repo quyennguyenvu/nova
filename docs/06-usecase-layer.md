@@ -131,22 +131,27 @@ The second read shape, for unauthenticated callers. It exists separately because
 Both failure paths return `errors.L(locale.InvalidCredentials)`. Equal _status_ is the easy half; equal _timing_ is the half that gets forgotten. `bcrypt.CompareHashAndPassword` is CPU-bound, so a missing user would return in microseconds while a wrong password takes ~100ms — a reliable account-enumeration oracle even with identical response bodies. The fix:
 
 ```go
-var (
-    dummyHash     string
-    dummyHashOnce sync.Once
-)
-
-func (s *Service) primeDummyHash() {
-    dummyHashOnce.Do(func() {
-        h, _ := s.hasher.Hash("dummy-password-for-timing-uniformity")
-        dummyHash = h
-    })
+func (s *Service) timingHash() (string, error) {
+    s.dummyMu.Lock()
+    defer s.dummyMu.Unlock()
+    if s.dummyHash == "" {
+        h, err := s.hasher.Hash("dummy-password-for-timing-uniformity")
+        if err != nil {
+            return "", err
+        }
+        s.dummyHash = h
+    }
+    return s.dummyHash, nil
 }
 ```
 
-`Login` calls `primeDummyHash()` first, and on the not-found path runs `_ = s.hasher.Verify(dummyHash, input.Password)` before returning. One bcrypt op is paid at first miss; every miss after that costs the same as a real verify.
+`Login` calls `timingHash()` first and fails closed (500) if the hash cannot be built, rather than comparing against an empty string and reopening the oracle; on the not-found path it runs `_ = s.hasher.Verify(dummy, input.Password)` before returning. One bcrypt op is paid on first use; every miss after that costs the same as a real verify.
 
 On success it builds an `identity.UserPrincipal`, signs it, and returns the token plus `ExpiresIn` in seconds (RFC 6749 `expires_in`) — the transport does no token work at all.
+
+### Ownership and input bounds
+
+`Update` and `Delete` begin with `requireSelf(ctx, id)`: no principal in ctx is 401, another user's id is 403. The check lives in the usecase, not the handler, so a future gRPC or CLI transport inherits it; widen it here (roles, an admin audience) when the product needs it. `Register` refuses passwords over `security.MaxPasswordLen` (72 bytes, the bcrypt bound) with the generic 400 instead of letting the hasher fail with a 500.
 
 ## internal/usecase/user/dto.go
 

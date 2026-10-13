@@ -35,6 +35,10 @@ type Service struct {
 {{- if .HasMessageQueue}}
 	publisher domain.UserPublisher
 {{- end}}
+
+	// timing hash for Login's unknown-email path; built on first use.
+	dummyMu   sync.Mutex
+	dummyHash string
 }
 
 func NewService(
@@ -56,6 +60,10 @@ func NewService(
 }
 
 func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, error) {
+	if len(input.Password) > security.MaxPasswordLen {
+		return nil, errors.L(locale.InvalidRequest).
+			WithCause(fmt.Errorf("password longer than %d bytes", security.MaxPasswordLen))
+	}
 	// Treat ErrNotFound as the only "ok, proceed" outcome; any other error
 	// from the lookup (DB outage, network) must propagate so we don't
 	// race-create a duplicate row when the uniqueness check itself failed.
@@ -115,6 +123,9 @@ func (s *Service) Get(ctx context.Context, id int64) (*Output, error) {
 }
 
 func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*Output, error) {
+	if err := requireSelf(ctx, id); err != nil {
+		return nil, err
+	}
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, errors.Wrapf(err, "update user id=%d: load", id)
@@ -131,8 +142,26 @@ func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*Out
 }
 
 func (s *Service) Delete(ctx context.Context, id int64) error {
+	if err := requireSelf(ctx, id); err != nil {
+		return err
+	}
 	if err := s.userRepo.Delete(ctx, id); err != nil {
 		return errors.Wrapf(err, "delete user id=%d", id)
+	}
+	return nil
+}
+
+// requireSelf enforces that the authenticated principal is the user being
+// mutated. It lives here, not in the handler, so every transport applies the
+// same rule: no principal is 401, another user's id is 403. Widen it (roles,
+// an admin audience) here when the product needs it.
+func requireSelf(ctx context.Context, id int64) error {
+	p, ok := identity.UserPrincipalFromContext(ctx)
+	if !ok {
+		return errors.L(locale.Unauthorized).WithCause(errors.New("no principal in context"))
+	}
+	if p.UserID != id {
+		return errors.L(locale.Forbidden).WithCause(fmt.Errorf("user %d may not modify user %d", p.UserID, id))
 	}
 	return nil
 }
@@ -243,37 +272,39 @@ func decodeCursor(s string) (int64, error) {
 	return strconv.ParseInt(string(raw), 10, 64)
 }
 
-// dummyHash + dummyHashOnce — used to blunt the timing oracle that would
-// otherwise distinguish "user not found" (fast) from "bad password" (slow,
-// because bcrypt.CompareHashAndPassword is CPU-bound). We pay one bcrypt
-// op at first-miss to populate the hash, then constant-cost on every miss.
-var (
-	dummyHash     string
-	dummyHashOnce sync.Once
-)
-
-func (s *Service) primeDummyHash() {
-	dummyHashOnce.Do(func() {
-		// Best effort: if hashing the placeholder ever fails (it shouldn't),
-		// fall back to an empty string — Verify will still consume bcrypt
-		// CPU comparing it against the submitted password.
-		h, _ := s.hasher.Hash("dummy-password-for-timing-uniformity")
-		dummyHash = h
-	})
+// timingHash returns the hash used to equalize the cost of an unknown-email
+// login with a wrong-password login (bcrypt.CompareHashAndPassword is
+// CPU-bound, so a fast "not found" would be an enumeration oracle). It is
+// computed on first use; if hashing fails the login fails closed rather than
+// answering quickly.
+func (s *Service) timingHash() (string, error) {
+	s.dummyMu.Lock()
+	defer s.dummyMu.Unlock()
+	if s.dummyHash == "" {
+		h, err := s.hasher.Hash("dummy-password-for-timing-uniformity")
+		if err != nil {
+			return "", err
+		}
+		s.dummyHash = h
+	}
+	return s.dummyHash, nil
 }
 
 // Login verifies email+password and returns a signed access token + the user
 // profile. Returns InvalidCredentials (401) for both "no such user" and "bad
 // password" so attackers can't enumerate accounts via status or timing — the
-// unknown-user path consumes a bcrypt verify against a precomputed dummy
-// hash so wall-clock time matches the bad-password path.
+// unknown-user path consumes a bcrypt verify against the timing hash so
+// wall-clock time matches the bad-password path.
 func (s *Service) Login(ctx context.Context, input LoginInput) (*LoginOutput, error) {
-	s.primeDummyHash()
+	dummy, err := s.timingHash()
+	if err != nil {
+		return nil, errors.Wrap(err, "login: timing hash")
+	}
 
 	user, err := s.userRepo.GetByEmail(ctx, input.Email)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
-			_ = s.hasher.Verify(dummyHash, input.Password)
+			_ = s.hasher.Verify(dummy, input.Password)
 			return nil, errors.L(locale.InvalidCredentials).WithCause(errors.New("account not found"))
 		}
 		return nil, errors.Wrapf(err, "login email=%s: lookup", input.Email)

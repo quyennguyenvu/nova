@@ -13,7 +13,9 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/internal/transport/http/middleware"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/observability"
 )
 
@@ -28,6 +30,12 @@ type Registrar interface {
 }
 
 // NewRouter builds the chi router: middleware → probes → registrars at their prefixes.
+// ClientIP runs first so the span, the access line and the login limiter all
+// see the same address; Timeout sits inside Recovery so a deadline panic is
+// still caught; BodyLimit follows it because chi has no native request-body
+// cap. Unknown paths and methods answer in the envelope through the
+// NotFound/MethodNotAllowed handlers, set before mounting so every subrouter
+// inherits them.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
 func NewRouter(
@@ -36,9 +44,11 @@ func NewRouter(
 	checker *health.Checker,
 	registrars []Registrar,
 ) chi.Router {
+	trusted, _ := cfg.HTTP.TrustedProxyNets() // entries are validated by config.Load
 	router := chi.NewRouter()
 
-	// Tracing first so RequestID and Logging see the server span (trace_id).
+	router.Use(middleware.ClientIP(trusted))
+	// Tracing before RequestID and Logging so they see the server span (trace_id).
 	router.Use(otelchi.Middleware(
 		cfg.AppName,
 		otelchi.WithChiRoutes(router),
@@ -47,16 +57,25 @@ func NewRouter(
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logging(log))
 	router.Use(middleware.Recovery)
+	router.Use(middleware.Timeout(cfg.HTTP.RequestTimeout))
+	router.Use(middleware.BodyLimit(cfg.HTTP.BodyLimit))
 	router.Use(middleware.CORS(cfg.HTTP.CORS))
 	router.Use(middleware.Locale)
+
+	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		httpwriter.WriteError(w, r, errors.FromStatus(http.StatusNotFound))
+	})
+	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		httpwriter.WriteError(w, r, errors.FromStatus(http.StatusMethodNotAllowed))
+	})
 
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, checker.Liveness())
 	})
 	router.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		status := checker.Readiness(r.Context())
-		if !status.OK {
-			log.Warn("readiness check failed", "details", status.Details)
+		status, err := checker.Readiness(r.Context())
+		if err != nil {
+			log.Warn("readiness check failed", "err", err)
 		}
 		code := http.StatusOK
 		if !status.OK {

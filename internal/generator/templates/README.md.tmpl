@@ -49,7 +49,7 @@ internal/
 │       ├── router.go       # Framework instance + middleware order + Registrar interface
 │       ├── health/         # /healthz (liveness) + /readyz (dependency probes)
 │       ├── httpwriter/     # Framework-specific bind + response envelope writer
-│       ├── middleware/     # RequestID, Logging, Recovery, CORS, Locale, Auth, LoginRateLimit
+│       ├── middleware/     # RequestID, Logging, Recovery, Timeout{{if ne .HTTPFramework "fiber"}}, BodyLimit{{end}}{{if eq .HTTPFramework "chi"}}, ClientIP{{end}}, CORS, Locale, Auth, LoginRateLimit
 │       └── v1/             # v1.go: APIPrefix + Prefixed embed (one prefix per section)
 │           └── user/       # Handler, Registrar (embeds v1.Prefixed), DTOs, assembler
 {{- end}}

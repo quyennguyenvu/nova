@@ -26,7 +26,7 @@ func NewRegistrar(h *Handler, tokenSvc *jwtsec.TokenService, loginLimit config.L
 
 // Register mounts:
 //   - POST /login              (public — issues bearer token)
-//   - POST /users              (public — registration)
+//   - POST /users              (public — registration, rate limited like login)
 //   - GET /public/users        (public — cursor-paginated directory)
 //   - GET/PUT/DELETE /users*   (authenticated subgroup)
 //
@@ -38,7 +38,7 @@ func (r *Registrar) Register(router chi.Router) {
 	router.Get("/public/users", r.handler.PublicList)
 
 	router.Route("/users", func(sub chi.Router) {
-		sub.Post("/", r.handler.Create)
+		sub.With(middleware.LoginRateLimit(r.loginLimit)).Post("/", r.handler.Create)
 
 		sub.Group(func(protected chi.Router) {
 			protected.Use(middleware.Auth(r.tokenSvc))

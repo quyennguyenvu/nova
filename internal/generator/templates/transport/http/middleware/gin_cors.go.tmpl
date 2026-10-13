@@ -11,6 +11,8 @@ import (
 
 // CORS reads allowed origins/methods/headers from config — never default to
 // "*" in scaffolded code; each deployment enumerates origins explicitly.
+// Vary: Origin goes on every response so a shared cache never serves one
+// origin's answer to another.
 func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 	allowedOrigins := make(map[string]struct{}, len(cfg.AllowOrigins))
 	for _, o := range cfg.AllowOrigins {
@@ -20,6 +22,7 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 	headers := strings.Join(cfg.AllowHeaders, ",")
 
 	return func(c *gin.Context) {
+		c.Header("Vary", "Origin")
 		origin := c.GetHeader("Origin")
 		if _, ok := allowedOrigins[origin]; ok && origin != "" {
 			c.Header("Access-Control-Allow-Origin", origin)

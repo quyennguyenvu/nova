@@ -9,7 +9,9 @@ import (
 
 // CORS reads allowed origins/methods/headers from config — never default to
 // "*" in scaffolded code; each deployment enumerates origins explicitly.
-// Returns a middleware factory so chi's router.Use can register it.
+// Vary: Origin goes on every response so a shared cache never serves one
+// origin's answer to another. Returns a middleware factory so chi's
+// router.Use can register it.
 func CORS(cfg config.CORSConfig) func(http.Handler) http.Handler {
 	allowedOrigins := make(map[string]struct{}, len(cfg.AllowOrigins))
 	for _, o := range cfg.AllowOrigins {
@@ -20,6 +22,7 @@ func CORS(cfg config.CORSConfig) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("Vary", "Origin")
 			origin := r.Header.Get("Origin")
 			if _, ok := allowedOrigins[origin]; ok && origin != "" {
 				w.Header().Set("Access-Control-Allow-Origin", origin)

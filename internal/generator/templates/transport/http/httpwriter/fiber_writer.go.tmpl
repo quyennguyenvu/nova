@@ -88,3 +88,16 @@ func BindQuery[T any](c *fiber.Ctx, validate *validator.Validate) (T, *errors.Ap
 	}
 	return v, nil
 }
+
+// HandleError is the app-level fiber ErrorHandler: every error that escapes
+// the handler chain (the router's 404/405, fasthttp's 413, a handler's
+// returned error) is written in the standard envelope. Framework errors map
+// by status through errors.FromStatus and never leak their text to the
+// client; the cause still reaches the access log through WithCause.
+func HandleError(c *fiber.Ctx, err error) error {
+	var fe *fiber.Error
+	if errors.As(err, &fe) {
+		return WriteError(c, errors.FromStatus(fe.Code).WithCause(err))
+	}
+	return WriteError(c, errors.ToAppError(err))
+}

@@ -12,6 +12,7 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/internal/transport/http/middleware"
 	"{{.ModuleName}}/pkg/observability"
 )
@@ -27,9 +28,15 @@ type Registrar interface {
 }
 
 // NewRouter builds the fiber app: middleware → probes → registrars at their prefixes.
-// Order of middleware matters: RequestID first (so every later layer sees the
-// ID), Logging second (wraps everything to compute duration & emit one line),
-// Recovery inside Logging so panics still produce an access log.
+// Order of middleware matters: tracing first so every layer sees the span,
+// RequestID next (so every later layer sees the ID), Logging third (wraps
+// everything to compute duration & emit one line), Recovery inside Logging so
+// panics still produce an access log, Timeout inside Recovery so a deadline
+// panic is still caught, then CORS and Locale before app logic.
+//
+// Every error that escapes a handler — the router's own 404/405, fasthttp's
+// 413, a handler's returned error — goes through httpwriter.HandleError so
+// the client always sees the standard envelope.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
 //
@@ -42,14 +49,20 @@ func NewRouter(
 	registrars []Registrar,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
-		BodyLimit:         cfg.HTTP.BodyLimit,
-		ReadBufferSize:    cfg.HTTP.ReadBufferSize,
-		JSONEncoder:       json.Marshal,
-		JSONDecoder:       json.Unmarshal,
-		ReadTimeout:       cfg.HTTP.ReadTimeout,
-		WriteTimeout:      cfg.HTTP.WriteTimeout,
-		ProxyHeader:       fiber.HeaderXForwardedFor,
-		EnablePrintRoutes: cfg.AppEnv == config.EnvLocal, // Only print routes in local environment for easier debugging
+		BodyLimit:      cfg.HTTP.BodyLimit,
+		ReadBufferSize: cfg.HTTP.ReadBufferSize,
+		JSONEncoder:    json.Marshal,
+		JSONDecoder:    json.Unmarshal,
+		ReadTimeout:    cfg.HTTP.ReadTimeout,
+		WriteTimeout:   cfg.HTTP.WriteTimeout,
+		ErrorHandler:   httpwriter.HandleError,
+		// X-Forwarded-For is honoured only from the proxies listed in config;
+		// with none configured c.IP() is the TCP peer, so a client cannot
+		// spoof its address. Entries are validated by config.Load.
+		ProxyHeader:             fiber.HeaderXForwardedFor,
+		EnableTrustedProxyCheck: true,
+		TrustedProxies:          cfg.HTTP.TrustedProxies,
+		EnablePrintRoutes:       cfg.AppEnv == config.EnvLocal, // Only print routes in local environment for easier debugging
 	})
 
 	// Tracing first so RequestID and Logging see the server span (trace_id).
@@ -57,6 +70,7 @@ func NewRouter(
 	app.Use(middleware.RequestID())
 	app.Use(middleware.Logging(log))
 	app.Use(middleware.Recovery())
+	app.Use(middleware.Timeout(cfg.HTTP.RequestTimeout))
 	app.Use(middleware.CORS(cfg.HTTP.CORS))
 	app.Use(middleware.Locale())
 
@@ -64,9 +78,9 @@ func NewRouter(
 		return c.JSON(checker.Liveness())
 	})
 	app.Get("/readyz", func(c *fiber.Ctx) error {
-		status := checker.Readiness(c.UserContext())
-		if !status.OK {
-			log.Warn("readiness check failed", "details", status.Details)
+		status, err := checker.Readiness(c.UserContext())
+		if err != nil {
+			log.Warn("readiness check failed", "err", err)
 		}
 		code := fiber.StatusOK
 		if !status.OK {

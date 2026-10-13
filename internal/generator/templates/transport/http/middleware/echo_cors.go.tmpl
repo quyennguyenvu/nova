@@ -7,9 +7,14 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/config"
 )
 
-// CORS reads allowed origins/methods/headers from config — never default to
-// "*" in scaffolded code; each deployment enumerates origins explicitly.
+// CORS reads allowed origins/methods/headers from config; each deployment
+// enumerates its origins explicitly. An empty origin list means no
+// cross-origin access at all, so nothing is installed: echo's CORS
+// middleware would otherwise treat the empty list as "*".
 func CORS(cfg config.CORSConfig) echo.MiddlewareFunc {
+	if len(cfg.AllowOrigins) == 0 {
+		return func(next echo.HandlerFunc) echo.HandlerFunc { return next }
+	}
 	return echomw.CORSWithConfig(echomw.CORSConfig{
 		AllowOrigins: cfg.AllowOrigins,
 		AllowMethods: cfg.AllowMethods,

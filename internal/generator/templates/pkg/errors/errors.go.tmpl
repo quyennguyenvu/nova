@@ -281,6 +281,41 @@ func httpStatusForLocale(code locale.Locale) int {
 	return http.StatusInternalServerError
 }
 
+// statusLocale picks the canonical locale code for an HTTP status raised by
+// the framework itself (router 404/405, server 413, …) rather than by
+// application code, so those responses use the same envelope and translation
+// as everything else. It is the inverse of localeHTTPStatus for the one code
+// per status FromStatus should produce.
+var statusLocale = map[int]locale.Locale{
+	http.StatusBadRequest:            locale.InvalidRequest,
+	http.StatusUnauthorized:          locale.Unauthorized,
+	http.StatusForbidden:             locale.Forbidden,
+	http.StatusNotFound:              locale.RecordNotFound,
+	http.StatusMethodNotAllowed:      locale.MethodNotAllowed,
+	http.StatusRequestTimeout:        locale.RequestTimeout,
+	http.StatusConflict:              locale.Conflict,
+	http.StatusRequestEntityTooLarge: locale.PayloadTooLarge,
+	http.StatusUnsupportedMediaType:  locale.UnsupportedMediaType,
+	http.StatusUnprocessableEntity:   locale.ValidationFailed,
+	http.StatusTooManyRequests:       locale.TooManyRequests,
+	http.StatusNotImplemented:        locale.Unimplemented,
+	http.StatusBadGateway:            locale.BadGateway,
+	http.StatusServiceUnavailable:    locale.ServiceUnavailable,
+	http.StatusGatewayTimeout:        locale.GatewayTimeout,
+}
+
+// FromStatus builds the AppError for a framework-raised HTTP status. A status
+// without a canonical code becomes 500, so a framework error can never leak an
+// unmapped status or its own message to the client; attach the framework's
+// error with WithCause so it still reaches the access log.
+func FromStatus(status int) *AppError {
+	code, ok := statusLocale[status]
+	if !ok {
+		code = locale.InternalError
+	}
+	return newAtL(httpStatusForLocale(code), code, nil)
+}
+
 // classify maps a non-AppError into an *AppError, always locale-coded so the
 // transport boundary can translate the client-facing message — no bare strings
 // leak out. Recognises:
@@ -310,6 +345,10 @@ func classify(err error) *AppError {
 		return &AppError{Code: http.StatusUnauthorized, Locale: locale.Unauthorized}
 	case Is(err, ErrForbidden):
 		return &AppError{Code: http.StatusForbidden, Locale: locale.Forbidden}
+	case Is(err, context.DeadlineExceeded):
+		// The request deadline (middleware.Timeout) or a dependency's own
+		// timeout expired: the upstream did not answer in time.
+		return &AppError{Code: http.StatusGatewayTimeout, Locale: locale.GatewayTimeout}
 	default:
 		return &AppError{Code: http.StatusInternalServerError, Locale: locale.InternalError}
 	}

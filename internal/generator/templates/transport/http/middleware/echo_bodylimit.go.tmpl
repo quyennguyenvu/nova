@@ -1,0 +1,25 @@
+package middleware
+
+import (
+	"net/http"
+
+	"github.com/labstack/echo/v4"
+)
+
+// BodyLimit caps the request body at limit bytes. Reading past the limit
+// fails with *http.MaxBytesError, which httpwriter.Bind maps to 413, and
+// net/http closes the connection so the client stops sending. It uses
+// net/http's reader rather than echo's BodyLimit so the failure mode matches
+// the other frameworks. A non-positive limit leaves the body unbounded.
+func BodyLimit(limit int) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		if limit <= 0 {
+			return next
+		}
+		return func(c echo.Context) error {
+			req := c.Request()
+			req.Body = http.MaxBytesReader(c.Response(), req.Body, int64(limit))
+			return next(c)
+		}
+	}
+}

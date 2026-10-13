@@ -74,7 +74,7 @@ Plan shape: `ProjectConfig.Validate()` driven by one option registry consumed by
 
 Exit criteria: every value the CLI advertises either renders a project that passes `TestGeneratedProjectBootstrap` or is rejected with a one-line error before any file is written; adversarial names and paths are rejected; `cmd` and `prompt` have tests.
 
-## Phase 3: observability
+## Phase 3: observability (done 2026-10-10, commit `98cd188`)
 
 Detailed plan: [2026-10-08-phase3-observability.md](2026-10-08-phase3-observability.md).
 
@@ -95,6 +95,8 @@ Plan shape: logger `emit` type-switches `error` to `AnErr` (or add `Err(error)` 
 Exit criteria: a debuggability scorecard (where/when/what/who/why × HTTP/worker/gRPC) is "ok" everywhere except gRPC "who", verified by asserting field presence in the matrix (`TestLoggingFields`) and by one manual run per transport.
 
 ## Phase 4: HTTP transport parity and security
+
+Detailed plan: [2026-10-12-phase4-http-parity-security.md](2026-10-12-phase4-http-parity-security.md).
 
 Findings (all four frameworks unless noted):
 

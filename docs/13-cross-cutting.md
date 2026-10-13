@@ -6,24 +6,28 @@ Templates should never omit these. **Adding a new HTTP framework variant means r
 
 ## The list
 
-| Feature                     | Where it lives                                                                                                                   |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Graceful shutdown           | `internal/app/*.go` + every constructor's cleanup ([11](11-di-and-entrypoints.md#how-cleanup-works))                             |
-| Context propagation         | `context.Context` first arg through every layer                                                                                  |
-| Structured logging          | `pkg/observability.Logger` port → `infrastructure/logger/zerolog.go`                                                             |
-| Request-scoped logger       | `pkg/logctx` — `logctx.From(ctx)` in inner layers                                                                                |
-| Request ID                  | `middleware/requestid.go` + `pkg/requestid.With`                                                                                 |
-| Health endpoints            | `transport/http/health/checker.go` — `/healthz`, `/readyz`                                                                       |
-| OpenTelemetry tracing       | `infrastructure/tracing/otel.go` + the framework's OTel middleware, installed first in `router.go`; `trace_id` on every log line |
-| Input validation            | `go-playground/validator` via `httpwriter.Bind` / `BindQuery`                                                                    |
-| Error handling + i18n       | `pkg/errors` (AppError, status table) + `pkg/locale` (codes, translations)                                                       |
-| API versioning              | URL path — `transport/http/v1/v1.go` (`/api/v1`)                                                                                 |
-| CORS                        | `middleware/cors.go`, config-driven, never `*`                                                                                   |
-| Login rate limiting         | `middleware/loginlimit.go`, applied to the auth route only                                                                       |
-| Request/response access log | `middleware/logging.go` — exactly one line per request                                                                           |
-| Panic recovery              | `middleware/recovery.go` — 500 in the standard envelope                                                                          |
-| Auth                        | `middleware/auth.go` + `infrastructure/jwt` (RS256)                                                                              |
-| Transaction management      | `domain.TxManager` → `adapter/repository/{db}/tx_manager.go`                                                                     |
+| Feature                     | Where it lives                                                                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Graceful shutdown           | `internal/app/*.go` + every constructor's cleanup ([11](11-di-and-entrypoints.md#how-cleanup-works))                                |
+| Context propagation         | `context.Context` first arg through every layer                                                                                     |
+| Structured logging          | `pkg/observability.Logger` port → `infrastructure/logger/zerolog.go`                                                                |
+| Request-scoped logger       | `pkg/logctx` — `logctx.From(ctx)` in inner layers                                                                                   |
+| Request ID                  | `middleware/requestid.go` + `pkg/requestid.With`                                                                                    |
+| Health endpoints            | `transport/http/health/checker.go` — `/healthz`, `/readyz`                                                                          |
+| OpenTelemetry tracing       | `infrastructure/tracing/otel.go` + the framework's OTel middleware, installed first in `router.go`; `trace_id` on every log line    |
+| Input validation            | `go-playground/validator` via `httpwriter.Bind` / `BindQuery`                                                                       |
+| Error handling + i18n       | `pkg/errors` (AppError, status table) + `pkg/locale` (codes, translations)                                                          |
+| API versioning              | URL path — `transport/http/v1/v1.go` (`/api/v1`)                                                                                    |
+| CORS                        | `middleware/cors.go`, config-driven; an empty list installs nothing, never `*`                                                      |
+| Client IP / trusted proxies | `http.trusted_proxies`: fiber `TrustedProxies`, gin `SetTrustedProxies`, echo `IPExtractor`, chi `middleware/clientip.go`           |
+| Request deadline            | `middleware/timeout.go` — `http.request_timeout` on every ctx; `context.DeadlineExceeded` → 504                                     |
+| Body limit                  | fiber `BodyLimit`; `middleware/bodylimit.go` (gin, chi, echo) → 413 through `httpwriter.Bind`                                       |
+| Framework errors            | 404/405/413 in the envelope via `errors.FromStatus` (`httpwriter.HandleError`, `NoRoute`/`NoMethod`, `NotFound`/`MethodNotAllowed`) |
+| Login rate limiting         | `middleware/loginlimit.go`, applied to the auth route only                                                                          |
+| Request/response access log | `middleware/logging.go` — exactly one line per request                                                                              |
+| Panic recovery              | `middleware/recovery.go` — 500 in the standard envelope                                                                             |
+| Auth                        | `middleware/auth.go` + `infrastructure/jwt` (RS256)                                                                                 |
+| Transaction management      | `domain.TxManager` → `adapter/repository/{db}/tx_manager.go`                                                                        |
 
 **Not shipped**, despite appearing in earlier drafts: a Prometheus `/metrics` endpoint, and a general-purpose (non-login) rate limiter.
 
@@ -107,21 +111,26 @@ The consequence to internalize: **a constructor that acquires a resource and doe
 
 Collected here because it's spread across layers by design:
 
-| Concern                  | Measure                                                                 |
-| ------------------------ | ----------------------------------------------------------------------- |
-| Password storage         | bcrypt, cost from config, clamped to a valid range                      |
-| Credential leakage       | `PasswordHash` never in a response DTO, never cached, never indexed     |
-| Account enumeration      | Uniform 401 **and** uniform timing on login (dummy bcrypt verify)       |
-| Token forgery            | RS256 — only the issuer holds the signing key                           |
-| Token failure detail     | Generic 401 to the client; the reason is logged, triaged by severity    |
-| Brute force              | Per-IP token bucket on `/login` only                                    |
-| CORS                     | Explicit origin list; empty (reject-all) default, never `*`             |
-| Validation error detail  | Generic localized 400; the field-level cause goes to the log            |
-| Secrets in logs          | `c.Path()` not `OriginalURL()` — query strings never logged             |
-| Secrets in git           | `.env` gitignored; JWT keys are env-only (no YAML tag)                  |
-| SQL injection            | sqlc-generated prepared statements; optional filters as bound params    |
-| DSN corruption           | `net/url` / `mysql.Config.FormatDSN`, never `fmt.Sprintf`               |
-| Container privilege      | Non-root `USER app`, static binary                                      |
+| Concern                 | Measure                                                                                |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| Password storage        | bcrypt, cost from config, clamped to a valid range                                     |
+| Credential leakage      | `PasswordHash` never in a response DTO, never cached, never indexed                    |
+| Account enumeration     | Uniform 401 **and** uniform timing on login (dummy bcrypt verify)                      |
+| Token forgery           | RS256 — only the issuer holds the signing key                                          |
+| Token failure detail    | Generic 401 to the client; the reason is logged, triaged by severity                   |
+| Brute force             | Per-IP token bucket on `/login` and `POST /users`, `Retry-After`, idle buckets evicted |
+| Client IP spoofing      | `X-Forwarded-For` believed only from `http.trusted_proxies`                            |
+| Ownership               | `PUT`/`DELETE /users/{id}` require the caller's own id (usecase `requireSelf`)         |
+| Password length         | Rejected above 72 bytes (the bcrypt bound) as a 400, never a 500                       |
+| Request time            | Deadline on every request ctx (`http.request_timeout`)                                 |
+| Readiness detail        | `/readyz` says `ok`/`fail` per dependency; the error text goes to the log              |
+| CORS                    | Explicit origin list; an empty list installs no CORS at all, never `*`                 |
+| Validation error detail | Generic localized 400; the field-level cause goes to the log                           |
+| Secrets in logs         | `c.Path()` not `OriginalURL()` — query strings never logged                            |
+| Secrets in git          | `.env` gitignored; JWT keys are env-only (no YAML tag)                                 |
+| SQL injection           | sqlc-generated prepared statements; optional filters as bound params                   |
+| DSN corruption          | `net/url` / `mysql.Config.FormatDSN`, never `fmt.Sprintf`                              |
+| Container privilege     | Non-root `USER app`, static binary                                                     |
 
 Each of these is documented at its source: [06](06-usecase-layer.md#login--uniform-failure-uniform-timing), [07](07-transport-layer.md#internaltransporthttpmiddleware), [08](08-adapter-layer.md#queries), [09](09-infrastructure-layer.md#jwt--rs256-signer-and-verifier), [12](12-build-and-deploy.md#dockerfile).
 

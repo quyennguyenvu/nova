@@ -12,7 +12,9 @@ import (
 
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
 	"{{.ModuleName}}/internal/transport/http/middleware"
+	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/observability"
 )
 
@@ -27,6 +29,9 @@ type Registrar interface {
 }
 
 // NewRouter builds the gin engine: middleware → probes → registrars at their prefixes.
+// Timeout sits inside Recovery so a deadline panic is still caught; BodyLimit
+// follows it because gin has no native request-body cap. Unknown paths and
+// methods answer in the envelope through NoRoute/NoMethod.
 //
 // registrars is a slice (not a map) so mount order is deterministic.
 func NewRouter(
@@ -37,6 +42,22 @@ func NewRouter(
 ) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
+	// X-Forwarded-For is honoured only from the proxies listed in config; with
+	// none configured c.ClientIP() is the TCP peer (gin's default trusts every
+	// proxy). Entries are validated by config.Load.
+	_ = engine.SetTrustedProxies(cfg.HTTP.TrustedProxies)
+	// The documented paths are canonical: no redirect to a trailing-slash twin
+	// and no case or dot-segment fix-ups. Unknown paths and methods answer in
+	// the envelope like every other error.
+	engine.RedirectTrailingSlash = false
+	engine.RedirectFixedPath = false
+	engine.HandleMethodNotAllowed = true
+	engine.NoRoute(func(c *gin.Context) {
+		httpwriter.WriteError(c, errors.FromStatus(http.StatusNotFound))
+	})
+	engine.NoMethod(func(c *gin.Context) {
+		httpwriter.WriteError(c, errors.FromStatus(http.StatusMethodNotAllowed))
+	})
 
 	// Tracing first so RequestID and Logging see the server span (trace_id).
 	engine.Use(otelgin.Middleware(
@@ -46,6 +67,8 @@ func NewRouter(
 	engine.Use(middleware.RequestID())
 	engine.Use(middleware.Logging(log))
 	engine.Use(middleware.Recovery())
+	engine.Use(middleware.Timeout(cfg.HTTP.RequestTimeout))
+	engine.Use(middleware.BodyLimit(cfg.HTTP.BodyLimit))
 	engine.Use(middleware.CORS(cfg.HTTP.CORS))
 	engine.Use(middleware.Locale())
 
@@ -53,9 +76,9 @@ func NewRouter(
 		c.JSON(http.StatusOK, checker.Liveness())
 	})
 	engine.GET("/readyz", func(c *gin.Context) {
-		status := checker.Readiness(c.Request.Context())
-		if !status.OK {
-			log.Warn("readiness check failed", "details", status.Details)
+		status, err := checker.Readiness(c.Request.Context())
+		if err != nil {
+			log.Warn("readiness check failed", "err", err)
 		}
 		code := http.StatusOK
 		if !status.OK {

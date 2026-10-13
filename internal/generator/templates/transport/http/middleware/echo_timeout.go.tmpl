@@ -1,0 +1,26 @@
+package middleware
+
+import (
+	"context"
+	"time"
+
+	"github.com/labstack/echo/v4"
+)
+
+// Timeout puts a deadline on every request's context so a stalled dependency
+// fails the request (504 through errors.ToAppError) instead of holding the
+// connection until the server's write timeout. A non-positive d disables it.
+func Timeout(d time.Duration) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		if d <= 0 {
+			return next
+		}
+		return func(c echo.Context) error {
+			req := c.Request()
+			ctx, cancel := context.WithTimeout(req.Context(), d)
+			defer cancel()
+			c.SetRequest(req.WithContext(ctx))
+			return next(c)
+		}
+	}
+}

@@ -10,6 +10,8 @@ package health
 import (
 	"context"
 {{- if or .HasDatabase .HasRedis}}
+	"errors"
+	"fmt"
 	"time"
 {{- end}}
 {{- if .HasDatabase}}
@@ -28,9 +30,9 @@ import (
 {{- end}}
 )
 
-// Status is the wire shape of a probe response. Details enumerates per-check
-// outcomes so operators can spot which dependency is failing without
-// shelling onto the host.
+// Status is the wire shape of a probe response. Details names each check as
+// "ok" or "fail" so an anonymous caller can see which dependency is down
+// without learning its error text; the text goes to the log.
 type Status struct {
 	OK      bool              `json:"ok"`
 	Details map[string]string `json:"details,omitempty"`
@@ -85,47 +87,39 @@ func (*Checker) Liveness() Status {
 {{- if or .HasDatabase .HasRedis}}
 
 // Readiness pings every configured dependency under a 1-second deadline.
-// Returns OK=false if ANY check fails — the JSON body carries per-check
-// detail so the failing dependency is visible without log archaeology.
-func (c *Checker) Readiness(ctx context.Context) Status {
+// Returns OK=false if ANY check fails; the body names the failing check as
+// "fail" and the returned error carries every failure's detail for the log.
+func (c *Checker) Readiness(ctx context.Context) (Status, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
 	details := map[string]string{}
-	ok := true
-
-{{- if and .HasDatabase (eq .Database "postgres")}}
-	if err := c.pool.Ping(probeCtx); err != nil {
-		details["database"] = err.Error()
-		ok = false
-	} else {
-		details["database"] = "ok"
+	var errs []error
+	check := func(name string, err error) {
+		if err != nil {
+			details[name] = "fail"
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+			return
+		}
+		details[name] = "ok"
 	}
+{{- if and .HasDatabase (eq .Database "postgres")}}
+	check("database", c.pool.Ping(probeCtx))
 {{- end}}
 {{- if and .HasDatabase (eq .Database "mysql")}}
-	if err := c.db.PingContext(probeCtx); err != nil {
-		details["database"] = err.Error()
-		ok = false
-	} else {
-		details["database"] = "ok"
-	}
+	check("database", c.db.PingContext(probeCtx))
 {{- end}}
 {{- if .HasRedis}}
-	if err := c.cache.Ping(probeCtx).Err(); err != nil {
-		details["redis"] = err.Error()
-		ok = false
-	} else {
-		details["redis"] = "ok"
-	}
+	check("redis", c.cache.Ping(probeCtx).Err())
 {{- end}}
 
-	return Status{OK: ok, Details: details}
+	return Status{OK: len(errs) == 0, Details: details}, errors.Join(errs...)
 }
 {{- else}}
 
 // Readiness has no downstream dependency to probe in this configuration, so
 // it reports the same process-up signal as Liveness.
-func (*Checker) Readiness(context.Context) Status {
-	return Status{OK: true}
+func (*Checker) Readiness(context.Context) (Status, error) {
+	return Status{OK: true}, nil
 }
 {{- end}}

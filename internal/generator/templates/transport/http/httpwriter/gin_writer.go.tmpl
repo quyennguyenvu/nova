@@ -5,6 +5,7 @@
 package httpwriter
 
 import (
+	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -55,7 +56,7 @@ func WriteError(c *gin.Context, app *errors.AppError) {
 func Bind[T any](c *gin.Context, validate *validator.Validate) (T, *errors.AppError) {
 	var v T
 	if err := c.ShouldBindJSON(&v); err != nil {
-		return v, errors.L(locale.InvalidRequest).WithCause(err)
+		return v, bindError(err)
 	}
 	if err := validate.Struct(&v); err != nil {
 		return v, errors.L(locale.InvalidRequest).WithCause(err)
@@ -86,4 +87,14 @@ func BindQuery[T any](c *gin.Context, validate *validator.Validate) (T, *errors.
 		return v, errors.L(locale.InvalidRequest).WithCause(err)
 	}
 	return v, nil
+}
+
+// bindError maps a body-decoding failure: a body over the configured limit is
+// 413 (net/http's MaxBytesReader), anything else the generic 400.
+func bindError(err error) *errors.AppError {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return errors.L(locale.PayloadTooLarge).WithCause(err)
+	}
+	return errors.L(locale.InvalidRequest).WithCause(err)
 }

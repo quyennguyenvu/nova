@@ -1350,6 +1350,9 @@ func TestGeneratedProjectBootstrap(t *testing.T) {
 		{"http_gin_mysql_wire", noSearch(httpMatrixConfig("gin", "mysql", "wire"))},
 		{"worker_postgres_kafka_wire", workerMatrixConfig("postgres", "kafka", "wire")},
 		{"http_echo_none_fx", noDBMatrixConfig("echo", "fx")},
+		// chi carries the most hand-rolled transport code (client IP, CORS,
+		// error handlers), so it gets a real lint run too.
+		{"http_chi_postgres_fx", noSearch(httpMatrixConfig("chi", "postgres", "fx"))},
 	}
 	for _, tc := range cases {
 		// No t.Parallel: each case compiles a full dependency tree.
@@ -1483,4 +1486,118 @@ func TestObservabilityContract(t *testing.T) {
 			"otelgrpc.NewServerHandler()", "grpc.ChainUnaryInterceptor(")
 		mustContainAll(t, readFile(t, filepath.Join(dir, "cmd/grpc.go")), "RunE:")
 	})
+}
+
+// TestHTTPParity pins the transport hardening every framework variant must
+// share: trusted-proxy-aware client IPs, CORS that never widens to "*", a
+// body limit, server and per-request timeouts, framework 404/405/413 in the
+// envelope, case-insensitive bearer auth with RFC 6750 challenges, a bounded
+// credential limiter with Retry-After, ownership on mutations, and a readiness
+// body that names the failing check without its error text. The vet matrix
+// proves these compile; this proves they are present in every variant.
+func TestHTTPParity(t *testing.T) {
+	t.Parallel()
+	for _, fw := range []string{"fiber", "gin", "chi", "echo"} {
+		t.Run(fw, func(t *testing.T) {
+			t.Parallel()
+			dir := renderProject(t, httpMatrixConfig(fw, "postgres", "wire"))
+			assertHTTPParity(t, dir, fw)
+		})
+	}
+}
+
+func assertHTTPParity(t *testing.T, dir, fw string) {
+	t.Helper()
+	tr := filepath.Join(dir, "internal/transport/http")
+	mw := filepath.Join(tr, "middleware")
+	router := readFile(t, filepath.Join(tr, "router.go"))
+	limiter := readFile(t, filepath.Join(mw, "loginlimit.go"))
+	cors := readFile(t, filepath.Join(mw, "cors.go"))
+	logging := readFile(t, filepath.Join(mw, "logging.go"))
+	writer := readFile(t, filepath.Join(tr, "httpwriter/writer.go"))
+	registrar := readFile(t, filepath.Join(tr, "v1/user/registrar.go"))
+	pkgErrors := readFile(t, filepath.Join(dir, "pkg/errors/errors.go"))
+
+	// Client IP: X-Forwarded-For is honoured only from configured proxies.
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/config.go")),
+		`"trusted_proxies"`, `"request_timeout"`, "func (c HTTPConfig) TrustedProxyNets()", "http.trusted_proxies")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/base.yaml")),
+		"trusted_proxies: []", "request_timeout:")
+	switch fw {
+	case "fiber":
+		mustContainAll(t, router, "EnableTrustedProxyCheck: true", "TrustedProxies:")
+	case "gin":
+		mustContainAll(t, router, "SetTrustedProxies(")
+	case "chi":
+		mustContainAll(t, router, "middleware.ClientIP(")
+		mustContainAll(t, readFile(t, filepath.Join(mw, "clientip.go")), "func ClientIP(", "X-Forwarded-For")
+		mustNotContain(t, limiter, "X-Forwarded-For")
+	case "echo":
+		mustContainAll(t, router, "e.IPExtractor", "echo.ExtractIPDirect()", "echo.TrustPrivateNet(false)")
+	}
+
+	// CORS never widens to "*"; bodies and request time are bounded.
+	mustContainAll(t, readFile(t, filepath.Join(mw, "timeout.go")), "func Timeout(", "context.WithTimeout(")
+	mustContainAll(t, router, "middleware.Timeout(cfg.HTTP.RequestTimeout)")
+	mustContainAll(t, pkgErrors, "context.DeadlineExceeded")
+	if fw == "fiber" {
+		mustContainAll(t, cors, "len(cfg.AllowOrigins) == 0")
+		mustContainAll(t, router, "BodyLimit:")
+	} else {
+		mustContainAll(t, readFile(t, filepath.Join(mw, "bodylimit.go")), "func BodyLimit(", "http.MaxBytesReader(")
+		mustContainAll(t, router, "middleware.BodyLimit(cfg.HTTP.BodyLimit)")
+		mustContainAll(t, writer, "http.MaxBytesError", "locale.PayloadTooLarge")
+	}
+	switch fw {
+	case "echo":
+		mustContainAll(t, cors, "len(cfg.AllowOrigins) == 0")
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/server/http.go")),
+			"e.Server.ReadTimeout", "e.Server.WriteTimeout")
+	case "gin", "chi":
+		mustContainAll(t, cors, `"Vary"`)
+	}
+
+	// Framework 404/405/413 answer in the envelope; the logged status is the
+	// one the client receives.
+	mustContainAll(t, pkgErrors, "func FromStatus(status int) *AppError")
+	switch fw {
+	case "fiber":
+		mustContainAll(t, router, "ErrorHandler:", "httpwriter.HandleError,")
+		mustContainAll(t, writer, "func HandleError(c *fiber.Ctx, err error) error", "errors.FromStatus(fe.Code)")
+		mustContainAll(t, logging, "c.App().ErrorHandler(c, err)")
+	case "echo":
+		mustContainAll(t, router, "e.HTTPErrorHandler = httpwriter.HandleError")
+		mustContainAll(t, writer, "func HandleError(err error, c echo.Context)", "errors.FromStatus(he.Code)")
+		mustContainAll(t, logging, "c.Error(err)")
+	case "gin":
+		mustContainAll(t, router, "engine.NoRoute(", "engine.NoMethod(", "engine.HandleMethodNotAllowed = true",
+			"engine.RedirectTrailingSlash = false", "engine.RedirectFixedPath = false")
+		mustContainAll(t, registrar, `POST("", `, `GET("", `)
+		mustNotContain(t, registrar, `POST("/", `, `GET("/", `)
+	case "chi":
+		mustContainAll(t, router, "router.NotFound(", "router.MethodNotAllowed(")
+	}
+
+	// Credential endpoints: RFC 6750 challenge, bounded limiter with
+	// Retry-After on login and registration; ownership on mutations.
+	mustContainAll(t, readFile(t, filepath.Join(mw, "auth.go")), "strings.EqualFold(", "WWW-Authenticate")
+	mustContainAll(t, limiter, "Retry-After", "visitorTTL",
+		"func (l *ipLimiter) allow(ip string) (bool, time.Duration)")
+	if n := strings.Count(registrar, "middleware.LoginRateLimit("); n != 2 {
+		t.Errorf("registrar applies LoginRateLimit %d times, want 2 (login and registration)", n)
+	}
+	usecase := readFile(t, filepath.Join(dir, "internal/usecase/user/service.go"))
+	mustContainAll(t, usecase, "func requireSelf(", "security.MaxPasswordLen", "func (s *Service) timingHash()")
+	mustNotContain(t, usecase, "dummyHashOnce")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/domain/security/hasher.go")), "MaxPasswordLen = 72")
+
+	// Readiness names the failing check without its error text; the OpenAPI
+	// document matches the handlers.
+	mustContainAll(t, readFile(t, filepath.Join(tr, "health/checker.go")),
+		"func (c *Checker) Readiness(ctx context.Context) (Status, error)", `"fail"`)
+	mustContainAll(t, router, `log.Warn("readiness check failed", "err", err)`)
+	openapi := readFile(t, filepath.Join(dir, "api/openapi/openapi.yaml"))
+	mustContainAll(t, openapi, "/api/v1/public/users:", "name: perPage", "name: cursor", "requestId:", "Retry-After:",
+		"WWW-Authenticate:", "PageMeta:", "CursorMeta:", `"413":`)
+	mustNotContain(t, openapi, "name: offset")
 }

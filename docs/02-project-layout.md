@@ -98,12 +98,16 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   │   └── writer.go               # Bind / WriteJSON / WriteError for the chosen framework
 │   │   │   ├── middleware/                 # Framework-specific (Fiber/Gin/Chi/Echo handlers)
 │   │   │   │   ├── auth.go
+│   │   │   │   ├── bodylimit.go            # [gin/chi/echo] fiber caps the body in fiber.Config
+│   │   │   │   ├── clientip.go             # [chi] trusted-proxy client IP; others resolve it natively
 │   │   │   │   ├── cors.go
 │   │   │   │   ├── locale.go
 │   │   │   │   ├── logging.go
 │   │   │   │   ├── loginlimit.go
+│   │   │   │   ├── principal.go
 │   │   │   │   ├── recovery.go
-│   │   │   │   └── requestid.go
+│   │   │   │   ├── requestid.go
+│   │   │   │   └── timeout.go
 │   │   │   └── v1/
 │   │   │       ├── v1.go                   # Shared /api/v1 prefix for every feature registrar
 │   │   │       └── user/                   # One package per feature

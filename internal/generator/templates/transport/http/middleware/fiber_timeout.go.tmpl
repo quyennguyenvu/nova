@@ -1,0 +1,25 @@
+package middleware
+
+import (
+	"context"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+// Timeout puts a deadline on every request's context so a stalled dependency
+// fails the request (504 through errors.ToAppError) instead of holding the
+// connection until the server's write timeout. Handlers see it as ctx.Done()
+// on c.UserContext(). fiber cannot cancel on client disconnect, so this
+// deadline is the only bound a request has. A non-positive d disables it.
+func Timeout(d time.Duration) fiber.Handler {
+	if d <= 0 {
+		return func(c *fiber.Ctx) error { return c.Next() }
+	}
+	return func(c *fiber.Ctx) error {
+		ctx, cancel := context.WithTimeout(c.UserContext(), d)
+		defer cancel()
+		c.SetUserContext(ctx)
+		return c.Next()
+	}
+}

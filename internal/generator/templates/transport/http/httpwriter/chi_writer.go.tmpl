@@ -66,7 +66,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, app *errors.AppError) {
 func Bind[T any](r *http.Request, validate *validator.Validate) (T, *errors.AppError) {
 	var v T
 	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
-		return v, errors.L(locale.InvalidRequest).WithCause(err)
+		return v, bindError(err)
 	}
 	if err := validate.Struct(&v); err != nil {
 		return v, errors.L(locale.InvalidRequest).WithCause(err)
@@ -109,4 +109,14 @@ func ValidateQuery(validate *validator.Validate, v any) *errors.AppError {
 		return errors.L(locale.InvalidRequest).WithCause(err)
 	}
 	return nil
+}
+
+// bindError maps a body-decoding failure: a body over the configured limit is
+// 413 (net/http's MaxBytesReader), anything else the generic 400.
+func bindError(err error) *errors.AppError {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return errors.L(locale.PayloadTooLarge).WithCause(err)
+	}
+	return errors.L(locale.InvalidRequest).WithCause(err)
 }

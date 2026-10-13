@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+{{- if .HasHTTP}}
+	"net"
+	"strings"
+{{- end}}
 	"os"
 {{- if or .HasHTTP .HasGRPC .HasDatabase .HasRedis .HasElasticsearch .HasMessageQueue}}
 	"time"
@@ -96,15 +100,55 @@ type JWTConfig struct {
 {{- if .HasHTTP}}
 
 // HTTPConfig holds HTTP server configuration.
+//
+// RequestTimeout is the deadline put on every request's context
+// (middleware.Timeout); keep it below WriteTimeout so a stalled dependency
+// fails the request in the envelope before the socket is closed.
+// TrustedProxies lists the reverse proxies (CIDR or IP) whose X-Forwarded-For
+// is believed; with none configured the TCP peer is the client and the header
+// is ignored, so a client cannot spoof its address to the login limiter or
+// the access log.
 type HTTPConfig struct {
 	Port            string               `{{.ConfigFormat}}:"port"             env:"SERVER_PORT"`
 	ReadTimeout     time.Duration        `{{.ConfigFormat}}:"read_timeout"     env:"SERVER_READ_TIMEOUT"`
 	WriteTimeout    time.Duration        `{{.ConfigFormat}}:"write_timeout"    env:"SERVER_WRITE_TIMEOUT"`
+	RequestTimeout  time.Duration        `{{.ConfigFormat}}:"request_timeout"  env:"SERVER_REQUEST_TIMEOUT"`
 	ReadBufferSize  int                  `{{.ConfigFormat}}:"read_buffer_size" env:"SERVER_READ_BUFFER_SIZE"`
 	BodyLimit       int                  `{{.ConfigFormat}}:"body_limit"       env:"SERVER_BODY_LIMIT"`
 	ShutdownTimeout time.Duration        `{{.ConfigFormat}}:"shutdown_timeout" env:"SERVER_SHUTDOWN_TIMEOUT"`
+	TrustedProxies  []string             `{{.ConfigFormat}}:"trusted_proxies"  env:"SERVER_TRUSTED_PROXIES" env-separator:","`
 	CORS            CORSConfig           `{{.ConfigFormat}}:"cors"`
 	LoginRateLimit  LoginRateLimitConfig `{{.ConfigFormat}}:"login_rate_limit"`
+}
+
+// TrustedProxyNets parses TrustedProxies. A bare IP is treated as a /32 (or
+// /128) network. Load rejects invalid entries, so later callers may ignore the
+// error.
+func (c HTTPConfig) TrustedProxyNets() ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(c.TrustedProxies))
+	for _, raw := range c.TrustedProxies {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if !strings.Contains(entry, "/") {
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				return nil, fmt.Errorf("trusted proxy %q is not an IP address or CIDR", raw)
+			}
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			entry = fmt.Sprintf("%s/%d", ip, bits)
+		}
+		_, n, err := net.ParseCIDR(entry)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy %q: %w", raw, err)
+		}
+		nets = append(nets, n)
+	}
+	return nets, nil
 }
 
 // LoginRateLimitConfig throttles POST /login by remote IP. The limiter is a
@@ -260,6 +304,11 @@ func Load() (*Config, error) {
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
 		return nil, errors.Wrap(err, "config env vars")
 	}
+{{- if .HasHTTP}}
+	if _, err := cfg.HTTP.TrustedProxyNets(); err != nil {
+		return nil, errors.Wrap(err, "config http.trusted_proxies")
+	}
+{{- end}}
 
 	return &cfg, nil
 }
@@ -283,7 +332,7 @@ func (c *Config) Summary() []any {
 		"tracing_sample_ratio", c.Tracing.SampleRatio,
 	}
 {{- if .HasHTTP}}
-	fields = append(fields, "http_port", c.HTTP.Port)
+	fields = append(fields, "http_port", c.HTTP.Port, "http_trusted_proxies", c.HTTP.TrustedProxies)
 {{- end}}
 {{- if .HasGRPC}}
 	fields = append(fields, "grpc_port", c.GRPC.Port)

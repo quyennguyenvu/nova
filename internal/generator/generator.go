@@ -311,7 +311,7 @@ func (g *Generator) adapterFiles() []templateFile {
 
 func (g *Generator) transportFiles() []templateFile {
 	cfg := g.cfg
-	return []templateFile{
+	files := []templateFile{
 		// HTTP root router — Registrar interface + NewRouter (middleware, healthz,
 		// feature routes). Source is framework-prefixed so all variants live
 		// side-by-side; generated as transport/http/router.go.
@@ -369,7 +369,29 @@ func (g *Generator) transportFiles() []templateFile {
 			"internal/transport/http/v1/user/registrar.go",
 			cfg.HasHTTP(),
 		},
-		// HTTP middleware — same pattern: framework-prefixed source, clean output.
+		// gRPC handler
+		{
+			"templates/transport/grpc/user_handler.go.tmpl",
+			"internal/transport/grpc/user.go",
+			cfg.HasGRPC(),
+		},
+		{
+			"templates/transport/grpc/interceptor/interceptor.go.tmpl",
+			"internal/transport/grpc/interceptor/interceptor.go",
+			cfg.HasGRPC(),
+		},
+		// Pubsub adapters live in adapterFiles() — not duplicated here.
+	}
+	return append(files, g.httpMiddlewareFiles()...)
+}
+
+// httpMiddlewareFiles lists the middleware package: framework-prefixed
+// sources with clean output names, the framework-agnostic principal slot,
+// and the extras a framework needs only when it lacks a native mechanism
+// (body limit outside fiber, client IP for chi).
+func (g *Generator) httpMiddlewareFiles() []templateFile {
+	cfg := g.cfg
+	return []templateFile{
 		{
 			fmt.Sprintf("templates/transport/http/middleware/%s_auth.go.tmpl", cfg.HTTPFramework),
 			"internal/transport/http/middleware/auth.go",
@@ -411,18 +433,25 @@ func (g *Generator) transportFiles() []templateFile {
 			"internal/transport/http/middleware/principal.go",
 			cfg.HasHTTP(),
 		},
-		// gRPC handler
 		{
-			"templates/transport/grpc/user_handler.go.tmpl",
-			"internal/transport/grpc/user.go",
-			cfg.HasGRPC(),
+			fmt.Sprintf("templates/transport/http/middleware/%s_timeout.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/timeout.go",
+			cfg.HasHTTP(),
 		},
+		// Body limit: fiber enforces it in fiber.Config; the net/http frameworks
+		// need a middleware.
 		{
-			"templates/transport/grpc/interceptor/interceptor.go.tmpl",
-			"internal/transport/grpc/interceptor/interceptor.go",
-			cfg.HasGRPC(),
+			fmt.Sprintf("templates/transport/http/middleware/%s_bodylimit.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/middleware/bodylimit.go",
+			cfg.HasHTTP() && cfg.HTTPFramework != "fiber",
 		},
-		// Pubsub adapters live in adapterFiles() — not duplicated here.
+		// Client IP: fiber, gin and echo resolve trusted proxies natively; chi
+		// needs a middleware that rewrites RemoteAddr.
+		{
+			"templates/transport/http/middleware/chi_clientip.go.tmpl",
+			"internal/transport/http/middleware/clientip.go",
+			cfg.HasHTTP() && cfg.HTTPFramework == "chi",
+		},
 	}
 }
 
