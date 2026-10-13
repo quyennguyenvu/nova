@@ -575,6 +575,9 @@ func (g *Generator) workerFiles() []templateFile {
 	files := []templateFile{
 		{"templates/transport/worker/handler.go.tmpl", "internal/transport/worker/handler.go", true},
 		{"templates/transport/worker/worker.go.tmpl", "internal/transport/worker/worker.go", true},
+		{"templates/transport/worker/policy.go.tmpl", "internal/transport/worker/policy.go", true},
+		// Broker-less unit tests for the policy; the bootstrap runs them.
+		{"templates/transport/worker/worker_test.go.tmpl", "internal/transport/worker/worker_test.go", true},
 		// Per-feature handlers — currently just user.created.
 		{
 			"templates/transport/worker/v1/user/dto.go.tmpl",
@@ -590,18 +593,21 @@ func (g *Generator) workerFiles() []templateFile {
 	// Broker-specific consumer impl. Picked from cfg.MessageQueue — must be
 	// kafka or rabbitmq; NATS doesn't yet have a consumer template.
 	switch cfg.MessageQueue {
-	case kafka:
-		files = append(files, templateFile{
-			"templates/transport/worker/kafka_consumer.go.tmpl",
-			"internal/transport/worker/consumer.go",
-			true,
-		})
-	case rabbitmq:
-		files = append(files, templateFile{
-			"templates/transport/worker/rabbitmq_consumer.go.tmpl",
-			"internal/transport/worker/consumer.go",
-			true,
-		})
+	case kafka, rabbitmq:
+		// Each consumer ships the test pinning how it settles the three
+		// dispatch outcomes; the bootstrap runs it.
+		files = append(files,
+			templateFile{
+				fmt.Sprintf("templates/transport/worker/%s_consumer.go.tmpl", cfg.MessageQueue),
+				"internal/transport/worker/consumer.go",
+				true,
+			},
+			templateFile{
+				fmt.Sprintf("templates/transport/worker/%s_consumer_test.go.tmpl", cfg.MessageQueue),
+				"internal/transport/worker/consumer_test.go",
+				true,
+			},
+		)
 	}
 	return files
 }

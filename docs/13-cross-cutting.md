@@ -81,7 +81,7 @@ Why this and not log-at-each-layer:
 
 The three deliberate exceptions are all "the error is being swallowed, so it must be logged here": the best-effort event publish ([06](06-usecase-layer.md)), cache read/refill failures ([08](08-adapter-layer.md)), and panic recovery. A swallowed error that isn't logged is invisible.
 
-The worker has its own boundary line: `Worker.dispatch` logs `worker: message handled|failed` once per message with the topic, the broker position (Kafka partition/offset or RabbitMQ delivery tag), the producer's `request_id`/`trace_id` and `duration_ms`, using `errors.LogFields(err)` for the failure fields so one log query works across HTTP and worker ([10](10-shared-packages.md#logfields--for-transports-without-middleware)).
+The worker has its own boundary line: `Worker.dispatch` logs `worker: message handled|parked|abandoned` once per message with the topic, the broker position (Kafka partition/offset or RabbitMQ delivery tag), the producer's `request_id`/`trace_id`, `attempts` and `duration_ms`, using `errors.LogFields(err)` for the failure fields so one log query works across HTTP and worker ([10](10-shared-packages.md#logfields--for-transports-without-middleware)). Each failed attempt before that adds one `worker: attempt failed` warn line with the attempt number and the wait before the next; `parked` is the error-level line to alert on, `abandoned` only means shutdown interrupted a message that the broker will redeliver ([07](07-transport-layer.md#one-policy-three-outcomes)).
 
 ### 3. Classify at the origin, translate at the edge
 

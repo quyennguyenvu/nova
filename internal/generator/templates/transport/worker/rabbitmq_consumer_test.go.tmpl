@@ -1,0 +1,58 @@
+package worker
+
+import (
+	"context"
+	"testing"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	"{{.ModuleName}}/pkg/observability"
+)
+
+type fakeAcker struct {
+	acks    int
+	nacks   int
+	requeue bool
+}
+
+func (a *fakeAcker) Ack(uint64, bool) error {
+	a.acks++
+	return nil
+}
+
+func (a *fakeAcker) Nack(_ uint64, _, requeue bool) error {
+	a.nacks++
+	a.requeue = requeue
+	return nil
+}
+
+func (*fakeAcker) Reject(uint64, bool) error { return nil }
+
+// TestRabbitMQHandle pins the three outcomes a dispatch can have and how each
+// is settled: handled → ack; parked → nack without requeue (the queue's
+// dead-letter exchange takes it); abandoned (ctx ended) → nack with requeue.
+func TestRabbitMQHandle(t *testing.T) {
+	cases := []struct {
+		name        string
+		dispatchErr error
+		wantAcks    int
+		wantNacks   int
+		wantRequeue bool
+	}{
+		{"handled is acked", nil, 1, 0, false},
+		{"parked is nacked to the dead-letter exchange", ErrParked, 0, 1, false},
+		{"abandoned is requeued", context.Canceled, 0, 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			acker := &fakeAcker{}
+			c := &rabbitmqConsumer{log: observability.Nop()}
+			d := amqp.Delivery{Acknowledger: acker, RoutingKey: "user.created", DeliveryTag: 7, Body: []byte(`{}`)}
+			c.handle(t.Context(), d, func(context.Context, Message) error { return tc.dispatchErr })
+			if acker.acks != tc.wantAcks || acker.nacks != tc.wantNacks || acker.requeue != tc.wantRequeue {
+				t.Errorf("acks=%d nacks=%d requeue=%v, want acks=%d nacks=%d requeue=%v",
+					acker.acks, acker.nacks, acker.requeue, tc.wantAcks, tc.wantNacks, tc.wantRequeue)
+			}
+		})
+	}
+}

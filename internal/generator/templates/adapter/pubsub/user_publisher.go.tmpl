@@ -4,15 +4,20 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/google/uuid"
+
 	"{{.ModuleName}}/internal/domain"
 )
 
 func (p *Publisher) PublishUserCreated(ctx context.Context, evt domain.UserCreated) error {
 	msg := UserCreatedMessage{
+		// EventID is the consumer's idempotency key: a redelivery carries the
+		// same id and is recorded once.
+		EventID:   uuid.NewString(),
 		UserID:    evt.UserID,
 		Email:     evt.Email,
 		Name:      evt.Name,
 		CreatedAt: evt.CreatedAt,
 	}
-	return p.publish(ctx, "user.created", strconv.FormatInt(evt.UserID, 10), msg)
+	return p.publish(ctx, "user.created", strconv.FormatInt(evt.UserID, 10), msg.EventID, msg)
 }

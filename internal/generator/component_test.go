@@ -266,11 +266,13 @@ func TestGenerateWorkerFullTransport(t *testing.T) {
 	// Shared transport files.
 	assertFileContains(t, filepath.Join(dir, root, "handler.go"), "type Handler interface")
 	assertFileContains(t, filepath.Join(dir, root, "worker.go"), "type Worker struct")
+	assertFileContains(t, filepath.Join(dir, root, "policy.go"), "func Poison(")
 	assertFileContains(t, filepath.Join(dir, root, "consumer.go"), "github.com/IBM/sarama") // kafka
 	// Per-feature handler + DTO.
 	h := filepath.Join(dir, root, "v1/order/handler.go")
 	assertFileContains(t, h, "package order")
 	assertFileContains(t, h, "func (*Handler) Topic() string")
+	assertFileContains(t, h, "worker.Poison(")
 	assertFileContains(t, filepath.Join(dir, root, "v1/order/dto.go"), "type OrderMessage struct")
 	// Runnable entry points. app/worker.go boots through the DI graph, so it is
 	// broker-agnostic and references no feature handler directly.
@@ -389,6 +391,7 @@ func TestGenerateWorkerScaffoldsWireDI(t *testing.T) {
 	p := filepath.Join(dir, di, "provider.go")
 	assertFileContains(t, p, "func provideValidator()")
 	assertFileContains(t, p, "func provideWorkerHandlers(orderHandler *orderworker.Handler) []worker.Handler")
+	assertFileContains(t, p, "func provideWorkerPolicy() worker.Policy")
 	// No standalone worker_*.go files — everything was merged.
 	for _, f := range []string{"worker_app.go", "worker_wire.go", "worker_fx.go", "worker_provider.go"} {
 		if _, err := os.Stat(filepath.Join(dir, di, f)); err == nil {
@@ -472,11 +475,11 @@ func TestGenerateWorkerSkipsExistingWorkerDI(t *testing.T) {
 	}
 }
 
-// TestWorkerAppTemplatesIdentical guards the app/worker.go bootstrap against
-// drift between the two generators, same as the cmd_worker guard: `nova new`
-// (templates/app/worker.go.tmpl) and `nova add` (skel/worker/app_worker.go.tmpl)
-// both boot through di.InitializeWorker and must emit byte-identical files.
-func TestWorkerAppTemplatesIdentical(t *testing.T) {
+// TestWorkerTemplatesIdentical guards the files `nova add worker` shares with
+// `nova new` against drift between the two generators: the app bootstrap,
+// the cobra command and the dispatch policy must render byte-identically
+// from skel/worker and templates/.
+func TestWorkerTemplatesIdentical(t *testing.T) {
 	data := struct{ ModuleName string }{ModuleName: "example.com/test"}
 	render := func(fs interface{ ReadFile(string) ([]byte, error) }, path string) string {
 		t.Helper()
@@ -494,10 +497,19 @@ func TestWorkerAppTemplatesIdentical(t *testing.T) {
 		}
 		return buf.String()
 	}
-	got := render(skelFS, "skel/worker/app_worker.go.tmpl")
-	want := render(templateFS, "templates/app/worker.go.tmpl")
-	if got != want {
-		t.Errorf("worker app templates diverged:\n--- skel ---\n%s\n--- templates ---\n%s", got, want)
+	pairs := []struct{ skel, tmpl string }{
+		{"skel/worker/app_worker.go.tmpl", "templates/app/worker.go.tmpl"},
+		{"skel/worker/cmd_worker.go.tmpl", "templates/cmd/worker.go.tmpl"},
+		{"skel/worker/policy.go.tmpl", "templates/transport/worker/policy.go.tmpl"},
+	}
+	for _, p := range pairs {
+		t.Run(filepath.Base(p.skel), func(t *testing.T) {
+			got := render(skelFS, p.skel)
+			want := render(templateFS, p.tmpl)
+			if got != want {
+				t.Errorf("%s diverged from %s:\n--- skel ---\n%s\n--- templates ---\n%s", p.skel, p.tmpl, got, want)
+			}
+		})
 	}
 }
 

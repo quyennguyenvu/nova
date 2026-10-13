@@ -5,6 +5,9 @@ import (
 {{- if or (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
 	"encoding/json"
 {{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+	"time"
+{{- end}}
 {{- if eq .MessageQueue "kafka"}}
 
 	"github.com/IBM/sarama"
@@ -18,6 +21,9 @@ import (
 {{- end}}
 
 	"{{.ModuleName}}/internal/domain"
+{{- if eq .MessageQueue "rabbitmq"}}
+	"{{.ModuleName}}/internal/infrastructure/config"
+{{- end}}
 	"{{.ModuleName}}/pkg/errors"
 {{- if or (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
 	"{{.ModuleName}}/pkg/requestid"
@@ -44,7 +50,8 @@ func correlationHeaders(ctx context.Context) map[string]string {
 
 {{- if eq .MessageQueue "kafka"}}
 
-// Publisher implements domain.UserPublisher using Kafka.
+// Publisher implements domain.UserPublisher using Kafka. The producer is
+// owned (and closed) by infrastructure/pubsub.NewKafkaProducer.
 type Publisher struct {
 	producer sarama.SyncProducer
 }
@@ -56,7 +63,7 @@ func NewPublisher(producer sarama.SyncProducer) *Publisher {
 // Ensure interface compliance at compile time
 var _ domain.UserPublisher = (*Publisher)(nil)
 
-func (p *Publisher) publish(ctx context.Context, topic, key string, payload any) error {
+func (p *Publisher) publish(ctx context.Context, topic, key, id string, payload any) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return errors.Wrapf(ctxErr, "publish to %s: context done", topic)
 	}
@@ -66,10 +73,11 @@ func (p *Publisher) publish(ctx context.Context, topic, key string, payload any)
 	}
 
 	headers := correlationHeaders(ctx)
-	recordHeaders := make([]sarama.RecordHeader, 0, len(headers))
+	recordHeaders := make([]sarama.RecordHeader, 0, len(headers)+1)
 	for k, v := range headers {
 		recordHeaders = append(recordHeaders, sarama.RecordHeader{Key: []byte(k), Value: []byte(v)})
 	}
+	recordHeaders = append(recordHeaders, sarama.RecordHeader{Key: []byte("x-event-id"), Value: []byte(id)})
 	_, _, err = p.producer.SendMessage(&sarama.ProducerMessage{
 		Topic:   topic,
 		Key:     sarama.StringEncoder(key), // same key, same partition: per-aggregate ordering
@@ -82,38 +90,49 @@ func (p *Publisher) publish(ctx context.Context, topic, key string, payload any)
 	return nil
 }
 
-func (p *Publisher) Close() error {
-	return p.producer.Close()
-}
-
 {{- end}}
 
 {{- if eq .MessageQueue "rabbitmq"}}
 
-const rabbitmqExchange = "events"
+var errPublishNacked = errors.New("publish nacked by broker")
 
-// Publisher implements domain.UserPublisher using RabbitMQ.
+// Publisher implements domain.UserPublisher using RabbitMQ. It owns one
+// channel in confirm mode on the shared connection; the exchange name comes
+// from config so the worker's queue binds to the same one.
 type Publisher struct {
-	conn *amqp.Connection
-	ch   *amqp.Channel
+	ch       *amqp.Channel
+	exchange string
 }
 
-func NewPublisher(conn *amqp.Connection) (*Publisher, error) {
+// NewPublisher opens the channel, declares the exchange and returns the
+// cleanup that closes the channel; the connection has its own cleanup.
+func NewPublisher(conn *amqp.Connection, cfg config.RabbitMQConfig) (*Publisher, func(), error) {
 	ch, err := conn.Channel()
 	if err != nil {
-		return nil, errors.Wrap(err, "open rabbitmq channel")
+		return nil, nil, errors.Wrap(err, "open rabbitmq channel")
 	}
-	if declErr := ch.ExchangeDeclare(rabbitmqExchange, "topic", true, false, false, false, nil); declErr != nil {
+	declErr := ch.ExchangeDeclare(cfg.Exchange, amqp.ExchangeTopic, true, false, false, false, nil)
+	if declErr != nil {
 		_ = ch.Close()
-		return nil, errors.Wrap(declErr, "declare exchange")
+		return nil, nil, errors.Wrapf(declErr, "declare exchange %s", cfg.Exchange)
 	}
-	return &Publisher{conn: conn, ch: ch}, nil
+	// Confirm mode: a publish that returns nil has been accepted by the
+	// broker, not just written to the socket.
+	if confErr := ch.Confirm(false); confErr != nil {
+		_ = ch.Close()
+		return nil, nil, errors.Wrap(confErr, "enable publisher confirms")
+	}
+	cleanup := func() { _ = ch.Close() }
+	return &Publisher{ch: ch, exchange: cfg.Exchange}, cleanup, nil
 }
 
 // Ensure interface compliance at compile time
 var _ domain.UserPublisher = (*Publisher)(nil)
 
-func (p *Publisher) publish(ctx context.Context, routingKey, _ string, payload any) error {
+func (p *Publisher) publish(ctx context.Context, routingKey, _, id string, payload any) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Wrapf(ctxErr, "publish to %s: context done", routingKey)
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return errors.Wrapf(err, "publish to %s: marshal event", routingKey)
@@ -122,21 +141,27 @@ func (p *Publisher) publish(ctx context.Context, routingKey, _ string, payload a
 	for k, v := range correlationHeaders(ctx) {
 		headers[k] = v
 	}
-	if pubErr := p.ch.PublishWithContext(ctx, rabbitmqExchange, routingKey, false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Headers:     headers,
-		Body:        data,
-	}); pubErr != nil {
+	headers["x-event-id"] = id
+	msg := amqp.Publishing{
+		ContentType:  "application/json",
+		DeliveryMode: amqp.Persistent, // survives a broker restart, like the durable queue it lands in
+		MessageId:    id,
+		Timestamp:    time.Now(),
+		Headers:      headers,
+		Body:         data,
+	}
+	conf, pubErr := p.ch.PublishWithDeferredConfirmWithContext(ctx, p.exchange, routingKey, false, false, msg)
+	if pubErr != nil {
 		return errors.Wrapf(pubErr, "publish to %s", routingKey)
 	}
-	return nil
-}
-
-func (p *Publisher) Close() error {
-	if p.ch != nil {
-		_ = p.ch.Close()
+	acked, waitErr := conf.WaitContext(ctx)
+	if waitErr != nil {
+		return errors.Wrapf(waitErr, "publish to %s: await confirm", routingKey)
 	}
-	return p.conn.Close()
+	if !acked {
+		return errors.Wrapf(errPublishNacked, "publish to %s", routingKey)
+	}
+	return nil
 }
 
 {{- end}}
@@ -153,10 +178,8 @@ func NewPublisher() *Publisher {
 
 var _ domain.UserPublisher = (*Publisher)(nil)
 
-func (p *Publisher) publish(ctx context.Context, subject, _ string, payload any) error {
+func (p *Publisher) publish(ctx context.Context, subject, _, _ string, payload any) error {
 	return errors.L(locale.Unimplemented).WithCause(errors.New("nats publisher not implemented"))
 }
-
-func (p *Publisher) Close() error { return nil }
 
 {{- end}}

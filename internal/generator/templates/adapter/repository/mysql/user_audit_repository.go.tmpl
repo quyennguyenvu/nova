@@ -22,10 +22,12 @@ func NewUserAuditRepository(db *sql.DB) *UserAuditRepository {
 }
 
 func (r *UserAuditRepository) RecordCreated(ctx context.Context, entry *domain.UserAuditEntry) error {
-	id, err := r.qx.Q(ctx).RecordUserAudit(ctx, mapper.UserAuditToCreateParams(entry))
+	n, err := r.qx.Q(ctx).RecordUserAudit(ctx, mapper.UserAuditToCreateParams(entry))
 	if err != nil {
-		return errors.Wrapf(err, "user audit repo: insert user_id=%d", entry.UserID)
+		return errors.Wrapf(err, "user audit repo: insert event_id=%s", entry.EventID)
 	}
-	entry.ID = id
+	if n == 0 {
+		return domain.ErrEventAlreadyRecorded
+	}
 	return nil
 }

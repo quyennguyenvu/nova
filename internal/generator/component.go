@@ -129,6 +129,7 @@ type tmplData struct {
 	PortPkg       string // entity: the repository-interface package (domain)
 	EntityImport  string // entity: import path of the entity package
 	FeatureImport string // worker: import path of the feature handler package
+	WorkerImport  string // worker: import path of the shared transport/worker package
 }
 
 // GenerateWorker scaffolds the full worker transport — the Handler interface,
@@ -158,6 +159,7 @@ func (g *ComponentGenerator) GenerateWorker(name string) error {
 		Topic:         lower + ".event",
 		MessageQueue:  broker,
 		FeatureImport: g.manifest.Module + "/" + res.Dir,
+		WorkerImport:  g.manifest.Module + "/" + root,
 	}
 
 	rabbit := broker == rabbitmq
@@ -167,6 +169,7 @@ func (g *ComponentGenerator) GenerateWorker(name string) error {
 		// Shared transport + entry points — written only when absent.
 		{"skel/worker/handler.go.tmpl", filepath.Join(root, "handler.go"), true},
 		{"skel/worker/worker.go.tmpl", filepath.Join(root, "worker.go"), true},
+		{"skel/worker/policy.go.tmpl", filepath.Join(root, "policy.go"), true},
 		{consumer, filepath.Join(root, "consumer.go"), true},
 		{"skel/worker/cmd_worker.go.tmpl", "cmd/worker.go", true},
 		// app/worker.go boots through the DI graph (di.InitializeWorker), so it

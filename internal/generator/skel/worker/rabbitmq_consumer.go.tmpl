@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -9,36 +10,57 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
+const (
+	deadLetterExchangeSuffix = ".dlx"
+	deadLetterQueueSuffix    = ".dlq"
+	defaultPrefetch          = 10
+)
+
+// RabbitMQOptions is the queue topology; pass your config's values so the
+// worker binds the exchange the publisher writes to.
+type RabbitMQOptions struct {
+	Exchange string
+	Queue    string
+	Prefetch int
+}
+
 // rabbitmqConsumer adapts an AMQP channel to the worker.Consumer port.
 //
-// Wire shape: one durable topic exchange + one queue bound to each topic
-// routing key. Manual ack — nack-with-requeue on handler error so the broker
-// redelivers. exchange/queue are passed in (not read from a config struct) so
-// this consumer stays decoupled from your project's config shape.
+// Wire shape: one durable topic exchange (shared with the publisher) + one
+// durable queue bound to every handled topic,
+// so replicas share it and the broker round-robins delivery. Parked messages
+// are nacked without requeue and the queue's x-dead-letter-exchange routes
+// them to <exchange>.dlx, whose only queue is <queue>.dlq.
 type rabbitmqConsumer struct {
 	ch       *amqp.Channel
 	exchange string
 	queue    string
+	prefetch int
 	log      *logger.Logger
 }
 
-func NewRabbitMQConsumer(ch *amqp.Channel, exchange, queue string, log *logger.Logger) Consumer {
-	return &rabbitmqConsumer{ch: ch, exchange: exchange, queue: queue, log: log}
+// NewRabbitMQConsumer wraps the channel opened by your infrastructure/pubsub
+// layer.
+func NewRabbitMQConsumer(ch *amqp.Channel, opts RabbitMQOptions, log *logger.Logger) Consumer {
+	return &rabbitmqConsumer{ch: ch, exchange: opts.Exchange, queue: opts.Queue, prefetch: opts.Prefetch, log: log}
 }
 
 func (c *rabbitmqConsumer) Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error {
-	if err := c.ch.ExchangeDeclare(c.exchange, amqp.ExchangeTopic, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("rabbitmq: declare exchange: %w", err)
+	if err := c.declare(topics); err != nil {
+		return err
 	}
-	if _, err := c.ch.QueueDeclare(c.queue, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("rabbitmq: declare queue %q: %w", c.queue, err)
+	prefetch := c.prefetch
+	if prefetch <= 0 {
+		prefetch = defaultPrefetch
 	}
-	for _, t := range topics {
-		if err := c.ch.QueueBind(c.queue, t, c.exchange, false, nil); err != nil {
-			return fmt.Errorf("rabbitmq: bind %q→%q: %w", c.queue, t, err)
-		}
+	// Without Qos the broker pushes the whole backlog at once and a slow
+	// handler holds every message unacked.
+	if err := c.ch.Qos(prefetch, 0, false); err != nil {
+		return fmt.Errorf("rabbitmq: qos: %w", err)
 	}
-
+	// A channel or connection error closes the channel and would otherwise
+	// just close deliveries; surface it so RunWorker exits non-zero.
+	closed := c.ch.NotifyClose(make(chan *amqp.Error, 1))
 	deliveries, err := c.ch.ConsumeWithContext(ctx, c.queue, "", false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("rabbitmq: consume %q: %w", c.queue, err)
@@ -47,19 +69,60 @@ func (c *rabbitmqConsumer) Subscribe(ctx context.Context, topics []string, dispa
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
+		case cerr := <-closed:
+			if cerr == nil {
+				return ErrConsumerClosed
+			}
+			return fmt.Errorf("%w: %w", ErrConsumerClosed, cerr)
 		case d, ok := <-deliveries:
 			if !ok {
-				return nil
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return ErrConsumerClosed
 			}
 			c.handle(ctx, d, dispatch)
 		}
 	}
 }
 
-// handle dispatches one delivery and acks or nacks it. A dispatch error
-// requeues the message so another replica (or the next redelivery) gets a
-// shot; switch to a DLQ in production. The worker already logged the failure.
+// declare sets up the topology so the worker boots cleanly even when the
+// publisher has not run yet: the shared exchange, the dead-letter exchange
+// and queue, and the work queue that dead-letters into them.
+func (c *rabbitmqConsumer) declare(topics []string) error {
+	dlx := c.exchange + deadLetterExchangeSuffix
+	dlq := c.queue + deadLetterQueueSuffix
+	if err := c.ch.ExchangeDeclare(c.exchange, amqp.ExchangeTopic, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare exchange %q: %w", c.exchange, err)
+	}
+	if err := c.ch.ExchangeDeclare(dlx, amqp.ExchangeFanout, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare exchange %q: %w", dlx, err)
+	}
+	if _, err := c.ch.QueueDeclare(dlq, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare queue %q: %w", dlq, err)
+	}
+	if err := c.ch.QueueBind(dlq, "", dlx, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: bind %q→%q: %w", dlq, dlx, err)
+	}
+	// Queue arguments are fixed at creation: a queue declared before this
+	// argument existed must be deleted once so the dead-letter exchange
+	// takes effect.
+	args := amqp.Table{"x-dead-letter-exchange": dlx}
+	if _, err := c.ch.QueueDeclare(c.queue, true, false, false, false, args); err != nil {
+		return fmt.Errorf("rabbitmq: declare queue %q: %w", c.queue, err)
+	}
+	for _, t := range topics {
+		if err := c.ch.QueueBind(c.queue, t, c.exchange, false, nil); err != nil {
+			return fmt.Errorf("rabbitmq: bind %q→%q: %w", c.queue, t, err)
+		}
+	}
+	return nil
+}
+
+// handle dispatches one delivery and settles it: ack when handled, nack
+// without requeue (to the dead-letter exchange) when parked, nack with
+// requeue when abandoned on shutdown so another replica gets it.
 func (c *rabbitmqConsumer) handle(ctx context.Context, d amqp.Delivery, dispatch DispatchFunc) {
 	msg := Message{
 		Topic:       d.RoutingKey,
@@ -69,14 +132,18 @@ func (c *rabbitmqConsumer) handle(ctx context.Context, d amqp.Delivery, dispatch
 		DeliveryTag: d.DeliveryTag,
 		MessageID:   d.MessageId,
 	}
-	if dispErr := dispatch(ctx, msg); dispErr != nil {
-		if nackErr := d.Nack(false, true); nackErr != nil {
-			c.log.Error("rabbitmq: nack failed", "delivery_tag", d.DeliveryTag, "err", nackErr)
-		}
-		return
+	err := dispatch(ctx, msg)
+	var settle error
+	switch {
+	case err == nil:
+		settle = d.Ack(false)
+	case errors.Is(err, ErrParked):
+		settle = d.Nack(false, false)
+	default:
+		settle = d.Nack(false, true)
 	}
-	if ackErr := d.Ack(false); ackErr != nil {
-		c.log.Error("rabbitmq: ack failed", "delivery_tag", d.DeliveryTag, "err", ackErr)
+	if settle != nil {
+		c.log.Error("rabbitmq: settle failed", "delivery_tag", d.DeliveryTag, "err", settle)
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
-{{ if and .HasMessageQueue (or .HasHTTP .HasWorker)}}
+{{ if and (eq .MessageQueue "kafka") (or .HasHTTP .HasWorker)}}
 	"{{.ModuleName}}/internal/adapter/pubsub"
 {{- end}}
 {{- if and (eq .Database "postgres") (or .HasHTTP .HasWorker)}}
@@ -26,9 +26,6 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/config"
 	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/infrastructure/logger"
-{{- if eq .MessageQueue "rabbitmq"}}
-	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
-{{- end}}
 	infrasec "{{.ModuleName}}/internal/infrastructure/security"
 {{- if or .HasHTTP .HasGRPC}}
 	"{{.ModuleName}}/internal/infrastructure/server"
@@ -101,7 +98,7 @@ func infraModule() fx.Option {
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
 		provideRabbitMQConfig,
-		infraPubsub.NewRabbitMQConnection,
+		provideRabbitMQConnection,
 {{- end}}
 	)
 }
@@ -152,6 +149,7 @@ func workerModule() fx.Option {
 {{- end}}
 		worker.NewWorker,
 		provideWorkerHandlers,
+		provideWorkerPolicy,
 		workeruser.NewHandler,
 	)
 }
@@ -176,8 +174,11 @@ func adapterModule() fx.Option {
 {{- if not .HasDatabase}}
 		fx.Annotate(memoryrepo.NewUserRepository, fx.As(new(domain.UserRepository))),
 {{- end}}
-{{- if .HasMessageQueue}}
+{{- if eq .MessageQueue "kafka"}}
 		fx.Annotate(pubsub.NewPublisher, fx.As(new(domain.UserPublisher))),
+{{- end}}
+{{- if eq .MessageQueue "rabbitmq"}}
+		fx.Annotate(providePublisher, fx.As(new(domain.UserPublisher))),
 {{- end}}
 	)
 }

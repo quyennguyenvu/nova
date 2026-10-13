@@ -4,6 +4,7 @@ import (
 {{- if eq .MessageQueue "rabbitmq"}}
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
 {{- end}}
 	"{{.ModuleName}}/internal/transport/worker"
@@ -18,12 +19,20 @@ func provideWorkerHandlers({{.Lower}}Handler *{{.Lower}}worker.Handler) []worker
 		{{.Lower}}Handler,
 	}
 }
+
+// provideWorkerPolicy bounds each message's handling. The zero value takes
+// the transport's defaults; map a worker config section onto it when you
+// add one.
+func provideWorkerPolicy() worker.Policy {
+	return worker.Policy{}
+}
 {{- if eq .MessageQueue "rabbitmq"}}
 
-// provideRabbitMQConsumer constructs the worker consumer over the AMQP channel.
-// The exchange/queue are scaffold defaults derived from the feature name — set
-// them to match your broker topology.
-func provideRabbitMQConsumer(ch *amqp.Channel, log *logger.Logger) worker.Consumer {
-	return worker.NewRabbitMQConsumer(ch, "{{.Lower}}.exchange", "{{.Lower}}.queue", log)
+// provideRabbitMQConsumer constructs the worker consumer over the AMQP channel
+// with the exchange, queue and prefetch from config, so the worker binds the
+// same exchange the publisher writes to.
+func provideRabbitMQConsumer(ch *amqp.Channel, cfg *config.RabbitMQConfig, log *logger.Logger) worker.Consumer {
+	opts := worker.RabbitMQOptions{Exchange: cfg.Exchange, Queue: cfg.Queue, Prefetch: cfg.Prefetch}
+	return worker.NewRabbitMQConsumer(ch, opts, log)
 }
 {{- end}}

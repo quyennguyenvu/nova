@@ -9,7 +9,7 @@ Behavioral guidelines (adapted from [andrej-karpathy-skills](https://github.com/
 1. **Think before coding.** Don't assume, don't hide confusion, surface tradeoffs. State assumptions explicitly; if multiple interpretations exist, present them instead of picking silently; if a simpler approach exists, say so.
 2. **Simplicity first.** Minimum code that solves the problem, nothing speculative — no unrequested features, no abstractions for single-use code, no error handling for impossible cases. If a senior engineer would call it overcomplicated, rewrite it smaller.
 3. **Surgical changes.** Every changed line should trace to the request. Don't refactor or reformat adjacent code; match the surrounding template/style even if you'd do it differently. Remove only the imports/vars/funcs your own change orphaned; flag pre-existing dead code rather than deleting it unasked.
-4. **Goal-driven execution.** Turn the task into a verifiable goal and loop until it passes. Here that means `make lint` and `make test` stay green, and generator/template changes are additionally proven by `make test-all`, the render-then-`go vet` matrix in [internal/generator/generator_test.go](internal/generator/generator_test.go) plus `TestGeneratedProjectBootstrap`, which runs the real `make gen` → `go build` → `golangci-lint run` sequence on five representative projects (sequential; skips when a tool is missing) — add the matrix case in the same change, not after. "Fix the bug" → write a failing test first, then make it pass.
+4. **Goal-driven execution.** Turn the task into a verifiable goal and loop until it passes. Here that means `make lint` and `make test` stay green, and generator/template changes are additionally proven by `make test-all`, the render-then-`go vet` matrix in [internal/generator/generator_test.go](internal/generator/generator_test.go) plus `TestGeneratedProjectBootstrap`, which runs the real `make gen` → `go build` → `golangci-lint run` sequence on six representative projects (sequential; skips when a tool is missing) — add the matrix case in the same change, not after. "Fix the bug" → write a failing test first, then make it pass.
 
 ## Project
 
@@ -26,7 +26,7 @@ Module is `github.com/quyennguyenvu/nova`, binary is `bin/nova`. Requires Go 1.2
 make build            # go build -o bin/nova .
 make rebuild          # clean + build
 make test             # go test -short ./... (fast; skips the render-then-vet matrix)
-make test-all         # full suite: 34-case vet matrix (2 at a time) + 5 real-toolchain bootstraps (~2.5 min warm cache; <2.5 GB)
+make test-all         # full suite: 36-case vet matrix (2 at a time) + 6 real-toolchain bootstraps (~5 min warm cache; <2.5 GB)
 make lint             # GOGC=50 golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...

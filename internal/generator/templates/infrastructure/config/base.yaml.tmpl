@@ -134,13 +134,28 @@ kafka:
   # consumer_group_id is required in worker mode. Group membership controls
   # how partitions are distributed across replicas.
   consumer_group_id: "{{.ProjectName}}-worker"
-  user_created_topic: "user.created"
 {{- end}}
 
 {{- if eq .MessageQueue "rabbitmq"}}
 
 rabbitmq:
   url: "amqp://guest:guest@localhost:5672/" # override via RABBITMQ_URL in production
+  # The publisher and the worker share this topic exchange: a message is
+  # routed by its topic name to the worker's queue.
   exchange: "{{.ProjectName}}.events"
-  user_created_queue: "{{.ProjectName}}.user.created"
+  # Worker mode only: one durable queue bound to every handled topic so
+  # replicas share it; "<queue>.dlq" collects parked messages.
+  queue: "{{.ProjectName}}.worker"
+  prefetch: 10
+{{- end}}
+
+{{- if .HasWorker}}
+
+worker:
+  # Each delivery gets max_attempts tries, retry_backoff apart (doubling),
+  # each bounded by handler_timeout; after that it is parked on the
+  # dead-letter topic/queue so the stream keeps moving.
+  handler_timeout: 30s
+  max_attempts: 3
+  retry_backoff: 500ms
 {{- end}}

@@ -29,7 +29,7 @@ Phases 4 and 5 are independent of each other. Phases 2 and 3 are independent of 
 - Resource rule (CLAUDE.md "Resource limits"): heavy toolchain commands run one at a time from the main thread, never inside parallel subagents; never `go clean -cache`.
 - Templates receive `*config.ProjectConfig`; condition on its `Has*`/`Use*` helpers; add a helper to `internal/config/config.go` before using it in templates or `buildFileList()`.
 - Every change to a `*_handler`, `*_router`, `*_middleware`, `*_registrar`, or `*_http` template must be applied to all four framework variants (fiber, gin, chi, echo).
-- `templates/app/worker.go.tmpl` and `skel/worker/app_worker.go.tmpl` must stay byte-identical (`TestWorkerAppTemplatesIdentical`); likewise `cmd/worker.go.tmpl` and `skel/worker/cmd_worker.go.tmpl`.
+- `templates/app/worker.go.tmpl` and `skel/worker/app_worker.go.tmpl` must stay byte-identical, likewise `cmd/worker.go.tmpl` and `skel/worker/cmd_worker.go.tmpl` and `transport/worker/policy.go.tmpl` and `skel/worker/policy.go.tmpl` (`TestWorkerTemplatesIdentical`).
 - Where a doc in `docs/` and a template disagree, the template wins and the doc is fixed in the same change.
 - Markdown edits must pass markdownlint with the repo `.markdownlint.json`; no hard-wrapped prose.
 - Commits only via `/grimoire-core:commit` after explicit confirmation; no `git commit`, no `--amend`, no Claude co-author trailer.
@@ -94,7 +94,7 @@ Plan shape: logger `emit` type-switches `error` to `AnErr` (or add `Err(error)` 
 
 Exit criteria: a debuggability scorecard (where/when/what/who/why × HTTP/worker/gRPC) is "ok" everywhere except gRPC "who", verified by asserting field presence in the matrix (`TestLoggingFields`) and by one manual run per transport.
 
-## Phase 4: HTTP transport parity and security
+## Phase 4: HTTP transport parity and security (done 2026-10-13, commit `b02a3c0`)
 
 Detailed plan: [2026-10-12-phase4-http-parity-security.md](2026-10-12-phase4-http-parity-security.md).
 
@@ -117,6 +117,8 @@ Plan shape: a `trusted_proxies` CIDR list in config honored per framework; pass-
 Exit criteria: the parity table from the review has no "no"/"not set"/"missing" cells; `TestHTTPParity` green across fiber/gin/chi/echo.
 
 ## Phase 5: worker reliability and messaging
+
+Detailed plan: [2026-10-13-phase5-worker-reliability-messaging.md](2026-10-13-phase5-worker-reliability-messaging.md).
 
 Findings:
 

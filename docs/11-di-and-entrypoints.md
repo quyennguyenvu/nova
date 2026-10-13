@@ -109,7 +109,7 @@ Five things this shape gets right, all of which are easy to get wrong:
 4. **`errChan` is buffered (size 1)** so the goroutine can't leak by blocking on a send after the `select` has already returned via `ctx.Done()`.
 5. **`defer cleanup()` before anything can fail.** Registered immediately after `Initialize*` succeeds, so every return path — signal, startup error, panic — runs it.
 
-`RunWorker` mirrors it exactly (with `worker.Start(ctx)` / `worker.Stop()` and `context.Canceled` as its benign error), so switching transports doesn't mean learning a second lifecycle. The file is byte-identical to the one `nova add worker` generates — a nova test pins that.
+`RunWorker` mirrors it (with `worker.Start(ctx)` / `worker.Stop()`), with two differences a consumer needs. A consume loop that returns while ctx is still live — nil, or `worker.ErrConsumerClosed` because the broker ended the subscription — is fatal: nothing resubscribes in-process, so it logs and exits non-zero for the orchestrator to restart. And on a signal it waits up to `drainTimeout` (30s) for the loop to finish the message in flight before `Stop()`, so the final ack or offset commit lands instead of being cut off by the consumer closing. The file is byte-identical to the one `nova add worker` generates — a nova test pins that.
 
 ## di/app.go — per-entry-point bundles
 
@@ -339,6 +339,8 @@ ctx cancelled → RunHTTPServer returns → defer cleanup() runs
     ▼
 Process exits cleanly
 ```
+
+The worker's chain is the same idea: the consumer group (or channel) closes first, then the Kafka producer or RabbitMQ connection, then the pool, then tracing — and `RunWorker` has already waited for the consume loop before any of it runs.
 
 Reverse order is what makes this correct rather than just tidy: the server stops accepting requests _before_ the pool it depends on closes, so no in-flight request meets a closed pool. You get this for free — but only if every constructor that owns a resource returns its cleanup. A constructor that closes nothing leaks it, and no test will tell you.
 

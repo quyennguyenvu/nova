@@ -12,6 +12,7 @@ import (
 // column lands as opaque bytes (per the override in mysql_sqlc.yaml).
 func UserAuditToCreateParams(e *domain.UserAuditEntry) dbgen.RecordUserAuditParams {
 	return dbgen.RecordUserAuditParams{
+		EventID:    e.EventID,
 		UserID:     e.UserID,
 		EventType:  e.EventType,
 		Payload:    json.RawMessage(e.Payload),
@@ -25,6 +26,7 @@ func UserAuditToCreateParams(e *domain.UserAuditEntry) dbgen.RecordUserAuditPara
 func UserAuditToEntity(row dbgen.UserAuditLog) *domain.UserAuditEntry {
 	return &domain.UserAuditEntry{
 		ID:         row.ID,
+		EventID:    row.EventID,
 		UserID:     row.UserID,
 		EventType:  row.EventType,
 		Payload:    []byte(row.Payload),

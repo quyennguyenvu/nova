@@ -10,12 +10,13 @@ import (
 
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
 )
 
 const eventTypeUserCreated = "user.created"
 
-// Service implements the worker usecase. It never logs — the worker's
-// transport layer logs per-message and the access-style audit row IS the
+// Service implements the worker usecase. It logs only the duplicate case —
+// the worker's transport layer logs per message and the audit row IS the
 // log for this code path.
 type Service struct {
 	repo domain.UserAuditRepository
@@ -25,19 +26,26 @@ func NewService(repo domain.UserAuditRepository) *Service {
 	return &Service{repo: repo}
 }
 
-// RecordUserCreated writes the inbound user.created event to user_audit_log.
-// Idempotency is NOT enforced here — the broker may redeliver, so consumers
-// that need exactly-once should add UNIQUE(user_id, event_type) on the table
-// and translate the duplicate-key error into a no-op here.
+// RecordUserCreated writes the inbound user.created event to user_audit_log
+// once: the broker delivers at least once, and a redelivery (same EventID)
+// is a no-op.
 func (s *Service) RecordUserCreated(ctx context.Context, input UserCreatedInput) error {
 	entry := &domain.UserAuditEntry{
+		EventID:    input.EventID,
 		UserID:     input.UserID,
 		EventType:  eventTypeUserCreated,
 		Payload:    input.RawPayload,
 		OccurredAt: input.OccurredAt,
 	}
-	if err := s.repo.RecordCreated(ctx, entry); err != nil {
-		return errors.Wrapf(err, "audit: record user.created user_id=%d", input.UserID)
+	err := s.repo.RecordCreated(ctx, entry)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, domain.ErrEventAlreadyRecorded):
+		// Worth one line so a redelivery storm is visible, then done.
+		logctx.From(ctx).Info("audit: duplicate delivery ignored", "event_id", input.EventID)
+		return nil
+	default:
+		return errors.Wrapf(err, "audit: record user.created event_id=%s", input.EventID)
 	}
-	return nil
 }

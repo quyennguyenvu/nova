@@ -6,6 +6,7 @@ import "time"
 // It mirrors the wire DTO the publisher emits; the worker's handler maps
 // the inbound JSON onto this struct before calling the service.
 type UserCreatedInput struct {
+	EventID    string // producer-minted; the row's idempotency key
 	UserID     int64
 	Email      string
 	Name       string

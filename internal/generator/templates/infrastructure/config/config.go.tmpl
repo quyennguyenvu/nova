@@ -61,6 +61,9 @@ type Config struct {
 {{- if eq .MessageQueue "rabbitmq"}}
 	RabbitMQ   RabbitMQConfig `{{.ConfigFormat}}:"rabbitmq"`
 {{- end}}
+{{- if .HasWorker}}
+	Worker     WorkerConfig   `{{.ConfigFormat}}:"worker"`
+{{- end}}
 }
 
 // LogConfig holds logging configuration.
@@ -262,25 +265,35 @@ type ElasticsearchConfig struct {
 
 // KafkaConfig holds Kafka configuration.
 //
-// ConsumerGroupID is only consumed when the binary runs in worker mode
-// (Transport=worker); HTTP-only deployments can leave it empty.
+// ConsumerGroupID is only read in worker mode (Transport=worker); HTTP-only
+// deployments can leave it empty. Topic names are wire contracts owned by the
+// handlers and the publisher, not configuration.
 type KafkaConfig struct {
 	Brokers          []string `{{.ConfigFormat}}:"brokers"            env:"KAFKA_BROKERS" env-separator:","`
 	ProducerRetryMax int      `{{.ConfigFormat}}:"producer_retry_max" env:"KAFKA_PRODUCER_RETRY_MAX"`
 	ConsumerGroupID  string   `{{.ConfigFormat}}:"consumer_group_id"  env:"KAFKA_CONSUMER_GROUP_ID"`
-	UserCreatedTopic string   `{{.ConfigFormat}}:"user_created_topic" env:"KAFKA_USER_CREATED_TOPIC"`
 }
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
 
-// RabbitMQConfig holds RabbitMQ configuration.
-//
-// UserCreatedQueue + Exchange are only consumed in worker mode; HTTP-only
-// deployments can leave them empty.
+// RabbitMQConfig holds RabbitMQ configuration. Exchange is shared by the
+// publisher and the worker, so a message published here is routable to the
+// queue declared there; Queue and Prefetch are only read in worker mode.
 type RabbitMQConfig struct {
-	URL              string `{{.ConfigFormat}}:"url"                env:"RABBITMQ_URL"`
-	Exchange         string `{{.ConfigFormat}}:"exchange"           env:"RABBITMQ_EXCHANGE"`
-	UserCreatedQueue string `{{.ConfigFormat}}:"user_created_queue" env:"RABBITMQ_USER_CREATED_QUEUE"`
+	URL      string `{{.ConfigFormat}}:"url"      env:"RABBITMQ_URL"`
+	Exchange string `{{.ConfigFormat}}:"exchange" env:"RABBITMQ_EXCHANGE"`
+	Queue    string `{{.ConfigFormat}}:"queue"    env:"RABBITMQ_QUEUE"`
+	Prefetch int    `{{.ConfigFormat}}:"prefetch" env:"RABBITMQ_PREFETCH"`
+}
+{{- end}}
+{{- if .HasWorker}}
+
+// WorkerConfig bounds how the consumer worker handles one message; see
+// transport/worker.Policy for what each field means.
+type WorkerConfig struct {
+	HandlerTimeout time.Duration `{{.ConfigFormat}}:"handler_timeout" env:"WORKER_HANDLER_TIMEOUT"`
+	MaxAttempts    int           `{{.ConfigFormat}}:"max_attempts"    env:"WORKER_MAX_ATTEMPTS"`
+	RetryBackoff   time.Duration `{{.ConfigFormat}}:"retry_backoff"   env:"WORKER_RETRY_BACKOFF"`
 }
 {{- end}}
 
@@ -351,7 +364,13 @@ func (c *Config) Summary() []any {
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
 	// The RabbitMQ URL carries credentials and is never logged.
-	fields = append(fields, "rabbitmq_exchange", c.RabbitMQ.Exchange)
+	fields = append(fields, "rabbitmq_exchange", c.RabbitMQ.Exchange, "rabbitmq_queue", c.RabbitMQ.Queue)
+{{- end}}
+{{- if .HasWorker}}
+	fields = append(fields,
+		"worker_max_attempts", c.Worker.MaxAttempts,
+		"worker_handler_timeout", c.Worker.HandlerTimeout,
+	)
 {{- end}}
 	return fields
 }

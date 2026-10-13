@@ -19,8 +19,8 @@ import (
 // kafka_consumer.go / rabbitmq_consumer.go (one is rendered per project per
 // MessageQueue choice). Subscribe blocks until ctx is cancelled or an
 // unrecoverable error surfaces; dispatch is invoked per received message.
-// Return nil from dispatch to ack; a non-nil error nacks (broker-specific:
-// Kafka surfaces back to sarama for retry, RabbitMQ nacks with requeue).
+// dispatch returns nil to ack, an error wrapping ErrParked to dead-letter and
+// ack, or the ctx error to leave the message for redelivery.
 type Consumer interface {
 	Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error
 	Close() error
@@ -50,19 +50,21 @@ type DispatchFunc func(ctx context.Context, msg Message) error
 const HeaderRequestID = "x-request-id"
 
 // Worker owns one Consumer and a topic-keyed Handler set. The lifecycle is
-// driven by Start(ctx) (blocks) / Stop() (closes the consumer).
+// driven by Start(ctx) (blocks) / Stop() (closes the consumer); policy bounds
+// every dispatch (see policy.go).
 type Worker struct {
 	consumer Consumer
 	handlers map[string]Handler
 	log      observability.Logger
+	policy   Policy
 }
 
-func NewWorker(c Consumer, log observability.Logger, handlers []Handler) *Worker {
+func NewWorker(c Consumer, log observability.Logger, handlers []Handler, policy Policy) *Worker {
 	m := make(map[string]Handler, len(handlers))
 	for _, h := range handlers {
 		m[h.Topic()] = h
 	}
-	return &Worker{consumer: c, handlers: m, log: log}
+	return &Worker{consumer: c, handlers: m, log: log, policy: policy.withDefaults()}
 }
 
 // Topics returns the set of topics this worker subscribes to — read by the
@@ -89,9 +91,10 @@ func (w *Worker) Stop() error {
 	return w.consumer.Close()
 }
 
-// dispatch routes one message to its handler and emits exactly one outcome
-// line carrying the broker position, the producer's correlation ids and the
-// handler duration — the worker-side counterpart of the HTTP access log.
+// dispatch routes one message to its handler under the policy and emits
+// exactly one outcome line carrying the broker position, the producer's
+// correlation ids, the attempts and the duration — the worker-side
+// counterpart of the HTTP access log.
 func (w *Worker) dispatch(ctx context.Context, msg Message) error {
 	h, ok := w.handlers[msg.Topic]
 	if !ok {
@@ -130,14 +133,19 @@ func (w *Worker) dispatch(ctx context.Context, msg Message) error {
 	ctx = logctx.With(ctx, scoped)
 
 	start := time.Now()
-	err := h.Handle(ctx, msg.Payload)
-	fields := []any{"duration_ms", time.Since(start).Milliseconds()}
-	if err != nil {
-		scoped.Error("worker: message failed", append(fields, errors.LogFields(err)...)...)
-		return err
+	attempts, err := w.run(ctx, h, msg.Payload)
+	fields := []any{"duration_ms", time.Since(start).Milliseconds(), "attempts", attempts}
+	switch {
+	case err == nil:
+		scoped.Info("worker: message handled", fields...)
+	case errors.Is(err, ErrParked):
+		scoped.Error("worker: message parked", append(fields, errors.LogFields(err)...)...)
+	default:
+		// Shutdown mid-handling: the consumer leaves the message unacked so
+		// the broker redelivers it to the next session.
+		scoped.Warn("worker: message abandoned", append(fields, errors.LogFields(err)...)...)
 	}
-	scoped.Info("worker: message handled", fields...)
-	return nil
+	return err
 }
 
 func traceIDOr(sc trace.SpanContext) string {

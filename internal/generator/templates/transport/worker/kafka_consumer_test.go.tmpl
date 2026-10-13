@@ -1,0 +1,111 @@
+package worker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/IBM/sarama"
+	"github.com/IBM/sarama/mocks"
+
+	"{{.ModuleName}}/pkg/observability"
+)
+
+var errBroker = errors.New("broker down")
+
+type fakeSession struct {
+	ctx    context.Context
+	marked []*sarama.ConsumerMessage
+}
+
+func (*fakeSession) Claims() map[string][]int32              { return nil }
+func (*fakeSession) MemberID() string                         { return "" }
+func (*fakeSession) GenerationID() int32                      { return 0 }
+func (*fakeSession) MarkOffset(string, int32, int64, string)  {}
+func (*fakeSession) Commit()                                  {}
+func (*fakeSession) ResetOffset(string, int32, int64, string) {}
+func (s *fakeSession) Context() context.Context               { return s.ctx }
+
+func (s *fakeSession) MarkMessage(m *sarama.ConsumerMessage, _ string) {
+	s.marked = append(s.marked, m)
+}
+
+func expectDeadLetter(t *testing.T, producer *mocks.SyncProducer, source string) {
+	t.Helper()
+	producer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(func(pm *sarama.ProducerMessage) error {
+		if pm.Topic != "user.created"+deadLetterSuffix {
+			return fmt.Errorf("dead-letter topic = %q", pm.Topic)
+		}
+		got := map[string]string{}
+		for _, h := range pm.Headers {
+			got[string(h.Key)] = string(h.Value)
+		}
+		if got[HeaderDeadLetterSource] != source || got[HeaderDeadLetterReason] == "" || got["x-request-id"] != "r1" {
+			return fmt.Errorf("dead-letter headers = %v", got)
+		}
+		return nil
+	})
+}
+
+// TestKafkaSettle pins the three outcomes a dispatch can have and how each is
+// settled: handled → marked; parked → copied to the dead-letter topic, then
+// marked; abandoned (ctx ended) → left unmarked for redelivery.
+func TestKafkaSettle(t *testing.T) {
+	cases := []struct {
+		name        string
+		dispatchErr error
+		deadLetter  bool
+		wantMarked  bool
+	}{
+		{"handled is marked", nil, false, true},
+		{"parked is dead-lettered then marked", ErrParked, true, true},
+		{"abandoned stays unmarked", context.Canceled, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			producer := mocks.NewSyncProducer(t, nil)
+			if tc.deadLetter {
+				expectDeadLetter(t, producer, "user.created/2/7")
+			}
+			c := &kafkaConsumer{producer: producer, log: observability.Nop()}
+			h := &kafkaSessionHandler{
+				dispatch:   func(context.Context, Message) error { return tc.dispatchErr },
+				deadLetter: c.deadLetter,
+			}
+			sess := &fakeSession{ctx: t.Context()}
+			reqID := &sarama.RecordHeader{Key: []byte("x-request-id"), Value: []byte("r1")}
+			m := &sarama.ConsumerMessage{
+				Topic: "user.created", Partition: 2, Offset: 7, Key: []byte("1"), Value: []byte(`{}`),
+				Headers: []*sarama.RecordHeader{reqID},
+			}
+			if err := h.settle(sess, m); err != nil {
+				t.Fatalf("settle: %v", err)
+			}
+			if marked := len(sess.marked) == 1; marked != tc.wantMarked {
+				t.Errorf("marked = %v, want %v", marked, tc.wantMarked)
+			}
+			if err := producer.Close(); err != nil {
+				t.Errorf("dead-letter expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestKafkaSettleKeepsMessageWhenDeadLetterFails(t *testing.T) {
+	producer := mocks.NewSyncProducer(t, nil)
+	producer.ExpectSendMessageAndFail(errBroker)
+	c := &kafkaConsumer{producer: producer, log: observability.Nop()}
+	h := &kafkaSessionHandler{
+		dispatch:   func(context.Context, Message) error { return ErrParked },
+		deadLetter: c.deadLetter,
+	}
+	sess := &fakeSession{ctx: t.Context()}
+	err := h.settle(sess, &sarama.ConsumerMessage{Topic: "user.created", Value: []byte(`{}`)})
+	if !errors.Is(err, errBroker) {
+		t.Fatalf("settle error = %v, want the producer error", err)
+	}
+	if len(sess.marked) != 0 {
+		t.Error("message was marked although the dead-letter write failed")
+	}
+}

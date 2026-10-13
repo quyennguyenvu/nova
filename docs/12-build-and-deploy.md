@@ -193,6 +193,8 @@ Every dependency declares a healthcheck (`pg_isready`, `mysqladmin ping`, `redis
 
 Host ports are published for each dependency so host tooling (`make migrate-up`, k6, the kafka CLI) works against the same stack. Kafka runs single-node KRaft with dual listeners (`kafka:9092` in-network, `localhost:29092` from the host) for exactly that reason.
 
+Dead letters need a home the broker knows about. Compose enables Kafka topic auto-creation, so the worker's `<topic>.dlq` topics appear on first use; in production create them alongside the topics themselves. RabbitMQ declares its `<exchange>.dlx` exchange and `<queue>.dlq` queue at worker start, but queue arguments are fixed at creation: a work queue declared by an older build (without `x-dead-letter-exchange`) must be deleted once before the new worker can declare it.
+
 Data lives in named volumes, so `docker compose down` keeps it and `down -v` discards it.
 
 ## .github/workflows/ci.yaml — four jobs

@@ -1,0 +1,125 @@
+package worker
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"{{.ModuleName}}/pkg/observability"
+)
+
+var errTransient = errors.New("transient")
+
+// scriptedHandler answers each attempt from results in order, repeating the
+// last entry; an empty script succeeds. block waits for ctx on every attempt.
+type scriptedHandler struct {
+	results []error
+	block   bool
+	panics  bool
+	calls   int
+}
+
+func (*scriptedHandler) Topic() string { return "t" }
+
+func (h *scriptedHandler) Handle(ctx context.Context, _ []byte) error {
+	h.calls++
+	if h.panics {
+		panic("boom")
+	}
+	if h.block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if len(h.results) == 0 {
+		return nil
+	}
+	return h.results[min(h.calls-1, len(h.results)-1)]
+}
+
+// cancelOnceHandler cancels the dispatch ctx from inside the first attempt
+// and fails it: the shape of a shutdown arriving mid-message.
+type cancelOnceHandler struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (*cancelOnceHandler) Topic() string { return "t" }
+
+func (h *cancelOnceHandler) Handle(context.Context, []byte) error {
+	h.calls++
+	h.cancel()
+	return errTransient
+}
+
+func fastPolicy() Policy {
+	return Policy{HandlerTimeout: 50 * time.Millisecond, MaxAttempts: 3, RetryBackoff: time.Millisecond}
+}
+
+func TestDispatchOutcomes(t *testing.T) {
+	cases := []struct {
+		name      string
+		handler   *scriptedHandler
+		wantErr   error // sentinel the parked error must wrap; nil for success
+		wantCalls int
+	}{
+		{"success is handled first time", &scriptedHandler{}, nil, 1},
+		{"transient failure retries then succeeds", &scriptedHandler{results: []error{errTransient, nil}}, nil, 2},
+		{"exhausted attempts park", &scriptedHandler{results: []error{errTransient}}, errTransient, 3},
+		{"poison parks without retry", &scriptedHandler{results: []error{Poison(errTransient)}}, ErrPoison, 1},
+		{"timeout counts as a failed attempt", &scriptedHandler{block: true}, context.DeadlineExceeded, 3},
+		{"panic is recovered and retried", &scriptedHandler{panics: true}, ErrHandlerPanic, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := NewWorker(nil, observability.Nop(), []Handler{tc.handler}, fastPolicy())
+			err := w.dispatch(t.Context(), Message{Topic: "t", Partition: -1})
+			if tc.wantErr == nil && err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			if tc.wantErr != nil && (!errors.Is(err, ErrParked) || !errors.Is(err, tc.wantErr)) {
+				t.Fatalf("dispatch error = %v, want ErrParked wrapping %v", err, tc.wantErr)
+			}
+			if tc.handler.calls != tc.wantCalls {
+				t.Errorf("handler called %d times, want %d", tc.handler.calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+func TestDispatchAbandonsOnShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	h := &cancelOnceHandler{cancel: cancel}
+	w := NewWorker(nil, observability.Nop(), []Handler{h}, Policy{MaxAttempts: 5, RetryBackoff: time.Hour})
+	err := w.dispatch(ctx, Message{Topic: "t", Partition: -1})
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrParked) {
+		t.Fatalf("dispatch error = %v, want context.Canceled and not parked", err)
+	}
+	if h.calls != 1 {
+		t.Errorf("handler called %d times, want 1 (no retry after shutdown)", h.calls)
+	}
+}
+
+func TestDispatchDropsUnknownTopic(t *testing.T) {
+	h := &scriptedHandler{}
+	w := NewWorker(nil, observability.Nop(), []Handler{h}, Policy{})
+	if err := w.dispatch(t.Context(), Message{Topic: "other", Partition: -1}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if h.calls != 0 {
+		t.Errorf("handler called %d times for an unknown topic, want 0", h.calls)
+	}
+}
+
+func TestPolicyZeroValueTakesDefaults(t *testing.T) {
+	got := NewWorker(nil, observability.Nop(), nil, Policy{}).policy
+	want := Policy{
+		HandlerTimeout: defaultHandlerTimeout,
+		MaxAttempts:    defaultMaxAttempts,
+		RetryBackoff:   defaultRetryBackoff,
+	}
+	if got != want {
+		t.Errorf("policy = %+v, want %+v", got, want)
+	}
+}

@@ -64,4 +64,14 @@ func provideWorkerHandlers(userHandler *workeruser.Handler) []worker.Handler {
 		userHandler,
 	}
 }
+
+// provideWorkerPolicy projects the worker config onto the transport's Policy
+// so transport/worker stays free of the config package.
+func provideWorkerPolicy(cfg *config.Config) worker.Policy {
+	return worker.Policy{
+		HandlerTimeout: cfg.Worker.HandlerTimeout,
+		MaxAttempts:    cfg.Worker.MaxAttempts,
+		RetryBackoff:   cfg.Worker.RetryBackoff,
+	}
+}
 {{- end}}

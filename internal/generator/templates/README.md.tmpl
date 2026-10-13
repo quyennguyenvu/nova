@@ -154,9 +154,11 @@ events emitted by an upstream publisher (e.g. a sibling project generated
 with `nova new --transport=http --queue={{.MessageQueue}}`). The current
 handler set:
 
-| Topic            | Handler                                        | Side effect                            |
-| ---------------- | ---------------------------------------------- | -------------------------------------- |
-| `user.created`   | `transport/worker/v1/user.Handler.Handle`      | Inserts a row into `user_audit_log`    |
+| Topic            | Handler                                        | Side effect                                        |
+| ---------------- | ---------------------------------------------- | -------------------------------------------------- |
+| `user.created`   | `transport/worker/v1/user.Handler.Handle`      | Inserts a row into `user_audit_log`, once per `eventId` |
+
+Every message gets `worker.max_attempts` tries, `worker.retry_backoff` apart (doubling), each under `worker.handler_timeout`; after that it is parked with the reason on {{if eq .MessageQueue "kafka"}}`<topic>.dlq`{{else}}`<queue>.dlq` (via the `<exchange>.dlx` exchange){{end}} and the stream moves on. Return `worker.Poison(err)` from a handler for input that can never succeed so it is parked at once; return a plain error for anything transient. A consumer that loses its subscription exits non-zero so the orchestrator restarts it.
 
 End-to-end demo:
 
@@ -166,7 +168,7 @@ End-to-end demo:
    `nova new {{.ProjectName}}-api --transport=http --http-framework=fiber --database={{.Database}} --queue={{.MessageQueue}}`.
 4. Run the publisher (`go run main.go api`) and the worker (`go run main.go worker`).
 5. `curl -X POST localhost:8080/api/v1/users -d '{"email":"a@b","name":"A","password":"hunter2-pass"}'`.
-6. `SELECT * FROM user_audit_log;` — see the inbound `user.created` row.
+6. `SELECT * FROM user_audit_log;` — see the inbound `user.created` row. Redeliver the same message and the second insert is ignored (`audit: duplicate delivery ignored` in the log).
 {{- end}}
 
 {{- if .HasHTTP}}

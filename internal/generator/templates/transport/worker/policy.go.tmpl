@@ -1,0 +1,111 @@
+package worker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// Policy bounds how one message is handled. The zero value takes the
+// defaults below, so a worker built without configuration still has a
+// deadline, a retry budget and a parking rule.
+type Policy struct {
+	// HandlerTimeout bounds each attempt; the handler's ctx expires at it.
+	HandlerTimeout time.Duration
+	// MaxAttempts is how many times a message is tried before it is parked.
+	MaxAttempts int
+	// RetryBackoff is the wait before the second attempt; it doubles after
+	// every further failure.
+	RetryBackoff time.Duration
+}
+
+const (
+	defaultHandlerTimeout = 30 * time.Second
+	defaultMaxAttempts    = 3
+	defaultRetryBackoff   = 500 * time.Millisecond
+	backoffFactor         = 2
+)
+
+func (p Policy) withDefaults() Policy {
+	if p.HandlerTimeout <= 0 {
+		p.HandlerTimeout = defaultHandlerTimeout
+	}
+	if p.MaxAttempts <= 0 {
+		p.MaxAttempts = defaultMaxAttempts
+	}
+	if p.RetryBackoff <= 0 {
+		p.RetryBackoff = defaultRetryBackoff
+	}
+	return p
+}
+
+var (
+	// ErrPoison marks a message that can never succeed (malformed payload,
+	// unknown schema). The worker parks it without retrying.
+	ErrPoison = errors.New("poison message")
+	// ErrParked is what dispatch returns once a message is given up on: it
+	// was poison or exhausted MaxAttempts. Consumers copy it to the
+	// dead-letter topic/queue and ack the original so the stream keeps moving.
+	ErrParked = errors.New("message parked")
+	// ErrConsumerClosed is returned by Subscribe when the broker side ended
+	// the subscription while ctx was still live; RunWorker exits non-zero so
+	// the orchestrator restarts the process.
+	ErrConsumerClosed = errors.New("consumer closed")
+	// ErrHandlerPanic wraps a recovered handler panic so one bad message
+	// cannot take the process down.
+	ErrHandlerPanic = errors.New("handler panic")
+)
+
+// Poison wraps err so the worker parks the message without retrying.
+func Poison(err error) error {
+	return fmt.Errorf("%w: %w", ErrPoison, err)
+}
+
+// run applies the policy to one message: each attempt gets its own deadline
+// and panic guard, transient failures retry with doubling backoff, and poison
+// or an exhausted budget comes back wrapped in ErrParked. A cancelled ctx
+// returns ctx.Err() so the consumer leaves the message for redelivery.
+func (w *Worker) run(ctx context.Context, h Handler, payload []byte) (int, error) {
+	backoff := w.policy.RetryBackoff
+	for attempt := 1; ; attempt++ {
+		err := w.attempt(ctx, h, payload)
+		switch {
+		case err == nil:
+			return attempt, nil
+		case errors.Is(err, ErrPoison):
+			return attempt, fmt.Errorf("%w: %w", ErrParked, err)
+		case ctx.Err() != nil:
+			return attempt, ctx.Err()
+		case attempt >= w.policy.MaxAttempts:
+			return attempt, fmt.Errorf("%w after %d attempts: %w", ErrParked, attempt, err)
+		}
+		logctx.From(ctx).Warn("worker: attempt failed",
+			"attempt", attempt, "retry_in_ms", backoff.Milliseconds(), "err", err)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return attempt, ctx.Err()
+		}
+		backoff *= backoffFactor
+	}
+}
+
+// attempt runs one handler call under the per-attempt deadline and turns a
+// panic into ErrHandlerPanic.
+func (w *Worker) attempt(ctx context.Context, h Handler, payload []byte) error {
+	attemptCtx, cancel := context.WithTimeout(ctx, w.policy.HandlerTimeout)
+	defer cancel()
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("%w: %v", ErrHandlerPanic, r)
+			}
+		}()
+		err = h.Handle(attemptCtx, payload)
+	}()
+	return err
+}

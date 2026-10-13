@@ -4,11 +4,12 @@
 -- touch this table.
 --
 -- payload is the raw event JSON so future schema changes don't require
--- backfills. Add UNIQUE(user_id, event_type) + INSERT ... ON CONFLICT
--- DO NOTHING if your worker isn't idempotent at the message-broker level.
+-- backfills. event_id is the producer's id for the event; the unique index
+-- turns a redelivery into a no-op insert.
 CREATE TABLE IF NOT EXISTS user_audit_log (
 {{- if eq .Database "postgres"}}
     id BIGSERIAL PRIMARY KEY,
+    event_id VARCHAR(64) NOT NULL,
     user_id BIGINT NOT NULL,
     event_type VARCHAR(64) NOT NULL,
     payload JSONB NOT NULL,
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS user_audit_log (
 {{- end}}
 {{- if eq .Database "mysql"}}
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    event_id VARCHAR(64) NOT NULL,
     user_id BIGINT NOT NULL,
     event_type VARCHAR(64) NOT NULL,
     payload JSON NOT NULL,
@@ -23,5 +25,6 @@ CREATE TABLE IF NOT EXISTS user_audit_log (
 {{- end}}
 );
 
+CREATE UNIQUE INDEX uq_user_audit_log_event_id ON user_audit_log (event_id);
 CREATE INDEX idx_user_audit_log_user_id ON user_audit_log (user_id);
 CREATE INDEX idx_user_audit_log_occurred_at ON user_audit_log (occurred_at);

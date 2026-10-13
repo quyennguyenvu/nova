@@ -8,7 +8,10 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
-{{ if .HasRedis}}
+{{ if eq .MessageQueue "rabbitmq"}}
+	"{{.ModuleName}}/internal/adapter/pubsub"
+{{- end}}
+{{- if .HasRedis}}
 	infraCache "{{.ModuleName}}/internal/infrastructure/cache"
 {{- end}}
 {{- if .HasElasticsearch}}
@@ -19,7 +22,7 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/database"
 {{- end}}
 	"{{.ModuleName}}/internal/infrastructure/logger"
-{{- if or (eq .MessageQueue "kafka") (and (eq .MessageQueue "rabbitmq") .HasWorker)}}
+{{- if .HasMessageQueue}}
 	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
 {{- end}}
 {{- if or .HasHTTP .HasGRPC}}
@@ -33,7 +36,7 @@ import (
 {{- if eq .MessageQueue "kafka"}}
 	"github.com/IBM/sarama"
 {{- end}}
-{{- if and (eq .MessageQueue "rabbitmq") .HasWorker}}
+{{- if eq .MessageQueue "rabbitmq"}}
 	amqp "github.com/rabbitmq/amqp091-go"
 {{- end}}
 {{- if eq .HTTPFramework "fiber"}}
@@ -194,7 +197,30 @@ func provideKafkaConsumerGroup(
 }
 {{- end}}
 {{- end}}
-{{- if and (eq .MessageQueue "rabbitmq") .HasWorker}}
+{{- if eq .MessageQueue "rabbitmq"}}
+
+func provideRabbitMQConnection(
+	lc fx.Lifecycle,
+	cfg config.RabbitMQConfig,
+	log *logger.Logger,
+) (*amqp.Connection, error) {
+	conn, cleanup, err := infraPubsub.NewRabbitMQConnection(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return conn, nil
+}
+
+func providePublisher(lc fx.Lifecycle, conn *amqp.Connection, cfg config.RabbitMQConfig) (*pubsub.Publisher, error) {
+	p, cleanup, err := pubsub.NewPublisher(conn, cfg)
+	if err != nil {
+		return nil, err
+	}
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
+	return p, nil
+}
+{{- if .HasWorker}}
 
 func provideRabbitMQChannel(lc fx.Lifecycle, conn *amqp.Connection, log *logger.Logger) (*amqp.Channel, error) {
 	ch, cleanup, err := infraPubsub.NewRabbitMQChannel(conn, log)
@@ -204,6 +230,7 @@ func provideRabbitMQChannel(lc fx.Lifecycle, conn *amqp.Connection, log *logger.
 	lc.Append(fx.Hook{OnStop: func(context.Context) error { cleanup(); return nil }})
 	return ch, nil
 }
+{{- end}}
 {{- end}}
 {{- if .HasHTTP}}
 

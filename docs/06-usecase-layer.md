@@ -16,7 +16,7 @@ usecase/user/
 └── dto.go        # Input/Output shapes (no json/validate tags)
 ```
 
-For a `--transport=worker` project a second package, `usecase/useraudit/`, follows the same shape.
+For a `--transport=worker` project a second package, `usecase/useraudit/`, follows the same shape ([below](#useraudit--record-each-event-once)).
 
 ## internal/usecase/user/service.go
 
@@ -310,3 +310,7 @@ func (h *OrderHandler) Create(c *fiber.Ctx) error {
 > - **Returns data** (even with JOINs across 10 tables) → **repository**
 > - **Returns a decision/computation** using multiple entities, no I/O → **domain service**
 > - **Orchestrates** steps with side effects (DB writes, events, emails) → **use case**
+
+## useraudit — record each event once
+
+The worker-side usecase has one method, `RecordUserCreated`, and one subtlety: the broker delivers at least once. The producer mints `eventId` per event ([08](08-adapter-layer.md#adapterpubsub--the-event-publisher)), the row stores it under a unique index, and the repository turns a conflicting insert into `domain.ErrEventAlreadyRecorded`. The service treats that as success and emits the one log line it owns, `audit: duplicate delivery ignored` with the `event_id`, so a redelivery storm is visible without any row being written twice. Anything else is wrapped with the event id and returned, which the worker's policy retries and then parks ([07](07-transport-layer.md#one-policy-three-outcomes)).

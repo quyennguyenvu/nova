@@ -142,6 +142,7 @@ var workerInfraSet = wire.NewSet(
 {{- end}}
 	worker.NewWorker,
 	provideWorkerHandlers,
+	provideWorkerPolicy,
 )
 {{- end}}
 

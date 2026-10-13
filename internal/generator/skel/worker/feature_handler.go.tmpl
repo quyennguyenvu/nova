@@ -3,6 +3,9 @@ package {{.Package}}
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+
+	worker "{{.WorkerImport}}"
 )
 
 // {{.Title}}Topic is the wire-level event identifier this handler consumes.
@@ -24,9 +27,9 @@ func (*Handler) Topic() string { return {{.Title}}Topic }
 func (h *Handler) Handle(ctx context.Context, payload []byte) error {
 	var msg {{.Title}}Message
 	if err := json.Unmarshal(payload, &msg); err != nil {
-		// Malformed payload cannot be retried — ack so it does not block the
-		// partition. Switch to nack-to-DLQ if your broker has one.
-		return nil
+		// Malformed JSON can never succeed: park it on the dead-letter
+		// topic/queue instead of retrying it forever.
+		return worker.Poison(fmt.Errorf("{{.Lower}}: malformed payload: %w", err))
 	}
 	// TODO: handle the event (call your usecase with msg)
 	return nil

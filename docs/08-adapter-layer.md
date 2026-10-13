@@ -276,12 +276,13 @@ Three files, split so that swapping brokers touches exactly one:
 | ------------------- | ---------------- | ------------------------------------- |
 | `user_message.go`   | No               | Wire DTOs with `json` tags            |
 | `user_publisher.go` | No               | One port method per event, maps → DTO |
-| `publisher.go`      | **Yes**          | `publish()` transport + `Close()`     |
+| `publisher.go`      | **Yes**          | `publish()` transport + its cleanup   |
 
 ```go
 // Wire-format message DTOs — these own json tags.
 // Domain events have NO json tags. The publisher maps domain → message DTO before serializing.
 type UserCreatedMessage struct {
+    EventID   string    `json:"eventId"` // producer-minted; the consumer's idempotency key
     UserID    int64     `json:"userId"`
     Email     string    `json:"email"`
     Name      string    `json:"name"`
@@ -292,11 +293,14 @@ type UserCreatedMessage struct {
 ```go
 func (p *Publisher) PublishUserCreated(ctx context.Context, evt domain.UserCreated) error {
     msg := UserCreatedMessage{
+        EventID: uuid.NewString(),
         UserID: evt.UserID, Email: evt.Email, Name: evt.Name, CreatedAt: evt.CreatedAt,
     }
-    return p.publish(ctx, "user.created", msg)
+    return p.publish(ctx, "user.created", strconv.FormatInt(evt.UserID, 10), msg.EventID, msg)
 }
 ```
+
+The publisher mints `eventId` once per event and the broker may deliver that event more than once; the worker records it once ([06](06-usecase-layer.md#useraudit--record-each-event-once)). The id also travels as the `x-event-id` header (and as `MessageId` on RabbitMQ) so a dead-lettered message can be matched without decoding its body. The third argument is the partition key (the user id, so one aggregate's events stay ordered on Kafka).
 
 ```bash
 ┌─────────────────────┐      ┌────────────────────────┐      ┌──────────────────────┐
@@ -318,8 +322,8 @@ pubsub.NewPublisher,
 wire.Bind(new(domain.UserPublisher), new(*pubsub.Publisher)),
 ```
 
-- **kafka** — wraps `sarama.SyncProducer`. Checks `ctx.Err()` before marshalling, so a cancelled request doesn't publish.
-- **rabbitmq** — opens a channel and declares a durable `events` topic exchange in the constructor (returning an error, so a failed declare fails startup rather than the first publish). The topic name becomes the routing key.
+- **kafka** — wraps `sarama.SyncProducer`, which `infrastructure/pubsub.NewKafkaProducer` owns and closes. Checks `ctx.Err()` before marshalling, so a cancelled request doesn't publish.
+- **rabbitmq** — opens its own channel in confirm mode on the shared connection and declares the durable topic exchange named by `rabbitmq.exchange`, the same one the worker binds its queue to (a failed declare fails startup rather than the first publish). Every message is persistent and carries `MessageId`; `publish` waits for the broker's confirm, so a nil return means the broker accepted it. The constructor returns `(*Publisher, func(), error)`: the cleanup closes the channel, the connection's own cleanup closes the connection. The topic name becomes the routing key.
 - **nats** — a compiling stub returning `errors.L(locale.Unimplemented)`.
 
 Switching brokers in an existing project means re-rendering `publisher.go` and the `infrastructure/pubsub` factory. Usecases, handlers, and the other two files are untouched.

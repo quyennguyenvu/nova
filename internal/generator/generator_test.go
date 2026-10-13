@@ -72,25 +72,25 @@ func (*Queries) ListUsersAfter(context.Context, ListUsersAfterParams) ([]User, e
 // user_audit_log
 type UserAuditLog struct {
 	ID         int64
+	EventID    string
 	UserID     int64
 	EventType  string
 	Payload    []byte
 	OccurredAt pgtype.Timestamptz
 }
 type RecordUserAuditParams struct {
+	EventID    string
 	UserID     int64
 	EventType  string
 	Payload    []byte
 	OccurredAt pgtype.Timestamptz
 }
 
-func (*Queries) RecordUserAudit(context.Context, RecordUserAuditParams) (UserAuditLog, error) {
-	return UserAuditLog{}, nil
-}
+func (*Queries) RecordUserAudit(context.Context, RecordUserAuditParams) (int64, error) { return 0, nil }
 `
 
 // MySQL's sqlc emits CreateUser → (int64, error) (LastInsertID) rather than
-// the Postgres-style RETURNING row. RecordUserAudit follows the same shape.
+// the Postgres-style RETURNING row. RecordUserAudit is :execrows on both.
 const mysqlDBGenStub = `package dbgen
 
 import (
@@ -145,12 +145,14 @@ func (*Queries) ListUsersAfter(context.Context, ListUsersAfterParams) ([]User, e
 // user_audit_log
 type UserAuditLog struct {
 	ID         int64
+	EventID    string
 	UserID     int64
 	EventType  string
 	Payload    json.RawMessage
 	OccurredAt time.Time
 }
 type RecordUserAuditParams struct {
+	EventID    string
 	UserID     int64
 	EventType  string
 	Payload    json.RawMessage
@@ -243,6 +245,15 @@ func TestGenerateMatrix(t *testing.T) {
 				})
 			}
 		}
+		// HTTP projects that also publish: the only rows that compile the
+		// publisher next to an HTTP transport (fx wraps the RabbitMQ
+		// connection and publisher cleanups in lifecycle hooks).
+		t.Run("http_"+di+"_fiber_postgres_rabbitmq", func(t *testing.T) {
+			t.Parallel()
+			cfg := httpMatrixConfig("fiber", "postgres", di)
+			cfg.MessageQueue = "rabbitmq"
+			renderAndVet(t, cfg, wireGenHTTPStub)
+		})
 		for _, fw := range httpFrameworks {
 			name := "http_" + di + "_" + fw + "_none"
 			t.Run(name, func(t *testing.T) {
@@ -1349,6 +1360,9 @@ func TestGeneratedProjectBootstrap(t *testing.T) {
 		{"http_fiber_postgres_wire", noSearch(httpMatrixConfig("fiber", "postgres", "wire"))},
 		{"http_gin_mysql_wire", noSearch(httpMatrixConfig("gin", "mysql", "wire"))},
 		{"worker_postgres_kafka_wire", workerMatrixConfig("postgres", "kafka", "wire")},
+		// RabbitMQ, MySQL and fx had no real toolchain run; this also runs
+		// sqlc on the MySQL upsert and executes the RabbitMQ consumer tests.
+		{"worker_mysql_rabbitmq_fx", workerMatrixConfig("mysql", "rabbitmq", "fx")},
 		{"http_echo_none_fx", noDBMatrixConfig("echo", "fx")},
 		// chi carries the most hand-rolled transport code (client IP, CORS,
 		// error handlers), so it gets a real lint run too.
@@ -1381,6 +1395,11 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 	// user's first run is exactly this.
 	run("make", "gen")
 	run("go", "build", "./...")
+	if cfg.HasWorker() {
+		// The worker ships broker-less unit tests (policy and consumer settle
+		// semantics); run them so the rendered tests are proven, not just compiled.
+		run("go", "test", "./internal/transport/worker/...")
+	}
 	// The generated project ships a strict golangci config plus a pre-commit
 	// hook and CI job that run it, so a fresh render must already be clean.
 	if _, err := exec.LookPath("golangci-lint"); err == nil {
@@ -1600,4 +1619,86 @@ func assertHTTPParity(t *testing.T, dir, fw string) {
 	mustContainAll(t, openapi, "/api/v1/public/users:", "name: perPage", "name: cursor", "requestId:", "Retry-After:",
 		"WWW-Authenticate:", "PageMeta:", "CursorMeta:", `"413":`)
 	mustNotContain(t, openapi, "name: offset")
+}
+
+// TestWorkerContract pins the phase 5 messaging contract per broker: names
+// flow from config into publisher and consumer, every message is handled
+// under one policy, both consumers settle the three outcomes the same way,
+// shutdown drains before closing, and the audit log is idempotent.
+func TestWorkerContract(t *testing.T) {
+	t.Parallel()
+	t.Run("kafka", func(t *testing.T) {
+		t.Parallel()
+		assertWorkerContract(t, renderProject(t, workerMatrixConfig("postgres", "kafka", "wire")), "kafka")
+	})
+	t.Run("rabbitmq", func(t *testing.T) {
+		t.Parallel()
+		assertWorkerContract(t, renderProject(t, workerMatrixConfig("mysql", "rabbitmq", "fx")), "rabbitmq")
+	})
+}
+
+func assertWorkerContract(t *testing.T, dir, broker string) {
+	t.Helper()
+	cfgSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/config/config.go"))
+	mustContainAll(t, cfgSrc, "type WorkerConfig struct", `"worker"`)
+	mustNotContain(t, cfgSrc, "UserCreatedTopic", "UserCreatedQueue")
+	base := readFile(t, filepath.Join(dir, "internal/infrastructure/config/base.yaml"))
+	mustContainAll(t, base, "handler_timeout: 30s", "max_attempts: 3", "retry_backoff: 500ms")
+	mustNotContain(t, base, "user_created_topic", "user_created_queue")
+	pub := readFile(t, filepath.Join(dir, "internal/adapter/pubsub/publisher.go"))
+	mustContainAll(t, pub, `"x-event-id"`)
+	mustNotContain(t, pub, "func (p *Publisher) Close()", `"events"`)
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/adapter/pubsub/user_publisher.go")), "uuid.NewString()")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/adapter/pubsub/user_message.go")), `json:"eventId"`)
+
+	policy := readFile(t, filepath.Join(dir, "internal/transport/worker/policy.go"))
+	mustContainAll(t, policy, "func Poison(", "ErrPoison", "ErrParked", "ErrConsumerClosed", "ErrHandlerPanic",
+		"recover()", "context.WithTimeout(", "withDefaults()")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/worker/worker.go")),
+		"policy Policy", `"attempts"`, "worker: message parked", "worker: message abandoned")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/worker/worker_test.go")),
+		"func TestDispatchOutcomes(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/worker/v1/user/handler.go")),
+		"worker.Poison(", "msg.EventID")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/provider.go")),
+		"func provideWorkerPolicy(")
+
+	consumer := readFile(t, filepath.Join(dir, "internal/transport/worker/consumer.go"))
+	mustContainAll(t, consumer, "ErrConsumerClosed", "errors.Is(err, ErrParked)")
+	consumerTest := readFile(t, filepath.Join(dir, "internal/transport/worker/consumer_test.go"))
+
+	appSrc := readFile(t, filepath.Join(dir, "internal/app/worker.go"))
+	mustContainAll(t, appSrc, "drainTimeout", "errConsumerStopped", "consumer stopped before shutdown")
+
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/domain/user_audit.go")),
+		"EventID", "ErrEventAlreadyRecorded")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/usecase/useraudit/service.go")),
+		"domain.ErrEventAlreadyRecorded", "duplicate delivery ignored")
+	migrations, _ := filepath.Glob(filepath.Join(dir, "sqlc/migrations/*_create_user_audit_log.up.sql"))
+	if len(migrations) != 1 {
+		t.Fatalf("expected one audit migration, got %v", migrations)
+	}
+	mustContainAll(t, readFile(t, migrations[0]),
+		"event_id VARCHAR(64) NOT NULL", "CREATE UNIQUE INDEX uq_user_audit_log_event_id")
+	query := readFile(t, filepath.Join(dir, "sqlc/query/user_audit.sql"))
+	mustContainAll(t, query, ":execrows", "event_id")
+
+	if broker == "kafka" {
+		mustContainAll(t, consumer, "producer sarama.SyncProducer", "deadLetterSuffix", `sess.MarkMessage(m, "")`,
+			"HeaderDeadLetterReason", "HeaderDeadLetterSource")
+		mustContainAll(t, consumerTest, "func TestKafkaSettle(", "mocks.NewSyncProducer(")
+		mustContainAll(t, query, "ON CONFLICT (event_id) DO NOTHING") // postgres
+		return
+	}
+	mustContainAll(t, cfgSrc, "Queue    string", "Prefetch int")
+	mustContainAll(t, pub,
+		"cfg.Exchange", "amqp.Persistent", "PublishWithDeferredConfirmWithContext(", "ch.Confirm(false)")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/pubsub/rabbitmq.go")),
+		"func NewRabbitMQConnection(cfg config.RabbitMQConfig, log *logger.Logger) (*amqp.Connection, func(), error)")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx_provider.go")),
+		"func provideRabbitMQConnection(", "func providePublisher(")
+	mustContainAll(t, consumer, `"x-dead-letter-exchange"`, ".Qos(", "NotifyClose(", "d.Nack(false, false)",
+		"d.Nack(false, true)", "cfg.Queue", "cfg.Prefetch")
+	mustContainAll(t, consumerTest, "func TestRabbitMQHandle(")
+	mustContainAll(t, query, "ON DUPLICATE KEY UPDATE id = id") // mysql
 }

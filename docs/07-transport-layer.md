@@ -556,20 +556,27 @@ type Consumer interface {
 
 `Worker` holds a topic-keyed handler map built from the injected `[]Handler`, derives `Topics()` from it, and `Start(ctx)` blocks on `consumer.Subscribe`. Adding a feature is: implement `Handler`, list it in `provideWorkerHandlers` ([11](11-di-and-entrypoints.md)). The consumer is selected at generation time — `kafka_consumer.go` (sarama consumer group) or `rabbitmq_consumer.go` — and the orchestrator never learns which.
 
-Consumers hand `dispatch` a broker-neutral `Message` (topic, payload, key, correlation headers, Kafka partition/offset or RabbitMQ delivery tag/message id). `Worker.dispatch` adopts the producer's `traceparent` and `x-request-id` headers, scopes the logger with the topic, the position and those ids, times the handler, and emits one `worker: message handled|failed` line with `duration_ms` (and `errors.LogFields` on failure) — the worker equivalent of the HTTP access log. Inner layers still log through `logctx.From(ctx)` with the same correlation fields; handlers do not log success themselves.
+Consumers hand `dispatch` a broker-neutral `Message` (topic, payload, key, correlation headers, Kafka partition/offset or RabbitMQ delivery tag/message id). `Worker.dispatch` adopts the producer's `traceparent` and `x-request-id` headers, scopes the logger with the topic, the position and those ids, runs the handler under the policy below, and emits one `worker: message handled|parked|abandoned` line with `attempts` and `duration_ms` (and `errors.LogFields` on failure) — the worker equivalent of the HTTP access log. Inner layers still log through `logctx.From(ctx)` with the same correlation fields; handlers do not log success themselves.
 
-### The ack decision is the interesting part
+### One policy, three outcomes
 
-`transport/worker/v1/user/handler.go` shows both outcomes:
+Every message is handled under `worker.Policy`, projected from the `worker` config section by `provideWorkerPolicy` ([11](11-di-and-entrypoints.md)); the zero value takes the defaults:
 
 ```go
-var msg UserCreatedMessage
+type Policy struct {
+    HandlerTimeout time.Duration // per attempt; the handler's ctx expires at it (30s)
+    MaxAttempts    int           // tries before the message is parked (3)
+    RetryBackoff   time.Duration // wait before the second attempt, doubling after (500ms)
+}
+```
+
+`Worker.run` gives each attempt its own deadline and panic guard (a panic becomes `ErrHandlerPanic` and counts as a failed attempt), retries a failed attempt after the backoff, and gives up in two cases: the handler returned `worker.Poison(err)`, or the budget is spent. Both come back wrapped in `ErrParked`. A ctx cancelled mid-message (shutdown) returns `ctx.Err()` instead, after at most the attempt in flight. So `dispatch` has exactly three outcomes, and the handler rule is short:
+
+```go
 if err := json.Unmarshal(payload, &msg); err != nil {
-    // Poison message: malformed JSON cannot be retried. Log and ack so
-    // it doesn't block the partition. Tune this to nack-to-DLQ in
-    // production if your broker has one configured.
-    log.Error("user.created: malformed payload", "err", err.Error())
-    return nil
+    // Malformed JSON can never succeed: park it on the dead-letter
+    // topic/queue instead of retrying it or silently dropping it.
+    return worker.Poison(errors.Wrap(err, "user.created: malformed payload"))
 }
 …
 if err := h.audit.RecordUserCreated(ctx, input); err != nil {
@@ -577,7 +584,19 @@ if err := h.audit.RecordUserCreated(ctx, input); err != nil {
 }
 ```
 
-**Malformed payload → ack** (returning `nil`), because retrying it will fail identically forever and, on Kafka, block the partition. **A failed downstream → nack** (returning the error), because that is transient. Getting this backwards is the classic worker outage: a poison message parked at the head of a partition.
+**Input that can never succeed → `worker.Poison`**, so it is parked at once instead of retried forever or, worse, acked and lost. **Anything transient → a plain error**, so it is retried and then parked. Never swallow an error to "keep the partition moving": the policy does that, with the message preserved on the dead-letter side. Getting this wrong is the classic worker outage: a poison message at the head of a partition, or a bug silently dropping real events.
+
+### Settling a delivery
+
+The consumers map the three outcomes the same way; `consumer_test.go` pins it for each broker with a fake session or acknowledger, no broker needed:
+
+| Outcome | Kafka (`settle`) | RabbitMQ (`handle`) |
+| --- | --- | --- |
+| handled (`nil`) | `MarkMessage` | `Ack` |
+| parked (`ErrParked`) | copy to `<topic>.dlq` with `x-dead-letter-reason` and `x-dead-letter-source` headers, then `MarkMessage` | `Nack(requeue=false)`; the queue's `x-dead-letter-exchange` routes it to `<exchange>.dlx`, whose queue is `<queue>.dlq` |
+| abandoned (`ctx.Err()`) | left unmarked; the next session redelivers | `Nack(requeue=true)` |
+
+`ConsumeClaim` therefore never returns because a handler failed — that used to end the session and rebalance the group on every poison message. It returns only on shutdown or when the dead-letter write itself fails (then the message stays unmarked and comes back). The RabbitMQ consumer declares the whole topology on start (exchange, dead-letter exchange and queue, work queue), sets `Qos(prefetch)` so a slow handler does not hold the entire backlog unacked, and watches `NotifyClose`. Both `Subscribe` loops return `ctx.Err()` on shutdown and `ErrConsumerClosed` when the broker side ends the subscription while ctx is live, which `RunWorker` turns into a non-zero exit ([11](11-di-and-entrypoints.md)) — a worker that lost its subscription must not idle as a zombie.
 
 The topic constant is duplicated on both sides on purpose, with a comment pointing at its twin:
 

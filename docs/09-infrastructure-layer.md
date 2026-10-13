@@ -81,7 +81,7 @@ Four consequences worth understanding before you change this:
 - **`Load()` takes no path.** The YAML is `//go:embed`-ed, so the binary has no runtime dependency on the working directory — the same image runs from `/`, from a scratch container, from a Kubernetes job. The cost is that a config change is a rebuild, which is the intended trade for a service image.
 - **`APP_ENV` is validated against a whitelist** (`EnvDev`, `EnvProd` from `constant.go`; `local` is the third constant and loads base only). A typo'd `APP_ENV=prod` silently gets base defaults rather than a missing-file error — check `constant.go` when an override doesn't apply.
 - **The split between YAML and `.env` is by _nature_, not convenience.** Operational tuning (timeouts, pool sizes, bcrypt cost, sample ratio) lives in YAML and is reviewed in code review. Secrets and per-deployment endpoints live in the environment. That's why `JWTConfig.PrivateKey` and `PublicKey` carry **only** an `env:` tag and no YAML tag — they cannot be committed by accident.
-- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure.
+- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ`, `Worker` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure.
 
 ### The sub-config projection
 
@@ -183,6 +183,8 @@ saramaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
 `OffsetOldest` only applies to a group with no committed offsets — so a fresh deployment replays history rather than silently skipping messages published before it started. Group membership (not manual partition assignment) is what makes replicas rebalance automatically.
 
 The factory hands the group to `transport/worker.kafkaConsumer`, which owns `Consume()`/`Close()` — the factory does no consuming, which is what keeps it infrastructure.
+
+`NewRabbitMQConnection` dials and returns the cleanup that closes the connection (and with it every channel); `NewRabbitMQChannel` opens the worker's consuming channel with its own cleanup. `RabbitMQConfig` carries `exchange`, shared by the publisher and the worker so what one publishes the other can bind, plus `queue` and `prefetch`, read only in worker mode. Kafka topic names are not configuration: they are wire contracts owned by the handlers and the publisher. The `worker` section (`handler_timeout`, `max_attempts`, `retry_backoff`) is projected onto `transport/worker.Policy` by `provideWorkerPolicy` ([07](07-transport-layer.md#one-policy-three-outcomes)).
 
 ## server/ — lifecycle only
 

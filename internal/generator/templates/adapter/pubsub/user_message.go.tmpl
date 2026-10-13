@@ -7,6 +7,7 @@ import "time"
 
 // UserCreatedMessage is the wire format for the "user.created" topic.
 type UserCreatedMessage struct {
+	EventID   string    `json:"eventId"` // producer-minted; the consumer's idempotency key
 	UserID    int64     `json:"userId"`
 	Email     string    `json:"email"`
 	Name      string    `json:"name"`

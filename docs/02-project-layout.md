@@ -119,8 +119,11 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   └── user.go                     # Service implementation
 │   │   └── worker/                         # [worker]
 │   │       ├── worker.go                   # Orchestrator: consumer → handler dispatch
+│   │       ├── policy.go                   # Per-message deadline, retries, parking (ErrPoison/ErrParked)
+│   │       ├── worker_test.go              # Broker-less tests of the policy
 │   │       ├── handler.go                  # Handler interface
-│   │       ├── consumer.go                 # Kafka/RabbitMQ consumer
+│   │       ├── consumer.go                 # Kafka/RabbitMQ consumer (settles ack / dead-letter / redeliver)
+│   │       ├── consumer_test.go            # Settle semantics with a fake session / acknowledger
 │   │       └── v1/user/                    # One package per feature
 │   │           ├── handler.go
 │   │           └── dto.go

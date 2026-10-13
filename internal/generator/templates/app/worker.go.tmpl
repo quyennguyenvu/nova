@@ -12,13 +12,24 @@ import (
 	"{{.ModuleName}}/pkg/errors"
 )
 
+// drainTimeout bounds how long shutdown waits for the consume loop to finish
+// the message it is on before the consumer is closed.
+const drainTimeout = 30 * time.Second
+
+// errConsumerStopped reports a consume loop that returned without an error
+// before shutdown was requested: the subscription is gone and nothing
+// restarts it in-process, so the process exits for the orchestrator to.
+var errConsumerStopped = stderrors.New("worker: consumer stopped before shutdown")
+
 // RunWorker boots the consumer worker, blocks until the OS signals shutdown
-// or the worker surfaces an unrecoverable consume error, and returns any
-// failure so the caller (cobra RunE) can set a non-zero exit code.
+// or the consume loop ends, and returns any failure so the caller (cobra
+// RunE) can set a non-zero exit code.
 //
-// Mirrors RunHTTPServer's lifecycle: signal.NotifyContext owns shutdown,
-// DI cleanup runs in reverse construction order (broker first, then DB),
-// the consume loop runs in a goroutine so we can select on ctx.Done.
+// Mirrors RunHTTPServer's lifecycle: signal.NotifyContext owns shutdown and
+// DI cleanup runs in reverse construction order (broker first, then DB).
+// The consume loop runs in a goroutine so we can select on ctx.Done, and
+// shutdown waits for it to finish its in-flight message before closing the
+// consumer, so the final ack or offset commit is not lost.
 func RunWorker() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -36,19 +47,30 @@ func RunWorker() error {
 		log.Info("shutdown complete", "duration_ms", time.Since(start).Milliseconds())
 	}()
 
-	errChan := make(chan error, 1)
-	go func() {
-		if startErr := worker.Start(ctx); startErr != nil && !stderrors.Is(startErr, context.Canceled) {
-			errChan <- startErr
-		}
-	}()
+	done := make(chan error, 1)
+	go func() { done <- worker.Start(ctx) }()
 
 	select {
 	case <-ctx.Done():
 		log.Info("worker: shutdown signal received")
-	case startErr := <-errChan:
-		log.Error("worker: stopped with error", errors.LogFields(startErr)...)
-		return startErr
+		select {
+		case <-done:
+		case <-time.After(drainTimeout):
+			log.Warn("worker: consume loop still running after drain timeout",
+				"timeout_ms", drainTimeout.Milliseconds())
+		}
+	case startErr := <-done:
+		if ctx.Err() == nil {
+			// The loop ended while ctx was live: the broker side ended the
+			// subscription and nothing resubscribes in-process. Exit non-zero
+			// so the orchestrator restarts the process.
+			if startErr == nil {
+				startErr = errConsumerStopped
+			}
+			log.Error("worker: stopped with error", errors.LogFields(startErr)...)
+			return startErr
+		}
+		log.Info("worker: shutdown signal received")
 	}
 
 	log.Info("worker: shutting down")

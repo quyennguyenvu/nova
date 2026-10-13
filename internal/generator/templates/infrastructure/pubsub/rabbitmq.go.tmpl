@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"errors"
 	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -9,14 +10,21 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
-// NewRabbitMQConnection dials RabbitMQ. Infrastructure — connection setup
-// only, no business logic.
-func NewRabbitMQConnection(cfg config.RabbitMQConfig) (*amqp.Connection, error) {
+// NewRabbitMQConnection dials RabbitMQ and returns the cleanup that closes the
+// connection (which closes every channel opened on it). Infrastructure —
+// connection setup only, no business logic.
+func NewRabbitMQConnection(cfg config.RabbitMQConfig, log *logger.Logger) (*amqp.Connection, func(), error) {
 	conn, err := amqp.Dial(cfg.URL)
 	if err != nil {
-		return nil, fmt.Errorf("dial rabbitmq: %w", err)
+		return nil, nil, fmt.Errorf("dial rabbitmq: %w", err)
 	}
-	return conn, nil
+	cleanup := func() {
+		log.Info("[rabbitmq] closing connection ...")
+		if closeErr := conn.Close(); closeErr != nil && !errors.Is(closeErr, amqp.ErrClosed) {
+			log.Error("[rabbitmq] failed to close connection", "err", closeErr)
+		}
+	}
+	return conn, cleanup, nil
 }
 
 // NewRabbitMQChannel opens a channel on the supplied connection. Channels are

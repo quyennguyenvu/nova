@@ -2,30 +2,45 @@ package worker
 
 import (
 	"context"
-	stderrors "errors"
+	"errors"
+	"fmt"
+	"strconv"
 
 	"github.com/IBM/sarama"
 
 	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
+// Dead-letter copies land on <topic>.dlq with the original headers plus the
+// reason and source position, so a parked message can be inspected or replayed.
+const (
+	deadLetterSuffix       = ".dlq"
+	HeaderDeadLetterReason = "x-dead-letter-reason"
+	HeaderDeadLetterSource = "x-dead-letter-source" // "<topic>/<partition>/<offset>"
+)
+
 // kafkaConsumer adapts sarama.ConsumerGroup to the worker.Consumer port.
-// One goroutine per partition is owned by sarama; ConsumeClaim pulls messages
-// off the partition channel and calls dispatch sequentially. Partition order
-// is preserved within a claim; cross-partition ordering is NOT.
+// One goroutine per partition is owned by sarama; our ConsumeClaim hook
+// pulls messages off the partition channel and calls dispatch sequentially.
+// Partition order is preserved within a single claim; cross-partition
+// ordering is NOT — handlers must tolerate out-of-order delivery if your
+// topic has more than one partition.
 type kafkaConsumer struct {
-	group sarama.ConsumerGroup
-	log   *logger.Logger
+	group    sarama.ConsumerGroup
+	producer sarama.SyncProducer
+	log      *logger.Logger
 }
 
 // NewKafkaConsumer wraps a sarama consumer group (constructed in your
-// infrastructure/pubsub layer).
-func NewKafkaConsumer(group sarama.ConsumerGroup, log *logger.Logger) Consumer {
-	return &kafkaConsumer{group: group, log: log}
+// infrastructure/pubsub layer). producer (the same sync
+// producer the publisher uses) writes parked messages to their dead-letter
+// topic.
+func NewKafkaConsumer(group sarama.ConsumerGroup, producer sarama.SyncProducer, log *logger.Logger) Consumer {
+	return &kafkaConsumer{group: group, producer: producer, log: log}
 }
 
 func (c *kafkaConsumer) Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error {
-	handler := &kafkaSessionHandler{dispatch: dispatch}
+	handler := &kafkaSessionHandler{dispatch: dispatch, deadLetter: c.deadLetter}
 
 	// sarama reports partition/offset/broker errors here only because
 	// Return.Errors is set (infrastructure/pubsub); undrained they are lost
@@ -37,17 +52,18 @@ func (c *kafkaConsumer) Subscribe(ctx context.Context, topics []string, dispatch
 		}
 	}()
 
-	// sarama's Consume returns each time a rebalance occurs. Loop until the
-	// parent context is cancelled or the group emits a non-recoverable error.
+	// Consume returns after every rebalance; loop until ctx ends. A closed
+	// group while ctx is live means the broker side is gone: report it so
+	// RunWorker exits instead of idling as a zombie.
 	for {
-		if err := c.group.Consume(ctx, topics, handler); err != nil {
-			if stderrors.Is(err, sarama.ErrClosedConsumerGroup) {
-				return nil
-			}
-			return err
-		}
-		if ctx.Err() != nil {
+		err := c.group.Consume(ctx, topics, handler)
+		switch {
+		case ctx.Err() != nil:
 			return ctx.Err()
+		case errors.Is(err, sarama.ErrClosedConsumerGroup):
+			return ErrConsumerClosed
+		case err != nil:
+			return fmt.Errorf("kafka: consume: %w", err)
 		}
 	}
 }
@@ -56,40 +72,96 @@ func (c *kafkaConsumer) Close() error {
 	return c.group.Close()
 }
 
-// kafkaSessionHandler is sarama's per-session callback bundle.
+// deadLetter copies m to its dead-letter topic. The original key keeps the
+// per-aggregate ordering of parked messages when they are replayed.
+func (c *kafkaConsumer) deadLetter(m *sarama.ConsumerMessage, cause error) error {
+	headers := make([]sarama.RecordHeader, 0, len(m.Headers)+2)
+	for _, h := range m.Headers {
+		if h != nil {
+			headers = append(headers, *h)
+		}
+	}
+	source := m.Topic + "/" + strconv.FormatInt(int64(m.Partition), 10) + "/" + strconv.FormatInt(m.Offset, 10)
+	headers = append(headers,
+		sarama.RecordHeader{Key: []byte(HeaderDeadLetterReason), Value: []byte(cause.Error())},
+		sarama.RecordHeader{Key: []byte(HeaderDeadLetterSource), Value: []byte(source)},
+	)
+	var key sarama.Encoder
+	if len(m.Key) > 0 {
+		key = sarama.ByteEncoder(m.Key)
+	}
+	topic := m.Topic + deadLetterSuffix
+	_, _, err := c.producer.SendMessage(&sarama.ProducerMessage{
+		Topic:   topic,
+		Key:     key,
+		Value:   sarama.ByteEncoder(m.Value),
+		Headers: headers,
+	})
+	if err != nil {
+		return fmt.Errorf("kafka: dead-letter to %s: %w", topic, err)
+	}
+	c.log.Warn("kafka: message parked", "topic", m.Topic, "partition", m.Partition, "offset", m.Offset, "dlq", topic)
+	return nil
+}
+
+// kafkaSessionHandler is sarama's per-session callback bundle. Setup runs
+// once at session start, Cleanup once at session end, ConsumeClaim once per
+// claimed partition. Returning from ConsumeClaim ends the session and
+// triggers a rebalance, so it returns only on shutdown or when the
+// dead-letter write itself fails — never because a handler failed.
 type kafkaSessionHandler struct {
-	dispatch DispatchFunc
+	dispatch   DispatchFunc
+	deadLetter func(*sarama.ConsumerMessage, error) error
 }
 
 func (*kafkaSessionHandler) Setup(sarama.ConsumerGroupSession) error   { return nil }
 func (*kafkaSessionHandler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 
 func (h *kafkaSessionHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for {
+	// The loop re-checks the session ctx after every message: one abandoned
+	// on shutdown stays unmarked, and stopping here keeps a later mark from
+	// committing past it.
+	for sess.Context().Err() == nil {
 		select {
 		case m, ok := <-claim.Messages():
 			if !ok {
 				return nil
 			}
-			msg := Message{
-				Topic:     m.Topic,
-				Payload:   m.Value,
-				Key:       string(m.Key),
-				Headers:   kafkaHeaders(m.Headers),
-				Partition: m.Partition,
-				Offset:    m.Offset,
-			}
-			if err := h.dispatch(sess.Context(), msg); err != nil {
-				// The worker logged the failure with its correlation fields.
-				// Surface to sarama: the session rebalances and the message is
-				// redelivered because the offset is not advanced (no MarkMessage).
+			if err := h.settle(sess, m); err != nil {
 				return err
 			}
-			sess.MarkMessage(m, "")
 		case <-sess.Context().Done():
 			return nil
 		}
 	}
+	return nil
+}
+
+// settle dispatches one message and advances the offset only once it is
+// done with: handled, or parked on the dead-letter topic. A message
+// abandoned because the session ended stays unmarked so the next session
+// redelivers it.
+func (h *kafkaSessionHandler) settle(sess sarama.ConsumerGroupSession, m *sarama.ConsumerMessage) error {
+	err := h.dispatch(sess.Context(), Message{
+		Topic:     m.Topic,
+		Payload:   m.Value,
+		Key:       string(m.Key),
+		Headers:   kafkaHeaders(m.Headers),
+		Partition: m.Partition,
+		Offset:    m.Offset,
+	})
+	switch {
+	case err == nil:
+		sess.MarkMessage(m, "")
+	case errors.Is(err, ErrParked):
+		if dlqErr := h.deadLetter(m, err); dlqErr != nil {
+			return dlqErr
+		}
+		sess.MarkMessage(m, "")
+	}
+	// Any other error means the session ended mid-handling: the offset stays
+	// where it was so the next session redelivers the message.
+	return nil
 }
 
 func kafkaHeaders(hs []*sarama.RecordHeader) map[string]string {
