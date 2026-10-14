@@ -67,6 +67,7 @@ http:
 grpc:
   port: "9090"
   shutdown_timeout: 10s
+  reflection: true # service discovery for grpcurl; production.yaml turns it off
 {{- end}}
 
 {{- if .HasCron}}

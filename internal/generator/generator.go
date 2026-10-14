@@ -338,20 +338,36 @@ func (g *Generator) transportFiles() []templateFile {
 			"internal/transport/http/v1/user/registrar.go",
 			cfg.HasHTTP(),
 		},
-		// gRPC handler
+		// Pubsub adapters live in adapterFiles() — not duplicated here.
+	}
+	files = append(files, g.httpMiddlewareFiles()...)
+	return append(files, g.grpcFiles()...)
+}
+
+// grpcFiles lists the gRPC transport: the server factory (interceptor chain,
+// feature services, health, reflection), the user service over the
+// buf-generated stubs in api/gen (created by `make gen`, like dbgen), the
+// status mapping and the interceptors. All gated on cfg.HasGRPC().
+func (g *Generator) grpcFiles() []templateFile {
+	grpc := g.cfg.HasGRPC()
+	return []templateFile{
+		{"templates/transport/grpc/server.go.tmpl", "internal/transport/grpc/server.go", grpc},
+		{"templates/transport/grpc/user.go.tmpl", "internal/transport/grpc/user.go", grpc},
+		{"templates/transport/grpc/user_test.go.tmpl", "internal/transport/grpc/user_test.go", grpc},
+		{"templates/transport/grpc/rpcstatus/status.go.tmpl", "internal/transport/grpc/rpcstatus/status.go", grpc},
 		{
-			"templates/transport/grpc/user_handler.go.tmpl",
-			"internal/transport/grpc/user.go",
-			cfg.HasGRPC(),
+			"templates/transport/grpc/rpcstatus/status_test.go.tmpl",
+			"internal/transport/grpc/rpcstatus/status_test.go",
+			grpc,
 		},
 		{
 			"templates/transport/grpc/interceptor/interceptor.go.tmpl",
 			"internal/transport/grpc/interceptor/interceptor.go",
-			cfg.HasGRPC(),
+			grpc,
 		},
-		// Pubsub adapters live in adapterFiles() — not duplicated here.
+		{"templates/transport/grpc/interceptor/auth.go.tmpl", "internal/transport/grpc/interceptor/auth.go", grpc},
+		{"templates/transport/grpc/interceptor/locale.go.tmpl", "internal/transport/grpc/interceptor/locale.go", grpc},
 	}
-	return append(files, g.httpMiddlewareFiles()...)
 }
 
 // httpMiddlewareFiles lists the middleware package: framework-prefixed
@@ -653,6 +669,10 @@ func (g *Generator) toolingFiles() []templateFile {
 		{"templates/api/openapi/openapi.yaml.tmpl", "api/openapi/openapi.yaml", cfg.HasHTTP()},
 		// Embeds the document so the service serves it at /openapi.yaml.
 		{"templates/api/openapi/openapi.go.tmpl", "api/openapi/openapi.go", cfg.HasHTTP()},
+		// The gRPC contract and its buf config; `make gen` writes api/gen.
+		{"templates/api/proto/user/v1/user.proto.tmpl", "api/proto/user/v1/user.proto", cfg.HasGRPC()},
+		{"templates/buf.yaml.tmpl", "buf.yaml", cfg.HasGRPC()},
+		{"templates/buf.gen.yaml.tmpl", "buf.gen.yaml", cfg.HasGRPC()},
 		{"templates/sqlfluff.tmpl", ".sqlfluff", true},
 		// Activated by `make setup` (git config core.hooksPath .githooks).
 		// Rendered with the exec bit — see outFileMode.

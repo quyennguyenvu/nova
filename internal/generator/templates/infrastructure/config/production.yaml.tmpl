@@ -10,6 +10,12 @@ http:
   request_timeout: 10s
 {{- end}}
 
+{{- if .HasGRPC}}
+
+grpc:
+  reflection: false
+{{- end}}
+
 {{- if .HasDatabase}}
 
 database:

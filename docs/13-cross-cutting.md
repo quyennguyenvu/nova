@@ -179,7 +179,7 @@ Being explicit about the gaps, so nobody assumes coverage that isn't there:
 - **No outbox.** Event publishing is best-effort-with-logging. If an event must not be lost, write it to a table in the same transaction as the aggregate and relay it separately.
 - **No refresh tokens.** `AccessTokenTTL` only; add a session id claim to `AccessTokenClaims` and `identity.UserPrincipal` together to build on.
 - **No authorization.** `middleware.Auth` establishes *who* the caller is; deciding *what* they may do is a domain concern with no scaffold.
-- **gRPC is a stub.** Server, DI and entry point are real; the service implementation is yours ([07](07-transport-layer.md#internaltransportgrpc)).
+- **gRPC is unary-only, and its health service reports process liveness.** Stream interceptors and a dependency-aware readiness check are yours to add ([07](07-transport-layer.md#internaltransportgrpc)).
 - **`transport/cronjob/` and `cmd/cron.go` are not rendered.** The `cron.go.tmpl` template exists but is not wired into `buildFileList`.
 - **Not scaffolded, documented as patterns**: `domain/valueobject/`, `domain/service/`, `domain/event/` as a package, `adapter/external/`.
 

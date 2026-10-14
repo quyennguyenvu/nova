@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+// The User service contract. `make gen` (buf) turns it into api/gen/user/v1;
+// the server implementation is internal/transport/grpc/user.go.
+package user.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "{{.ModuleName}}/api/gen/user/v1;userv1";
+
+// UserService mirrors the HTTP user feature, one RPC per endpoint. CreateUser,
+// Login and ListPublicUsers are public; the rest need a bearer token in the
+// `authorization` metadata (UserHandler.Protected names them).
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc ListPublicUsers(ListPublicUsersRequest) returns (ListPublicUsersResponse);
+}
+
+message User {
+  int64 id = 1;
+  string email = 2;
+  string name = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+// PublicUser is the unauthenticated projection: directory fields only.
+message PublicUser {
+  string email = 1;
+  string name = 2;
+}
+
+message CreateUserRequest {
+  string email = 1;
+  string name = 2;
+  string password = 3;
+}
+
+message CreateUserResponse {
+  User user = 1;
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+// LoginResponse follows the RFC 6749 token shape; token_type is always "Bearer".
+message LoginResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int64 expires_in = 3;
+  User user = 4;
+}
+
+message GetUserRequest {
+  int64 id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message UpdateUserRequest {
+  int64 id = 1;
+  string name = 2;
+}
+
+message UpdateUserResponse {
+  User user = 1;
+}
+
+message DeleteUserRequest {
+  int64 id = 1;
+}
+
+message DeleteUserResponse {}
+
+// ListUsersRequest is the admin, page-based form; page is 1-based and the
+// usecase clamps per_page. Pagination numbers are int64 end to end so no
+// value is narrowed between the wire and the usecase.
+message ListUsersRequest {
+  string email = 1;
+  int64 page = 2;
+  int64 per_page = 3;
+}
+
+message PageMeta {
+  int64 page = 1;
+  int64 per_page = 2;
+  int64 total_page = 3;
+  int64 total_record = 4;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  PageMeta meta = 2;
+}
+
+// ListPublicUsersRequest is the cursor form; cursor is the opaque token from
+// the previous page, empty for the first.
+message ListPublicUsersRequest {
+  string cursor = 1;
+  int64 limit = 2;
+}
+
+message ListPublicUsersResponse {
+  repeated PublicUser users = 1;
+  bool has_more = 2;
+  string next_cursor = 3;
+}

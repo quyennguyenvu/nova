@@ -1,0 +1,40 @@
+package interceptor
+
+import (
+	"context"
+	"strings"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// acceptLanguageMetadataKey mirrors the HTTP Accept-Language header.
+const acceptLanguageMetadataKey = "accept-language"
+
+// Locale reads the caller's language from metadata and stores it in ctx so
+// rpcstatus can translate the message: the same flow as the HTTP middleware.
+func Locale() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		header := ""
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if vals := md.Get(acceptLanguageMetadataKey); len(vals) > 0 {
+				header = vals[0]
+			}
+		}
+		return next(locale.WithLanguage(ctx, parseLanguage(header)), req)
+	}
+}
+
+func parseLanguage(header string) locale.Language {
+	if header == "" {
+		return locale.LangEn
+	}
+	primary := strings.SplitN(header, ",", 2)[0]
+	lang := strings.SplitN(strings.TrimSpace(primary), "-", 2)[0]
+	if locale.Language(lang) == locale.LangVi {
+		return locale.LangVi
+	}
+	return locale.LangEn
+}

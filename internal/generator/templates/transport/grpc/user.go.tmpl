@@ -1,0 +1,208 @@
+package grpc
+
+import (
+	"context"
+
+	"github.com/go-playground/validator/v10"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	userv1 "{{.ModuleName}}/api/gen/user/v1"
+	"{{.ModuleName}}/internal/transport/grpc/rpcstatus"
+	usersvc "{{.ModuleName}}/internal/usecase/user"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// UserHandler is the gRPC boundary for the user feature: it checks the wire
+// shape, calls the usecase and maps the result or error back. It never logs;
+// rpcstatus.FromError stashes the AppError for the Logging interceptor's one
+// line per call, exactly like the HTTP handler and middleware.
+type UserHandler struct {
+	userv1.UnimplementedUserServiceServer
+
+	userService *usersvc.Service
+	validate    *validator.Validate
+}
+
+var _ Registrar = (*UserHandler)(nil)
+
+func NewUserHandler(userService *usersvc.Service, validate *validator.Validate) *UserHandler {
+	return &UserHandler{userService: userService, validate: validate}
+}
+
+// Register mounts the generated service on s.
+func (h *UserHandler) Register(s *grpc.Server) { userv1.RegisterUserServiceServer(s, h) }
+
+// Protected lists the RPCs that need a bearer token: the same split as the
+// HTTP registrar (CreateUser, Login and the public directory stay open).
+func (*UserHandler) Protected() []string {
+	return []string{
+		userv1.UserService_GetUser_FullMethodName,
+		userv1.UserService_UpdateUser_FullMethodName,
+		userv1.UserService_DeleteUser_FullMethodName,
+		userv1.UserService_ListUsers_FullMethodName,
+	}
+}
+
+// Wire-shape rules match the HTTP DTO tags; the entity re-checks the
+// invariants it owns, so these only reject malformed input early.
+type createUserInput struct {
+	Email    string `validate:"required,email"`
+	Name     string `validate:"required,min=2,max=100"`
+	Password string `validate:"required,min=8"`
+}
+
+type loginInput struct {
+	Email    string `validate:"required,email"`
+	Password string `validate:"required"`
+}
+
+type updateUserInput struct {
+	Name string `validate:"omitempty,min=2,max=100"`
+}
+
+type listUsersInput struct {
+	Email string `validate:"omitempty,email"`
+}
+
+// check maps a validation failure to the same generic localized 400 the HTTP
+// binder produces, with the validator detail riding along for the access log.
+func (h *UserHandler) check(ctx context.Context, v any) error {
+	if err := h.validate.Struct(v); err != nil {
+		return rpcstatus.FromError(ctx, errors.L(locale.InvalidRequest).WithCause(err))
+	}
+	return nil
+}
+
+func (h *UserHandler) CreateUser(
+	ctx context.Context,
+	req *userv1.CreateUserRequest,
+) (*userv1.CreateUserResponse, error) {
+	in := createUserInput{Email: req.GetEmail(), Name: req.GetName(), Password: req.GetPassword()}
+	if err := h.check(ctx, in); err != nil {
+		return nil, err
+	}
+	out, err := h.userService.Register(ctx, usersvc.RegisterInput{
+		Email:    in.Email,
+		Name:     in.Name,
+		Password: in.Password,
+	})
+	if err != nil {
+		return nil, rpcstatus.FromError(ctx, err)
+	}
+	return &userv1.CreateUserResponse{User: toProto(out)}, nil
+}
+
+func (h *UserHandler) Login(ctx context.Context, req *userv1.LoginRequest) (*userv1.LoginResponse, error) {
+	in := loginInput{Email: req.GetEmail(), Password: req.GetPassword()}
+	if err := h.check(ctx, in); err != nil {
+		return nil, err
+	}
+	out, err := h.userService.Login(ctx, usersvc.LoginInput{Email: in.Email, Password: in.Password})
+	if err != nil {
+		return nil, rpcstatus.FromError(ctx, err)
+	}
+	return &userv1.LoginResponse{
+		AccessToken: out.AccessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   out.ExpiresIn,
+		User:        toProto(out.User),
+	}, nil
+}
+
+func (h *UserHandler) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
+	out, err := h.userService.Get(ctx, req.GetId())
+	if err != nil {
+		return nil, rpcstatus.FromError(ctx, err)
+	}
+	return &userv1.GetUserResponse{User: toProto(out)}, nil
+}
+
+func (h *UserHandler) UpdateUser(
+	ctx context.Context,
+	req *userv1.UpdateUserRequest,
+) (*userv1.UpdateUserResponse, error) {
+	in := updateUserInput{Name: req.GetName()}
+	if err := h.check(ctx, in); err != nil {
+		return nil, err
+	}
+	out, err := h.userService.Update(ctx, req.GetId(), usersvc.UpdateInput{Name: in.Name})
+	if err != nil {
+		return nil, rpcstatus.FromError(ctx, err)
+	}
+	return &userv1.UpdateUserResponse{User: toProto(out)}, nil
+}
+
+func (h *UserHandler) DeleteUser(
+	ctx context.Context,
+	req *userv1.DeleteUserRequest,
+) (*userv1.DeleteUserResponse, error) {
+	if err := h.userService.Delete(ctx, req.GetId()); err != nil {
+		return nil, rpcstatus.FromError(ctx, err)
+	}
+	return &userv1.DeleteUserResponse{}, nil
+}
+
+func (h *UserHandler) ListUsers(ctx context.Context, req *userv1.ListUsersRequest) (*userv1.ListUsersResponse, error) {
+	in := listUsersInput{Email: req.GetEmail()}
+	if err := h.check(ctx, in); err != nil {
+		return nil, err
+	}
+	out, err := h.userService.List(ctx, usersvc.ListInput{
+		Email:   in.Email,
+		Page:    int(req.GetPage()),
+		PerPage: int(req.GetPerPage()),
+	})
+	if err != nil {
+		return nil, rpcstatus.FromError(ctx, err)
+	}
+	users := make([]*userv1.User, len(out.Items))
+	for i, item := range out.Items {
+		users[i] = toProto(item)
+	}
+	return &userv1.ListUsersResponse{Users: users, Meta: toPageMeta(out)}, nil
+}
+
+func (h *UserHandler) ListPublicUsers(
+	ctx context.Context,
+	req *userv1.ListPublicUsersRequest,
+) (*userv1.ListPublicUsersResponse, error) {
+	out, err := h.userService.PublicList(ctx, usersvc.PublicListInput{
+		Cursor: req.GetCursor(),
+		Limit:  int(req.GetLimit()),
+	})
+	if err != nil {
+		return nil, rpcstatus.FromError(ctx, err)
+	}
+	users := make([]*userv1.PublicUser, len(out.Items))
+	for i, item := range out.Items {
+		users[i] = &userv1.PublicUser{Email: item.Email, Name: item.Name}
+	}
+	return &userv1.ListPublicUsersResponse{Users: users, HasMore: out.HasMore, NextCursor: out.NextCursor}, nil
+}
+
+func toProto(out *usersvc.Output) *userv1.User {
+	return &userv1.User{
+		Id:        out.ID,
+		Email:     out.Email,
+		Name:      out.Name,
+		CreatedAt: timestamppb.New(out.CreatedAt),
+		UpdatedAt: timestamppb.New(out.UpdatedAt),
+	}
+}
+
+// toPageMeta derives total_page the way httputil.NewPageMeta does for HTTP;
+// Page and PerPage are the usecase's clamped values.
+func toPageMeta(out *usersvc.ListOutput) *userv1.PageMeta {
+	var totalPage int64
+	if out.PerPage > 0 {
+		totalPage = (out.TotalRecord + int64(out.PerPage) - 1) / int64(out.PerPage)
+	}
+	return &userv1.PageMeta{
+		Page:        int64(out.Page),
+		PerPage:     int64(out.PerPage),
+		TotalPage:   totalPage,
+		TotalRecord: out.TotalRecord,
+	}
+}

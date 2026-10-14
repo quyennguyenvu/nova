@@ -6,21 +6,21 @@ Where a doc and a template disagree, **the template wins** — and the doc is th
 
 ## The docs
 
-| Doc                                                     | Answers                                                                                        |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| [01 — CLI options](01-cli-options.md)                   | Which prompts/flags exist, what each option means, and how the unimplemented ones fail         |
-| [02 — Project layout](02-project-layout.md)             | The full generated tree, and which flag gates each file                                        |
-| [03 — Architecture rules](03-architecture-rules.md)     | The dependency rule, and the adapter-vs-infrastructure decision guide                          |
-| [04 — Placement rationale](04-placement-rationale.md)   | Why each package lives where it does, and who owns an adapter's interface                      |
-| [05 — Domain layer](05-domain-layer.md)                 | Entities, value objects, repository ports, domain services, events                             |
-| [06 — Usecase layer](06-usecase-layer.md)               | Application services, usecase DTOs, domain-service implementations                             |
-| [07 — Transport layer](07-transport-layer.md)           | Per-feature HTTP packages, router/registrars, middleware, the writer, the locale flow          |
-| [08 — Adapter layer](08-adapter-layer.md)               | Transaction manager, tx-aware queries, sqlc config + SQL, repositories, publishers             |
-| [09 — Infrastructure layer](09-infrastructure-layer.md) | Config loading, server bootstrap, connection factories                                         |
-| [10 — Shared packages](10-shared-packages.md)           | `pkg/errors`, `pkg/locale`, `pkg/httputil`, `pkg/requestid`, `pkg/logctx`, `pkg/observability` |
-| [11 — DI and entry points](11-di-and-entrypoints.md)    | The Wire/fx graph, app lifecycle, cobra commands, cleanup order                                |
-| [12 — Build and deploy](12-build-and-deploy.md)         | Makefile targets, the git hook, Dockerfile, docker-compose (with benchmark limits), CI         |
-| [13 — Cross-cutting features](13-cross-cutting.md)      | The production concerns every generated project must ship                                      |
+| Doc                                                     | Answers                                                                                                               |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [01 — CLI options](01-cli-options.md)                   | Which prompts/flags exist, what each option means, and how the unimplemented ones fail                                |
+| [02 — Project layout](02-project-layout.md)             | The full generated tree, and which flag gates each file                                                               |
+| [03 — Architecture rules](03-architecture-rules.md)     | The dependency rule, and the adapter-vs-infrastructure decision guide                                                 |
+| [04 — Placement rationale](04-placement-rationale.md)   | Why each package lives where it does, and who owns an adapter's interface                                             |
+| [05 — Domain layer](05-domain-layer.md)                 | Entities, value objects, repository ports, domain services, events                                                    |
+| [06 — Usecase layer](06-usecase-layer.md)               | Application services, usecase DTOs, domain-service implementations                                                    |
+| [07 — Transport layer](07-transport-layer.md)           | Per-feature HTTP packages, router/registrars, middleware, the writer, the locale flow, the gRPC server and the worker |
+| [08 — Adapter layer](08-adapter-layer.md)               | Transaction manager, tx-aware queries, sqlc config + SQL, repositories, publishers                                    |
+| [09 — Infrastructure layer](09-infrastructure-layer.md) | Config loading, server bootstrap, connection factories                                                                |
+| [10 — Shared packages](10-shared-packages.md)           | `pkg/errors`, `pkg/locale`, `pkg/httputil`, `pkg/requestid`, `pkg/logctx`, `pkg/observability`                        |
+| [11 — DI and entry points](11-di-and-entrypoints.md)    | The Wire/fx graph, app lifecycle, cobra commands, cleanup order                                                       |
+| [12 — Build and deploy](12-build-and-deploy.md)         | Makefile targets, the git hook, Dockerfile, docker-compose (with benchmark limits), CI                                |
+| [13 — Cross-cutting features](13-cross-cutting.md)      | The production concerns every generated project must ship                                                             |
 
 ## Reading the reference code (05 – 12)
 

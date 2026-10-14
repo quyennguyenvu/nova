@@ -1,0 +1,62 @@
+// Package rpcstatus is the gRPC counterpart of transport/http/httpwriter's
+// error path: one place that turns an application error into the status a
+// client sees and the AppError the access log records.
+package rpcstatus
+
+import (
+	"context"
+	"net/http"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// FromError classifies err once through pkg/errors, stashes the AppError for
+// the Logging interceptor, translates the client-facing message into the
+// call's language and returns a status error with the matching gRPC code.
+// Internal text never reaches the client: only locale-coded messages (or an
+// explicit AppError.Message) are sent, exactly like the HTTP envelope.
+func FromError(ctx context.Context, err error) error {
+	app := errors.ToAppError(err)
+	errors.StashAppError(ctx, app)
+	lang := locale.LanguageFromContext(ctx)
+	msg := app.Message
+	switch {
+	case app.Locale != 0:
+		msg = locale.Translate(lang, app.Locale, app.Args...)
+	case msg == "":
+		msg = locale.Translate(lang, locale.InternalError)
+	}
+	return status.Error(codeFor(app.Code), msg)
+}
+
+// codeFor maps the HTTP status pkg/errors assigns to the nearest gRPC code
+// (https://grpc.io/docs/guides/status-codes/), so one classification table
+// serves both transports.
+func codeFor(httpStatus int) codes.Code {
+	switch httpStatus {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusUnsupportedMediaType:
+		return codes.InvalidArgument
+	case http.StatusUnauthorized:
+		return codes.Unauthenticated
+	case http.StatusForbidden:
+		return codes.PermissionDenied
+	case http.StatusNotFound:
+		return codes.NotFound
+	case http.StatusConflict:
+		return codes.AlreadyExists
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return codes.DeadlineExceeded
+	case http.StatusRequestEntityTooLarge, http.StatusTooManyRequests:
+		return codes.ResourceExhausted
+	case http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return codes.Unimplemented
+	case http.StatusBadGateway, http.StatusServiceUnavailable:
+		return codes.Unavailable
+	default:
+		return codes.Internal
+	}
+}

@@ -91,7 +91,7 @@ Four consequences worth understanding before you change this:
 - **`DB_USER` is required.** With it empty the driver falls back to the OS user, which surfaces as a permissions error on the database; `Load` fails with the real cause instead.
 - **`shutdown_timeout` at the top level** budgets the whole cleanup chain; the fx engine stops its hooks within it and logs the budget when a stop overruns ([11](11-di-and-entrypoints.md#how-cleanup-works)).
 - **The split between YAML and `.env` is by _nature_, not convenience.** Operational tuning (timeouts, pool sizes, bcrypt cost, sample ratio) lives in YAML and is reviewed in code review. Secrets and per-deployment endpoints live in the environment. That's why `JWTConfig.PrivateKey` and `PublicKey` carry **only** an `env:` tag and no YAML tag — they cannot be committed by accident.
-- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ`, `Worker` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure.
+- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ`, `Worker` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure. `GRPC` carries `port`, `shutdown_timeout` and `reflection` (service discovery for `grpcurl`; base `true`, `production.yaml` `false`).
 
 ### The sub-config projection
 

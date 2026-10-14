@@ -14,7 +14,7 @@ transport/
 │   └── v1/
 │       ├── v1.go        # the shared /api/v1 prefix
 │       └── user/        # one self-contained package per feature
-├── grpc/                # interceptor/ + service impls
+├── grpc/                # server factory + rpcstatus/ + interceptor/ + service impls
 └── worker/              # Worker orchestrator + Consumer port + v1/{feature}/
 ```
 
@@ -511,17 +511,28 @@ The liveness/readiness split matters operationally: coupling liveness to the dat
 
 ## internal/transport/grpc/
 
-**Placeholder.** `--transport=grpc` emits a compiling stub, not a working service:
+`--transport=grpc` renders a working service shaped like `transport/http`: a server factory in place of the router, interceptors in place of middleware, `rpcstatus` in place of `httpwriter`, and the user feature implemented against generated stubs.
 
-```go
-// TODO: Implement gRPC handlers.
-// This file is a placeholder. To use gRPC:
-// 1. Define your .proto files in api/proto/
-// 2. Generate Go code with protoc
-// 3. Implement the generated service interfaces here
+```bash
+transport/grpc/
+├── server.go            # New(): interceptor chain + Registrars + health + reflection
+├── user.go              # UserHandler — user.v1.UserService over the api/gen stubs
+├── user_test.go         # end to end over bufconn: codes, auth, health, locale
+├── rpcstatus/status.go  # FromError: AppError → gRPC status, stashed for the access log
+└── interceptor/         # RequestID, Locale, Logging, Recovery, Auth
 ```
 
-The server bootstrap, DI graph and entry point are real; only the service implementation is yours to write. `transport/grpc/interceptor/` is the gRPC counterpart to HTTP middleware: `RequestID` (incoming metadata `x-request-id`, validated like the HTTP header), `Logging` (one `rpc` line per call with `code`, `duration_ms` and the request/trace ids) and `Recovery` (panic → `codes.Internal`, stack logged). `NewGRPCServer` chains them and adds the `otelgrpc` stats handler for spans — [04](04-placement-rationale.md#why-middleware-is-under-transporthttp-not-transport) explains why they can't share a package.
+The contract is `api/proto/user/v1/user.proto` (package `user.v1`, one RPC per HTTP endpoint: `CreateUser`, `Login`, `GetUser`, `UpdateUser`, `DeleteUser`, `ListUsers`, `ListPublicUsers`). `make gen` runs `buf generate`, which writes `api/gen/user/v1` through version-pinned `go run` plugins ([12](12-build-and-deploy.md#makefile)); the output is committed like `dbgen`.
+
+**`New` is the router.** `transport/grpc.New(cfg, log, tokenSvc, services)` builds the `*grpc.Server`, chains the unary interceptors in the HTTP middleware order (`RequestID → Locale → Logging → Recovery → Auth`), registers every `Registrar`, then the standard `grpc.health.v1` service and, when `grpc.reflection` is on (base `true`, production `false`), server reflection so `grpcurl` needs no proto files. `infrastructure/server.NewGRPCServer` wraps it for the listener and the graceful stop and flips health to NOT_SERVING before draining ([09](09-infrastructure-layer.md)). Health reports process liveness, not dependency readiness: there is no gRPC `/readyz`.
+
+**A feature is a `Registrar`.** Two methods: `Register(*grpc.Server)` mounts the generated service and `Protected() []string` names the full methods that need a bearer token, the per-method form of the HTTP registrar's `Auth` group. `UserHandler` protects `GetUser`, `UpdateUser`, `DeleteUser` and `ListUsers`; `CreateUser`, `Login` and `ListPublicUsers` stay public, the same split as the HTTP routes. DI collects the registrars in `provideGRPCServices` ([11](11-di-and-entrypoints.md)).
+
+**Errors take one path.** A handler never builds a status itself: it returns `rpcstatus.FromError(ctx, err)`, which runs `errors.ToAppError`, stashes the `AppError` for the access log, translates the message into the call's language (`accept-language` metadata, read by the `Locale` interceptor) and maps the HTTP status `pkg/errors` assigned to the nearest gRPC code (400 → `InvalidArgument`, 401 → `Unauthenticated`, 403 → `PermissionDenied`, 404 → `NotFound`, 409 → `AlreadyExists`, 429 → `ResourceExhausted`, 503 → `Unavailable`, 504 → `DeadlineExceeded`, anything else `Internal`). A wrapped internal error therefore reaches the client as the generic localized message, never its text. Wire-shape validation reuses the HTTP DTO rules through small tagged structs and the shared `*validator.Validate`; the entity still owns its invariants ([05](05-domain-layer.md)).
+
+**Interceptors mirror middleware** ([04](04-placement-rationale.md#why-middleware-is-under-transporthttp-not-transport) explains why they cannot share a package). `RequestID` adopts a valid `x-request-id` or mints one and echoes it. `Locale` sets the language. `Logging` scopes the logger with `request_id`, `trace_id` and `method`, installs the `AppError` stash and emits one `rpc` line per call with `code` and `duration_ms`, using the stashed `AppError` (cause and frame trail) when there is one. `Recovery` turns a panic into `codes.Internal`. `Auth` verifies the bearer token from the `authorization` metadata on protected methods only and attaches the `identity.UserPrincipal`, so `requireSelf` in the usecase works unchanged. Only unary interceptors are installed; the first streaming RPC needs their stream counterparts.
+
+`user_test.go` runs the whole stack over `bufconn` with a real RS256 `TokenService` and an in-memory repository: a duplicate email is `AlreadyExists`, a bad email `InvalidArgument`, a missing token `Unauthenticated`, another user's id `PermissionDenied`, and health flips to NOT_SERVING on `Shutdown`. nova's bootstrap runs it in `grpc_postgres_wire` and `grpc_none_fx`.
 
 ## internal/transport/worker/
 

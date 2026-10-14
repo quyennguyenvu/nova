@@ -1,0 +1,64 @@
+package rpcstatus
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+func TestCodeFor(t *testing.T) {
+	cases := map[int]codes.Code{
+		http.StatusBadRequest:          codes.InvalidArgument,
+		http.StatusUnauthorized:        codes.Unauthenticated,
+		http.StatusForbidden:           codes.PermissionDenied,
+		http.StatusNotFound:            codes.NotFound,
+		http.StatusConflict:            codes.AlreadyExists,
+		http.StatusTooManyRequests:     codes.ResourceExhausted,
+		http.StatusServiceUnavailable:  codes.Unavailable,
+		http.StatusGatewayTimeout:      codes.DeadlineExceeded,
+		http.StatusInternalServerError: codes.Internal,
+		http.StatusTeapot:              codes.Internal,
+	}
+	for httpStatus, want := range cases {
+		if got := codeFor(httpStatus); got != want {
+			t.Errorf("codeFor(%d) = %s, want %s", httpStatus, got, want)
+		}
+	}
+}
+
+// A wrapped unknown error is an internal fault whose text must stay on the
+// server side: the client gets the generic localized message.
+func TestFromErrorHidesInternalText(t *testing.T) {
+	locale.NewMapping()
+	err := FromError(t.Context(), errors.Wrap(errors.New("db down"), "load user"))
+	st := status.Convert(err)
+	if st.Code() != codes.Internal {
+		t.Fatalf("code = %s, want Internal", st.Code())
+	}
+	generic := locale.Translate(locale.LangEn, locale.InternalError)
+	if strings.Contains(st.Message(), "db down") || st.Message() != generic {
+		t.Fatalf("message %q leaks the cause or is not the generic text", st.Message())
+	}
+}
+
+func TestFromErrorTranslatesAndStashes(t *testing.T) {
+	locale.NewMapping()
+	ctx := errors.PrepareAppErrorContext(locale.WithLanguage(t.Context(), locale.LangVi))
+	err := FromError(ctx, errors.L(locale.UserNotFound))
+	st := status.Convert(err)
+	if st.Code() != codes.NotFound {
+		t.Fatalf("code = %s, want NotFound", st.Code())
+	}
+	if want := locale.Translate(locale.LangVi, locale.UserNotFound); st.Message() != want {
+		t.Fatalf("message = %q, want %q", st.Message(), want)
+	}
+	if app := errors.AppErrorFromContext(ctx); app == nil || app.Locale != locale.UserNotFound {
+		t.Fatalf("stashed AppError = %v, want locale UserNotFound", app)
+	}
+}

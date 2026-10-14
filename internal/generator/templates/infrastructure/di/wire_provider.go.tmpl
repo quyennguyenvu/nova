@@ -9,6 +9,9 @@ import (
 	transporthttp "{{.ModuleName}}/internal/transport/http"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 {{- end}}
+{{- if .HasGRPC}}
+	transportgrpc "{{.ModuleName}}/internal/transport/grpc"
+{{- end}}
 {{- if .HasWorker}}
 	"{{.ModuleName}}/internal/transport/worker"
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
@@ -38,6 +41,15 @@ func provideRegistrars(userRegistrar *userv1.Registrar) []transporthttp.Registra
 	return []transporthttp.Registrar{
 		userRegistrar,
 	}
+}
+{{- end}}
+
+{{- if .HasGRPC}}
+
+// provideGRPCServices assembles every feature's gRPC Registrar for
+// transport/grpc.New. Add new features here as they appear.
+func provideGRPCServices(user *transportgrpc.UserHandler) []transportgrpc.Registrar {
+	return []transportgrpc.Registrar{user}
 }
 {{- end}}
 

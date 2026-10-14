@@ -178,10 +178,13 @@ type CORSConfig struct {
 {{- end}}
 {{- if .HasGRPC}}
 
-// GRPCConfig holds gRPC server configuration.
+// GRPCConfig holds gRPC server configuration. Reflection lets grpcurl and
+// friends discover the services without the proto files; production.yaml
+// turns it off.
 type GRPCConfig struct {
 	Port            string        `{{.ConfigFormat}}:"port"             env:"GRPC_PORT"`
 	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"GRPC_SHUTDOWN_TIMEOUT"`
+	Reflection      bool          `{{.ConfigFormat}}:"reflection"       env:"GRPC_REFLECTION"`
 }
 {{- end}}
 {{- if .HasCron}}

@@ -6,19 +6,19 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
-{{ if and (eq .MessageQueue "kafka") (or .HasHTTP .HasWorker)}}
+{{ if and (eq .MessageQueue "kafka") (or .HasHTTP .HasGRPC .HasWorker)}}
 	"{{.ModuleName}}/internal/adapter/pubsub"
 {{- end}}
-{{- if and (eq .Database "postgres") (or .HasHTTP .HasWorker)}}
+{{- if and (eq .Database "postgres") (or .HasHTTP .HasGRPC .HasWorker)}}
 	postgresrepo "{{.ModuleName}}/internal/adapter/repository/postgres"
 {{- end}}
-{{- if and (eq .Database "mysql") (or .HasHTTP .HasWorker)}}
+{{- if and (eq .Database "mysql") (or .HasHTTP .HasGRPC .HasWorker)}}
 	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
 {{- end}}
-{{- if and (not .HasDatabase) (or .HasHTTP .HasWorker)}}
+{{- if and (not .HasDatabase) (or .HasHTTP .HasGRPC .HasWorker)}}
 	memoryrepo "{{.ModuleName}}/internal/adapter/repository/memory"
 {{- end}}
-{{- if or .HasHTTP .HasWorker}}
+{{- if or .HasHTTP .HasGRPC .HasWorker}}
 	"{{.ModuleName}}/internal/domain"
 {{- end}}
 	domainsec "{{.ModuleName}}/internal/domain/security"
@@ -34,12 +34,15 @@ import (
 	"{{.ModuleName}}/internal/transport/http/health"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 {{- end}}
+{{- if .HasGRPC}}
+	transportgrpc "{{.ModuleName}}/internal/transport/grpc"
+{{- end}}
 {{- if .HasWorker}}
 	"{{.ModuleName}}/internal/transport/worker"
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
 	"{{.ModuleName}}/internal/usecase/useraudit"
 {{- end}}
-{{- if or .HasHTTP .HasWorker}}
+{{- if or .HasHTTP .HasGRPC .HasWorker}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 {{- end}}
 )
@@ -124,7 +127,15 @@ func transportModule() fx.Option {
 func grpcModule() fx.Option {
 	return fx.Provide(
 		provideGRPCConfig,
+		transportgrpc.New,
 		provideGRPCServer,
+	)
+}
+
+func transportModule() fx.Option {
+	return fx.Provide(
+		transportgrpc.NewUserHandler,
+		provideGRPCServices,
 	)
 }
 {{- end}}
@@ -150,7 +161,7 @@ func workerModule() fx.Option {
 }
 {{- end}}
 
-{{- if or .HasHTTP .HasWorker}}
+{{- if or .HasHTTP .HasGRPC .HasWorker}}
 
 func adapterModule() fx.Option {
 	return fx.Provide(
@@ -233,9 +244,9 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 
 {{- if .HasGRPC}}
 
-// InitializeGRPCServer wires the gRPC server with fx. Service registration is
-// the caller's responsibility — call app.Server.Server() to get the underlying
-// *grpc.Server.
+// InitializeGRPCServer builds the gRPC app graph with fx: the same modules
+// as the HTTP entry point with grpcModule in place of httpModule, so the
+// server reaches the usecase through adapterModule/usecaseModule.
 func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 	var (
 		log    *logger.Logger
@@ -248,6 +259,9 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 		fx.Provide(func() context.Context { return ctx }),
 		infraModule(),
 		grpcModule(),
+		adapterModule(),
+		usecaseModule(),
+		transportModule(),
 		fx.Populate(&log, &srv, &tracer, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {

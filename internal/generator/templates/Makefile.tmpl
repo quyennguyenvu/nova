@@ -23,11 +23,11 @@ test-coverage:
 # Linting
 .PHONY: lint
 lint:
-	GOGC=50 golangci-lint run{{if eq .QueryGen "sqlc"}} && sqlfluff lint --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}
+	GOGC=50 golangci-lint run{{if eq .QueryGen "sqlc"}} && sqlfluff lint --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}{{if .HasGRPC}} && buf lint{{end}}
 
 .PHONY: fmt
 fmt:
-	golangci-lint fmt{{if eq .QueryGen "sqlc"}} && sqlfluff fix --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}
+	golangci-lint fmt{{if eq .QueryGen "sqlc"}} && sqlfluff fix --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}{{if .HasGRPC}} && buf format -w{{end}}
 
 .PHONY: vet
 vet: ## Run go vet
@@ -63,21 +63,23 @@ sqlc-gen:
 {{- end}}
 
 {{- if .HasGRPC}}
+# buf drives version-pinned `go run` plugins (buf.gen.yaml); stale output is
+# removed first so a renamed message cannot linger as a compiling leftover.
 .PHONY: proto-gen
 proto-gen:
-	protoc --go_out=. --go-grpc_out=. api/proto/**/*.proto
+	rm -rf $(PWD)/api/gen; buf generate
 {{- end}}
 
 .PHONY: tidy
 tidy:
 	go mod tidy
 
-{{- if eq .QueryGen "sqlc"}}
-# Order matters: sqlc must emit dbgen before tidy can resolve its import, and
-# wire needs a tidied module to type-check the injector.
+{{- if or (eq .QueryGen "sqlc") .HasGRPC}}
+# Order matters: {{if eq .QueryGen "sqlc"}}sqlc must emit dbgen{{if .HasGRPC}} and buf api/gen{{end}}{{else}}buf must emit api/gen{{end}} before tidy can resolve
+# the imports{{if .UseWire}}, and wire needs a tidied module to type-check the injector{{end}}.
 {{- end}}
 .PHONY: gen
-gen:{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}} tidy{{if .UseWire}} wire-gen{{end}}{{if .HasGRPC}} proto-gen{{end}}
+gen:{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}}{{if .HasGRPC}} proto-gen{{end}} tidy{{if .UseWire}} wire-gen{{end}}
 
 {{- if .IncludeDocker}}
 # Docker

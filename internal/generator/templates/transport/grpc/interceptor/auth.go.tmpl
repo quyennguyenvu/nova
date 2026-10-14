@@ -1,0 +1,60 @@
+package interceptor
+
+import (
+	"context"
+	"strings"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
+	"{{.ModuleName}}/internal/domain/identity"
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
+	"{{.ModuleName}}/internal/transport/grpc/rpcstatus"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// authorizationMetadataKey carries the bearer token, mirroring the HTTP
+// Authorization header; gRPC metadata keys are lowercase.
+const authorizationMetadataKey = "authorization"
+
+// Auth verifies the bearer token on every method in protected (full method
+// names) and attaches the resolved *identity.UserPrincipal to ctx; other
+// methods pass through untouched, like the HTTP routes outside the Auth
+// group. A missing or rejected token is Unauthenticated with the localized
+// message the HTTP 401 carries.
+func Auth(tokenSvc *jwtsec.TokenService, protected map[string]struct{}) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		if _, ok := protected[info.FullMethod]; !ok {
+			return next(ctx, req)
+		}
+		token := bearerToken(ctx)
+		if token == "" {
+			missing := errors.L(locale.Unauthorized).WithCause(errors.New("missing bearer token"))
+			return nil, rpcstatus.FromError(ctx, missing)
+		}
+		principal, err := tokenSvc.ParseAndVerifyAccessToken(ctx, token)
+		if err != nil {
+			return nil, rpcstatus.FromError(ctx, err)
+		}
+		return next(identity.WithUserPrincipal(ctx, principal), req)
+	}
+}
+
+// bearerToken reads the credential from metadata; the scheme is
+// case-insensitive (RFC 9110 §11.1).
+func bearerToken(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	vals := md.Get(authorizationMetadataKey)
+	if len(vals) == 0 {
+		return ""
+	}
+	const prefix = "bearer "
+	if len(vals[0]) < len(prefix) || !strings.EqualFold(vals[0][:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(vals[0][len(prefix):])
+}

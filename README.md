@@ -184,15 +184,20 @@ For the full rationale see [docs/04 — Placement rationale](docs/04-placement-r
 
 ```bash
 make build            # build the nova binary to bin/nova
+make run              # build and print the CLI help
+make clean            # remove bin/ and the generated test output
 make rebuild          # clean + build
-make test             # go test -v ./...
+make test             # go test -short ./... (fast; skips the render-then-vet matrix)
+make test-all         # full suite: 36-case vet matrix + 8 real-toolchain bootstraps (~3.5 min; run it alone)
 make lint             # golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...
+make help             # list every target
 
 make gen              # build + run `nova new` interactively
 make gen-api          # generate a full HTTP project (Fiber/Postgres/pgx/sqlc/Redis/Kafka/Wire)
 make gen-worker       # generate a worker project (Kafka/Postgres/pgx/sqlc/Redis/Wire)
+make gen-grpc         # generate a gRPC project (Postgres/pgx/sqlc/Redis/Kafka/Wire)
 make verify-gen       # gen-api + list every output file
 make diff-gen         # gen-api + print key generated files for review
 ```

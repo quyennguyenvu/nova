@@ -150,7 +150,7 @@ Plan shape: `security.TokenIssuer` port in `domain/security`, bound in DI; `TxMa
 
 Exit criteria: dependency-rule grep (`TestDependencyRule`) shows zero outward imports from `usecase`; `TestRegisterDuplicateEmailIs409` with a fake repo returning the driver error; `TestWrapNilIsNil`.
 
-## Phase 7: infrastructure and deploy hygiene
+## Phase 7: infrastructure and deploy hygiene (done 2026-10-14, commit `c679cc3`)
 
 Detailed plan: [2026-10-14-phase7-infra-deploy-hygiene.md](2026-10-14-phase7-infra-deploy-hygiene.md).
 
@@ -170,6 +170,8 @@ Plan shape: `cleanenv.ReadConfig(".env", &cfg)` when present; `SilenceUsage: tru
 Exit criteria: fresh project `cp .env.example .env && go run main.go api` reaches "listening" with only the compose dependencies up; Dockerfile builds and `docker compose up` passes healthchecks (manual, documented in the plan).
 
 ## Phase 8: gRPC decision and docs honesty
+
+Detailed plan: [2026-10-14-phase8-grpc-docs-honesty.md](2026-10-14-phase8-grpc-docs-honesty.md).
 
 Findings:
 

@@ -1,0 +1,75 @@
+// Package grpc is the inbound gRPC transport. New builds the *grpc.Server
+// the way transport/http.NewRouter builds the router: the interceptor chain,
+// the feature services, plus the health and reflection services every gRPC
+// deployment expects. Port binding and graceful stop live in
+// infrastructure/server.
+package grpc
+
+import (
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
+	"{{.ModuleName}}/internal/transport/grpc/interceptor"
+	"{{.ModuleName}}/pkg/observability"
+)
+
+// Registrar is one feature's gRPC surface: it registers its generated
+// service on the server and names the full methods that need a bearer
+// token (the HTTP Registrar's Auth group, expressed per method).
+type Registrar interface {
+	Register(s *grpc.Server)
+	Protected() []string
+}
+
+// Server bundles the gRPC server with its health service so the lifecycle
+// owner can flip readiness to NOT_SERVING before draining.
+type Server struct {
+	GRPC   *grpc.Server
+	Health *health.Server
+}
+
+// New builds the server. Interceptor order mirrors the HTTP middleware
+// chain: request id → locale → access log → recovery → auth, so an auth
+// failure is logged and a panic anywhere inside is recovered. Only unary
+// interceptors are installed; add stream counterparts with the first
+// streaming RPC.
+func New(
+	cfg config.GRPCConfig,
+	log observability.Logger,
+	tokenSvc *jwtsec.TokenService,
+	services []Registrar,
+) *Server {
+	protected := map[string]struct{}{}
+	for _, svc := range services {
+		for _, m := range svc.Protected() {
+			protected[m] = struct{}{}
+		}
+	}
+	s := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.ChainUnaryInterceptor(
+			interceptor.RequestID(),
+			interceptor.Locale(),
+			interceptor.Logging(log),
+			interceptor.Recovery(),
+			interceptor.Auth(tokenSvc, protected),
+		),
+	)
+	for _, svc := range services {
+		svc.Register(s)
+	}
+	// Health starts SERVING; infrastructure/server flips it to NOT_SERVING
+	// at shutdown so a health-checking balancer stops routing before the
+	// drain. It reports process liveness, not dependency readiness.
+	h := health.NewServer()
+	healthpb.RegisterHealthServer(s, h)
+	if cfg.Reflection {
+		reflection.Register(s)
+	}
+	return &Server{GRPC: s, Health: h}
+}

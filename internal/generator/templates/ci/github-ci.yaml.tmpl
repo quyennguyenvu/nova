@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 # This pipeline assumes the repository contains the committed code generated
-# by `make gen` ({{if .UseWire}}wire_gen.go{{end}}{{if and .UseWire (eq .QueryGen "sqlc")}}, {{end}}{{if eq .QueryGen "sqlc"}}internal/adapter/repository/{{.Database}}/dbgen/{{end}}).
+# by `make gen` ({{if .UseWire}}wire_gen.go{{end}}{{if and .UseWire (eq .QueryGen "sqlc")}}, {{end}}{{if eq .QueryGen "sqlc"}}internal/adapter/repository/{{.Database}}/dbgen/{{end}}{{if .HasGRPC}}{{if or .UseWire (eq .QueryGen "sqlc")}}, {{end}}api/gen/{{end}}).
 # Run `make gen` locally after `nova new` and commit the output before pushing.
 
 jobs:

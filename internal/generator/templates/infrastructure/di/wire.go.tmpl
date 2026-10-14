@@ -44,6 +44,9 @@ import (
 	"{{.ModuleName}}/internal/transport/http/health"
 	userv1 "{{.ModuleName}}/internal/transport/http/v1/user"
 {{- end}}
+{{- if .HasGRPC}}
+	transportgrpc "{{.ModuleName}}/internal/transport/grpc"
+{{- end}}
 {{- if .HasWorker}}
 	"{{.ModuleName}}/internal/transport/worker"
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
@@ -121,8 +124,11 @@ var httpInfraSet = wire.NewSet(
 
 {{- if .HasGRPC}}
 
+// grpcInfraSet adds the gRPC sub-config, the transport's server factory
+// (interceptors, services, health, reflection) and the lifecycle wrapper.
 var grpcInfraSet = wire.NewSet(
 	wire.FieldsOf(new(*config.Config), "GRPC"),
+	transportgrpc.New,
 	server.NewGRPCServer,
 )
 {{- end}}
@@ -209,13 +215,21 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 {{- end}}
 
 {{- if .HasGRPC}}
+var transportSet = wire.NewSet(
+	transportgrpc.NewUserHandler,
+	provideGRPCServices,
+)
 
-// InitializeGRPCServer wires the gRPC server. Service registration is the
-// caller's responsibility — call app.Server.Server() to get the underlying *grpc.Server.
+// InitializeGRPCServer wires the gRPC server. The graph reaches the usecase
+// through adapterSet/usecaseSet; a new feature adds its handler to
+// transportSet and provideGRPCServices.
 func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 	panic(wire.Build(
 		infraSet,
 		grpcInfraSet,
+		adapterSet,
+		usecaseSet,
+		transportSet,
 		wire.Struct(new(GRPCApp), "*"),
 	))
 }

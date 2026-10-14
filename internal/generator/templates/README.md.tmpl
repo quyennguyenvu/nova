@@ -54,7 +54,7 @@ internal/
 │           └── user/       # Handler, Registrar (embeds v1.Prefixed), DTOs, assembler
 {{- end}}
 {{- if .HasGRPC}}
-│   └── grpc/               # Service implementation
+│   └── grpc/               # Server factory + interceptors + UserService over the api/gen stubs
 {{- end}}
 {{- if .HasWorker}}
 │   └── worker/             # Handler iface + Worker orchestrator + {{.MessageQueue}} consumer
@@ -101,6 +101,9 @@ internal/
 {{- if .UseWire}}
 - wire: no install, `make gen` runs it through `go tool` at the version in `go.mod`
 {{- end}}
+{{- if .HasGRPC}}
+- buf v1.70.0 — `go install github.com/bufbuild/buf/cmd/buf@v1.70.0` (proto codegen + lint; the Go plugins are pinned in `buf.gen.yaml`, nothing else to install)
+{{- end}}
   {{- if eq .Database "postgres"}}
 - PostgreSQL 16+
   {{- end}}
@@ -136,7 +139,7 @@ openssl rsa -in jwt.key -pubout -out jwt.pub
 sed -i.bak "s|^JWT_PUBLIC_KEY=.*|JWT_PUBLIC_KEY=$(base64 < jwt.pub | tr -d '\n')|" .env
 sed -i.bak "s|^JWT_PRIVATE_KEY=.*|JWT_PRIVATE_KEY=$(base64 < jwt.key | tr -d '\n')|" .env && rm .env.bak
 
-# Generate code and resolve dependencies. `make gen` runs{{if eq .QueryGen "sqlc"}} sqlc,{{end}} go mod tidy{{if .UseWire}}, wire{{end}}{{if .HasGRPC}}, protoc{{end}} in the order that works.
+# Generate code and resolve dependencies. `make gen` runs{{if eq .QueryGen "sqlc"}} sqlc,{{end}}{{if .HasGRPC}} buf,{{end}} go mod tidy{{if .UseWire}}, wire{{end}} in the order that works.
 make gen
 {{- if .IncludeDocker}}
 
@@ -152,10 +155,41 @@ make migrate-up
 # Run the server
 {{- if .HasWorker}}
 go run main.go worker
+{{- else if .HasGRPC}}
+go run main.go grpc
 {{- else}}
 go run main.go api
 {{- end}}
 ```
+{{- if .HasGRPC}}
+
+### gRPC API
+
+The contract is `api/proto/user/v1/user.proto`; `make gen` writes the Go stubs to `api/gen/user/v1` (commit them, like the other generated code). The server listens on `grpc.port` (default `9090`).
+
+| RPC                                   | Auth   | Description                                                        |
+| ------------------------------------- | ------ | ------------------------------------------------------------------ |
+| `user.v1.UserService/CreateUser`      | public | Register a new user                                                |
+| `user.v1.UserService/Login`           | public | Exchange email/password for a bearer token                         |
+| `user.v1.UserService/ListPublicUsers` | public | Public user directory (email+name, cursor)                         |
+| `user.v1.UserService/GetUser`         | bearer | Get user by ID                                                     |
+| `user.v1.UserService/UpdateUser`      | bearer | Update a user (own account only)                                   |
+| `user.v1.UserService/DeleteUser`      | bearer | Delete a user (own account only)                                   |
+| `user.v1.UserService/ListUsers`       | bearer | List users (admin, page-paginated)                                 |
+| `grpc.health.v1.Health/Check`         | public | SERVING while the process runs, NOT_SERVING once a shutdown starts |
+
+Metadata keys mirror the HTTP headers: `authorization: Bearer <accessToken>` (the token from `Login`), `accept-language` for the error language, `x-request-id` for correlation (echoed back). Errors come back as gRPC status codes with the same localized messages the HTTP API sends (`InvalidArgument`, `Unauthenticated`, `PermissionDenied`, `NotFound`, `AlreadyExists`, …).
+
+Server reflection is on outside production (`grpc.reflection`), so [grpcurl](https://github.com/fullstorydev/grpcurl) needs no proto files:
+
+```bash
+grpcurl -plaintext localhost:9090 list
+grpcurl -plaintext -d '{"email":"a@b.co","name":"Ada","password":"hunter2-pass"}' localhost:9090 user.v1.UserService/CreateUser
+grpcurl -plaintext localhost:9090 grpc.health.v1.Health/Check
+```
+
+To add an RPC: edit the proto, run `make gen`, implement the method on `transport/grpc.UserHandler`, and list it in `Protected()` when it needs a token.
+{{- end}}
 
 {{- if .HasWorker}}
 

@@ -12,18 +12,18 @@ make setup           # git config core.hooksPath .githooks
 
 make test            # go test -v -race -cover ./...
 make test-coverage   # coverage.out + coverage.html
-make lint            # golangci-lint run [&& sqlfluff lint]
-make fmt             # golangci-lint fmt  [&& sqlfluff fix]
+make lint            # golangci-lint run [&& sqlfluff lint] [&& buf lint]
+make fmt             # golangci-lint fmt  [&& sqlfluff fix] [&& buf format -w]
 make vet             # go vet ./...
 
 make migrate-create name=add_orders    # [--database]
 make migrate-up                        # uses $MIGRATE_DATABASE_URL
 make migrate-down
 
-make gen             # wire-gen + sqlc-gen + proto-gen (whichever apply)
+make gen             # sqlc-gen → proto-gen → tidy → wire-gen (whichever apply)
 make wire-gen        # [--di=wire]
 make sqlc-gen        # [--query=sqlc]
-make proto-gen       # [--transport=grpc]
+make proto-gen       # [--transport=grpc] buf generate → api/gen/
 
 make docker-build    # docker build -t {project}:local .
 make docker-up       # docker compose up -d --build
@@ -33,7 +33,8 @@ make docker-down     # docker compose down
 Notes on the ones with a decision behind them:
 
 - **`test` runs `-race`.** Slower, but the alternative is discovering a data race in production. Nova's own suite uses the same flag.
-- **`lint` chains sqlfluff** for sqlc projects (`--dialect postgres|mysql`), so hand-written SQL is held to the same bar as Go. `fmt` chains `sqlfluff fix`.
+- **`lint` chains sqlfluff** for sqlc projects (`--dialect postgres|mysql`), so hand-written SQL is held to the same bar as Go, and `buf lint` (the `STANDARD` rule set) for gRPC projects. `fmt` chains `sqlfluff fix` and `buf format -w`.
+- **`proto-gen` runs `buf generate`.** The Go plugins are version-pinned `go run` invocations in `buf.gen.yaml` (`protoc-gen-go@v1.36.12`, `protoc-gen-go-grpc@v1.6.2`), so buf v1.70.0 is the only install; `go tool` cannot drive them because `go mod tidy` has to run after the stubs exist, and `go tool` needs a tidied module. Stale `api/gen` is removed first, like `wire-gen`.
 - **`gen` is composed**, not a script: it expands to only the generators the project actually has, so a `--di=fx --query=none` project's `make gen` is a no-op rather than an error.
 - **`wire-gen` deletes `wire_gen.go` first.** A stale generated file that still compiles is worse than a missing one — wire would leave it in place on a failed run. It runs `go tool wire`: the `tool` directive in `go.mod` pins wire's version and `go` builds it from the module cache, so there is nothing to install.
 - **`migrate-down` rolls back `n` migrations, default 1** (`make migrate-down n=3`); a bare `migrate down` would unwind the whole schema.
@@ -107,7 +108,7 @@ The header carries the one prerequisite:
 # Run `make gen` locally after `nova new` and commit before building images.
 ```
 
-Generated code is **committed**, not generated in the image. That keeps the build hermetic (no `wire`/`sqlc` in the builder stage, no network beyond module download) and makes the generated graph reviewable in a PR.
+Generated code (`wire_gen.go`, `dbgen/`, `api/gen/`) is **committed**, not generated in the image. That keeps the build hermetic (no `wire`/`sqlc`/`buf` in the builder stage, no network beyond module download) and makes the generated graph reviewable in a PR.
 
 ### Entrypoint, port, healthcheck
 

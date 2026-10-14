@@ -31,6 +31,9 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/server"
 {{- end}}
 	"{{.ModuleName}}/internal/infrastructure/tracing"
+{{- if .HasGRPC}}
+	transportgrpc "{{.ModuleName}}/internal/transport/grpc"
+{{- end}}
 	"{{.ModuleName}}/pkg/observability"
 {{ if eq .Database "postgres"}}
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -262,8 +265,9 @@ func provideGRPCServer(
 	ctx context.Context,
 	cfg config.GRPCConfig,
 	log *logger.Logger,
+	transport *transportgrpc.Server,
 ) (*server.GRPCServer, error) {
-	srv, cleanup, err := server.NewGRPCServer(ctx, cfg, log)
+	srv, cleanup, err := server.NewGRPCServer(ctx, cfg, log, transport)
 	if err != nil {
 		return nil, err
 	}

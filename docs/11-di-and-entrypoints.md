@@ -188,15 +188,17 @@ The build tag means this file is **excluded from normal builds** — `wire` read
 // a missing public key when the worker doesn't need JWTs).
 ```
 
-| Set              | Contents                                                                   |
-| ---------------- | -------------------------------------------------------------------------- |
-| `infraSet`       | config, logger, tracing, DB, cache, search, broker, JWT, hasher, validator |
-| `httpInfraSet`   | HTTP sub-config, health checker, router, HTTP server                       |
-| `grpcInfraSet`   | gRPC sub-config, gRPC server                                               |
-| `workerInfraSet` | consumer factory, consumer adapter, `NewWorker`, handler slice             |
-| `adapterSet`     | repositories + publisher, each with its `wire.Bind`                        |
-| `usecaseSet`     | usecase constructors                                                       |
-| `transportSet`   | handler, registrar, `provideRegistrars`                                    |
+| Set              | Contents                                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `infraSet`       | config, logger, tracing, DB, cache, search, broker, JWT, hasher, validator                                 |
+| `httpInfraSet`   | HTTP sub-config, health checker, router, HTTP server                                                       |
+| `grpcInfraSet`   | gRPC sub-config, `transport/grpc.New` (interceptors, services, health, reflection), gRPC lifecycle wrapper |
+| `workerInfraSet` | consumer factory, consumer adapter, `NewWorker`, handler slice                                             |
+| `adapterSet`     | repositories + publisher, each with its `wire.Bind`                                                        |
+| `usecaseSet`     | usecase constructors                                                                                       |
+| `transportSet`   | HTTP: handler, registrar, `provideRegistrars`; gRPC: `UserHandler`, `provideGRPCServices`                  |
+
+`InitializeGRPCServer` composes `infraSet`, `grpcInfraSet`, `adapterSet`, `usecaseSet` and `transportSet`, so the gRPC binary reaches the usecase exactly like the HTTP one; `InitializeWorker` swaps in `workerInfraSet` and `workerHandlerSet`.
 
 All **unexported** — nothing outside `di` composes them, so they can be reorganized freely.
 
@@ -265,7 +267,7 @@ The `panic(wire.Build(…))` body is never executed — it's a declaration wire 
 // populated App fields are built, mirroring Wire's pruning of unused providers.
 ```
 
-One `fx.Option` module per Wire set — `infraModule()`, `httpModule()`, `transportModule()`, `grpcModule()`, `workerModule()`, `adapterModule()`, `usecaseModule()` — composed per entry point.
+One `fx.Option` module per Wire set — `infraModule()`, `httpModule()`, `transportModule()`, `grpcModule()`, `workerModule()`, `adapterModule()`, `usecaseModule()` — composed per entry point (`transportModule()` holds the HTTP registrars or the gRPC services, whichever transport was generated).
 
 ```go
 func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {

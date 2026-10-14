@@ -121,7 +121,11 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │           ├── assembler.go        # usecase DTO → response mapping
 │   │   │           └── registrar.go        # Route registration for this feature
 │   │   ├── grpc/                           # [gRPC]
-│   │   │   └── user.go                     # Service implementation
+│   │   │   ├── server.go                   # New(): interceptors + Registrars + health + reflection
+│   │   │   ├── user.go                     # UserHandler — user.v1.UserService over api/gen
+│   │   │   ├── user_test.go                # bufconn end to end (codes, auth, health, locale)
+│   │   │   ├── rpcstatus/status.go         # AppError → gRPC status
+│   │   │   └── interceptor/                # interceptor.go (RequestID, Logging, Recovery), auth.go, locale.go
 │   │   └── worker/                         # [worker]
 │   │       ├── worker.go                   # Orchestrator: consumer → handler dispatch
 │   │       ├── policy.go                   # Per-message deadline, retries, parking (ErrPoison/ErrParked)
@@ -185,9 +189,14 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   └── observability/
 │       └── observability.go                # Logger port — implementations live in infrastructure/
 │
-├── api/                                    # [HTTP]
-│   └── openapi/
-│       └── openapi.yaml                    # OpenAPI 3.0 spec
+├── api/
+│   ├── openapi/                            # [HTTP]
+│   │   ├── openapi.yaml                    # OpenAPI 3.0 spec
+│   │   └── openapi.go                      # embeds it; served at GET /openapi.yaml
+│   └── proto/user/v1/user.proto            # [gRPC] the UserService contract; `make gen` writes api/gen/
+│
+├── buf.yaml                                # [gRPC] buf module + lint rules
+├── buf.gen.yaml                            # [gRPC] version-pinned `go run` plugins → api/gen/
 │
 ├── sqlc/                                   # [--query=sqlc]
 │   ├── sqlc.yaml                           # SQLC config (pg or mysql variant)
@@ -213,4 +222,4 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 - `jwt/` lives in `infrastructure/`, not `adapter/`. Signing and verifying are pure computation, and verification is called only by the auth middleware — so per [04](04-placement-rationale.md#if-only-transport-calls-it--no-domain-interface) no domain interface is needed for the middleware path, and the package belongs with other technical bootstrapping.
 - `tx_manager.go` is split: the interface lives in `domain/`, the postgres implementation in `adapter/repository/postgres/`. Usecases inject `domain.TxManager` and call it without knowing which DB is wired in.
 - `di/provider.go` and `di/app.go` are emitted for **any** transport; only the graph file itself is DI-specific (`wire.go` vs `fx.go` + `fx_provider.go`).
-- `internal/adapter/repository/<db>/dbgen/` and `internal/infrastructure/di/wire_gen.go` are not rendered by nova. `make gen` creates them (sqlc, then `go mod tidy`, then wire, in that order because tidy needs the `dbgen` import to resolve); a fresh clone must run `make gen` before `go build`.
+- `internal/adapter/repository/<db>/dbgen/`, `api/gen/` and `internal/infrastructure/di/wire_gen.go` are not rendered by nova. `make gen` creates them (sqlc, then buf, then `go mod tidy`, then wire: the generators first so tidy sees their imports, wire last because it type-checks the injector against a tidied module); a fresh clone must run `make gen` before `go build`.

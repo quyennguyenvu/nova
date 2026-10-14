@@ -4,54 +4,43 @@ import (
 	"context"
 	"net"
 
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"google.golang.org/grpc"
-
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
-	"{{.ModuleName}}/internal/transport/grpc/interceptor"
+	transportgrpc "{{.ModuleName}}/internal/transport/grpc"
 )
 
-// GRPCServer wraps the gRPC server with graceful shutdown.
+// GRPCServer owns the listener and the graceful stop of the transport's
+// server, the way HTTPServer wraps the router.
 type GRPCServer struct {
-	server *grpc.Server
+	srv    *transportgrpc.Server
 	addr   string
-	cfg    config.GRPCConfig
 	logger *logger.Logger
 }
 
-// NewGRPCServer constructs the gRPC server and wires graceful shutdown.
-// Service registration is done by the caller via Server(). The shutdown
-// context is rooted at context.Background() so the timeout isn't collapsed
-// by an already-cancelled parent.
-func NewGRPCServer(_ context.Context, cfg config.GRPCConfig, log *logger.Logger) (*GRPCServer, func(), error) {
+// NewGRPCServer wires graceful shutdown around srv. The shutdown context is
+// rooted at context.Background() so the timeout isn't collapsed by an
+// already-cancelled parent.
+func NewGRPCServer(
+	_ context.Context,
+	cfg config.GRPCConfig,
+	log *logger.Logger,
+	srv *transportgrpc.Server,
+) (*GRPCServer, func(), error) {
 	addr := ":" + cfg.Port
-
-	s := &GRPCServer{
-		// Tracing via the stats handler; request id → logging → recovery mirror
-		// the HTTP middleware order so every call yields one log line.
-		server: grpc.NewServer(
-			grpc.StatsHandler(otelgrpc.NewServerHandler()),
-			grpc.ChainUnaryInterceptor(
-				interceptor.RequestID(),
-				interceptor.Logging(log),
-				interceptor.Recovery(),
-			),
-		),
-		addr:   addr,
-		cfg:    cfg,
-		logger: log,
-	}
+	s := &GRPCServer{srv: srv, addr: addr, logger: log}
 
 	cleanup := func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 
 		log.Info("shutting down gRPC server", "addr", addr)
+		// NOT_SERVING first, so a health-checking balancer stops routing new
+		// calls while the in-flight ones drain.
+		srv.Health.Shutdown()
 
 		done := make(chan struct{})
 		go func() {
-			s.server.GracefulStop()
+			srv.GRPC.GracefulStop()
 			close(done)
 		}()
 
@@ -60,15 +49,12 @@ func NewGRPCServer(_ context.Context, cfg config.GRPCConfig, log *logger.Logger)
 			log.Info("gRPC server stopped cleanly")
 		case <-cleanupCtx.Done():
 			log.Warn("graceful shutdown timed out, forcing stop")
-			s.server.Stop()
+			srv.GRPC.Stop()
 		}
 	}
 
 	return s, cleanup, nil
 }
-
-// Server returns the underlying gRPC server for service registration.
-func (s *GRPCServer) Server() *grpc.Server { return s.server }
 
 // Start binds the listener and serves until the server is stopped.
 func (s *GRPCServer) Start() error {
@@ -77,5 +63,5 @@ func (s *GRPCServer) Start() error {
 		return err
 	}
 	s.logger.Info("starting gRPC server", "addr", s.addr)
-	return s.server.Serve(lis)
+	return s.srv.GRPC.Serve(lis)
 }

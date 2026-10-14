@@ -315,12 +315,32 @@ func renderAndVet(t *testing.T, cfg *config.ProjectConfig, wireStub string) {
 			t.Fatalf("write wire_gen stub: %v", writeErr)
 		}
 	}
+	if cfg.HasGRPC() {
+		generateProtos(t, dir)
+	}
 
 	if tidyErr := runGo(t, dir, "mod", "tidy"); tidyErr != nil {
 		t.Fatalf("go mod tidy: %v", tidyErr)
 	}
 	if vetErr := runGo(t, dir, "vet", "./..."); vetErr != nil {
 		t.Fatalf("go vet: %v", vetErr)
+	}
+}
+
+// generateProtos runs the rendered project's own codegen for api/gen (buf
+// with go run-pinned plugins) — no hand-written stub could stand in for the
+// generated service interface. Skips when buf is missing, like the
+// bootstraps skip on a missing tool.
+func generateProtos(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := exec.LookPath("buf"); err != nil {
+		t.Skip("buf not on PATH")
+	}
+	cmd := exec.Command("buf", "generate")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("buf generate: %v\n%s", err, out)
 	}
 }
 
@@ -404,6 +424,14 @@ func grpcMatrixConfig(di string) *config.ProjectConfig {
 	cfg.Cache = "none"
 	cfg.Search = "none"
 	cfg.MessageQueue = "none"
+	return cfg
+}
+
+// noDBGRPCConfig is the gRPC transport with no database: the shape the
+// bootstrap boots for real (in-memory repository, fx graph, health probe).
+func noDBGRPCConfig(di string) *config.ProjectConfig {
+	cfg := noDBMatrixConfig("", di)
+	cfg.Transport = "grpc"
 	return cfg
 }
 
@@ -1025,8 +1053,8 @@ func TestClaudeMDGenerated(t *testing.T) {
 		cfg.Database = "none"
 		cfg.QueryGen = "none"
 		src := renderClaudeMD(t, cfg)
-		mustContainAll(t, src, "markdownlint")                   // always present
-		mustNotContain(t, src, "TxManager.WithinTx", "sqlfluff") // gated on a SQL/sqlc backend
+		mustContainAll(t, src, "markdownlint", "repository/memory")                 // always present; no-DB adapter
+		mustNotContain(t, src, "TxManager.WithinTx", "sqlfluff", "repository/none") // gated on a SQL/sqlc backend
 	})
 
 	t.Run("worker_fx", func(t *testing.T) {
@@ -1380,6 +1408,10 @@ func TestGeneratedProjectBootstrap(t *testing.T) {
 		// chi carries the most hand-rolled transport code (client IP, CORS,
 		// error handlers), so it gets a real lint run too.
 		{"http_chi_postgres_fx", noSearch(httpMatrixConfig("chi", "postgres", "fx"))},
+		// gRPC: real buf + wire over sqlc, and the fx graph booted for real
+		// against the in-memory repository (the smoke test dials the port).
+		{"grpc_postgres_wire", grpcMatrixConfig("wire")},
+		{"grpc_none_fx", noDBGRPCConfig("fx")},
 	}
 	for _, tc := range cases {
 		// No t.Parallel: each case compiles a full dependency tree.
@@ -1389,10 +1421,13 @@ func TestGeneratedProjectBootstrap(t *testing.T) {
 
 func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 	t.Helper()
-	dir := renderProject(t, cfg)
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make not on PATH")
 	}
+	if _, err := exec.LookPath("buf"); cfg.HasGRPC() && err != nil {
+		t.Skip("buf not on PATH")
+	}
+	dir := renderProject(t, cfg)
 	run := func(name string, args ...string) {
 		t.Helper()
 		cmd := exec.Command(name, args...)
@@ -1414,9 +1449,12 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 	if cfg.HasWorker() {
 		pkgs = append(pkgs, "./internal/transport/worker/...")
 	}
+	if cfg.HasGRPC() {
+		pkgs = append(pkgs, "./internal/transport/grpc/...")
+	}
 	run("go", append([]string{"test"}, pkgs...)...)
-	if !cfg.HasDatabase() && cfg.HasHTTP() {
-		smokeBoot(t, dir)
+	if !cfg.HasDatabase() && (cfg.HasHTTP() || cfg.HasGRPC()) {
+		smokeBoot(t, dir, cfg)
 	}
 	// The generated project ships a strict golangci config plus a pre-commit
 	// hook and CI job that run it, so a fresh render must already be clean.
@@ -1519,7 +1557,7 @@ func TestObservabilityContract(t *testing.T) {
 		dir := renderProject(t, grpcMatrixConfig("wire"))
 		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/interceptor/interceptor.go")),
 			"func RequestID()", "func Logging(", "func Recovery()", `"duration_ms"`, "requestid.With(")
-		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/server/grpc.go")),
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/server.go")),
 			"otelgrpc.NewServerHandler()", "grpc.ChainUnaryInterceptor(")
 		mustContainAll(t, readFile(t, filepath.Join(dir, "cmd/grpc.go")), "RunE:")
 	})
@@ -1865,7 +1903,7 @@ func assertStorageSeams(t *testing.T, dir, engine string) {
 // README does (.env in cwd), wait for /healthz, then SIGTERM it and expect a
 // clean exit. It runs only for the no-database bootstrap, so no compose
 // dependency is needed.
-func smokeBoot(t *testing.T, dir string) {
+func smokeBoot(t *testing.T, dir string, cfg *config.ProjectConfig) {
 	t.Helper()
 	bin := filepath.Join(dir, "smoke-bin")
 	build := exec.Command("go", "build", "-o", bin, ".")
@@ -1876,11 +1914,15 @@ func smokeBoot(t *testing.T, dir string) {
 	}
 	pub, priv := testKeyPair(t)
 	port := freePort(t)
-	envFile := "APP_ENV=local\nSERVER_PORT=" + port + "\nJWT_PUBLIC_KEY=" + pub + "\nJWT_PRIVATE_KEY=" + priv + "\n"
+	sub, portVar, startLine := "api", "SERVER_PORT", "starting HTTP server"
+	if cfg.HasGRPC() {
+		sub, portVar, startLine = "grpc", "GRPC_PORT", "starting gRPC server"
+	}
+	envFile := "APP_ENV=local\n" + portVar + "=" + port + "\nJWT_PUBLIC_KEY=" + pub + "\nJWT_PRIVATE_KEY=" + priv + "\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(envFile), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "api")
+	cmd := exec.Command(bin, sub)
 	cmd.Dir = dir
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
@@ -1890,21 +1932,36 @@ func smokeBoot(t *testing.T, dir string) {
 	healthy := false
 	for i := 0; i < 50 && !healthy; i++ {
 		time.Sleep(100 * time.Millisecond)
-		resp, err := http.Get("http://127.0.0.1:" + port + "/healthz")
-		if err == nil {
-			healthy = resp.StatusCode == http.StatusOK
-			_ = resp.Body.Close()
-		}
+		healthy = probe(port, cfg.HasGRPC())
 	}
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	waitErr := cmd.Wait()
 	if !healthy {
-		t.Fatalf("/healthz never answered 200\n%s", output.String())
+		t.Fatalf("port %s never answered\n%s", port, output.String())
 	}
 	if waitErr != nil {
 		t.Fatalf("exit after SIGTERM: %v\n%s", waitErr, output.String())
 	}
-	mustContainAll(t, output.String(), "starting HTTP server", "shutdown complete")
+	mustContainAll(t, output.String(), startLine, "shutdown complete")
+}
+
+// probe is the boot signal: HTTP needs a 200 from /healthz; for gRPC a TCP
+// accept on the port is enough (the rendered tests cover the health RPC).
+func probe(port string, grpc bool) bool {
+	if grpc {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 200*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}
+	resp, err := http.Get("http://127.0.0.1:" + port + "/healthz")
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 func testKeyPair(t *testing.T) (string, string) {
@@ -2001,4 +2058,74 @@ func assertImageAndCI(t *testing.T, dir, engine string) {
 	fxSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx.go"))
 	mustContainAll(t, fxSrc, "cfg.ShutdownTimeout", `"timeout_ms"`)
 	mustNotContain(t, fxSrc, "stopTimeout")
+}
+
+// TestGRPCContract pins the phase 8 gRPC transport: a proto contract with
+// buf-driven, version-pinned codegen in make gen, a server with health,
+// reflection and bearer auth, HTTP-equivalent error classification, and a
+// DI graph that reaches the usecase in both engines.
+func TestGRPCContract(t *testing.T) {
+	t.Parallel()
+	t.Run("postgres_wire", func(t *testing.T) {
+		t.Parallel()
+		assertGRPCContract(t, renderProject(t, grpcMatrixConfig("wire")), true)
+	})
+	t.Run("none_fx", func(t *testing.T) {
+		t.Parallel()
+		assertGRPCContract(t, renderProject(t, noDBGRPCConfig("fx")), false)
+	})
+}
+
+func assertGRPCContract(t *testing.T, dir string, wire bool) {
+	t.Helper()
+	mustContainAll(t, readFile(t, filepath.Join(dir, "api/proto/user/v1/user.proto")),
+		"package user.v1;", `option go_package = "matrixtest/api/gen/user/v1;userv1";`, "service UserService {",
+		"rpc CreateUser(", "rpc Login(", "rpc GetUser(", "rpc UpdateUser(", "rpc DeleteUser(",
+		"rpc ListUsers(", "rpc ListPublicUsers(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "buf.gen.yaml")),
+		"protoc-gen-go@v1.36.12", "protoc-gen-go-grpc@v1.6.2", "paths=source_relative")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "buf.yaml")), "path: api/proto", "STANDARD")
+	mk := readFile(t, filepath.Join(dir, "Makefile"))
+	mustContainAll(t, mk, "rm -rf $(PWD)/api/gen; buf generate", "&& buf lint", "&& buf format -w")
+	if wire {
+		mustContainAll(t, mk, "gen: sqlc-gen proto-gen tidy wire-gen")
+	} else {
+		mustContainAll(t, mk, "gen: proto-gen tidy")
+	}
+	mustContainAll(t, readFile(t, filepath.Join(dir, "README.md")), "buf v1.70.0", "go run main.go grpc", "grpcurl")
+	assertGRPCTransport(t, dir, wire)
+}
+
+// assertGRPCTransport: the server factory, the user service, the status
+// mapping, the interceptors, the lifecycle wrapper, config and DI.
+func assertGRPCTransport(t *testing.T, dir string, wire bool) {
+	t.Helper()
+	srv := readFile(t, filepath.Join(dir, "internal/transport/grpc/server.go"))
+	mustContainAll(t, srv, "healthpb.RegisterHealthServer(", "reflection.Register(", "otelgrpc.NewServerHandler()",
+		"interceptor.RequestID(),", "interceptor.Locale(),", "interceptor.Logging(log),", "interceptor.Recovery(),",
+		"interceptor.Auth(tokenSvc, protected),")
+	handler := readFile(t, filepath.Join(dir, "internal/transport/grpc/user.go"))
+	mustContainAll(t, handler, "userv1.UnimplementedUserServiceServer", "func (*UserHandler) Protected()",
+		"userv1.UserService_GetUser_FullMethodName", "rpcstatus.FromError(ctx, err)")
+	mustNotContain(t, handler, "TODO", "placeholder")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/user_test.go")),
+		"bufconn.Listen(", "func TestUserServiceEndToEnd(", "func TestHealthFollowsLifecycle(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/rpcstatus/status.go")),
+		"codes.Unauthenticated", "codes.PermissionDenied", "codes.AlreadyExists", "errors.StashAppError(ctx, app)")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/interceptor/auth.go")),
+		`"authorization"`, "identity.WithUserPrincipal(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/interceptor/interceptor.go")),
+		"errors.PrepareAppErrorContext(ctx)", "errors.AppErrorFromContext(ctx)")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/server/grpc.go")),
+		"srv.Health.Shutdown()", "srv.GRPC.GracefulStop()")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/config.go")), `"reflection"`)
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/production.yaml")),
+		"reflection: false")
+	if wire {
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/wire.go")),
+			"transportgrpc.New,", "adapterSet,\n\t\tusecaseSet,\n\t\ttransportSet,\n\t\twire.Struct(new(GRPCApp)")
+		return
+	}
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx.go")),
+		"transportgrpc.New,", "grpcModule(),\n\t\tadapterModule(),\n\t\tusecaseModule(),\n\t\ttransportModule(),")
 }

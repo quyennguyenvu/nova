@@ -1,6 +1,6 @@
 // Package interceptor holds the unary gRPC interceptors that mirror the HTTP
-// middleware chain: request id, one access line per call, and panic
-// recovery. infrastructure/server.NewGRPCServer installs them.
+// middleware chain: request id, locale, one access line per call, panic
+// recovery and bearer auth. transport/grpc.New installs them.
 package interceptor
 
 import (
@@ -55,38 +55,53 @@ func Logging(base observability.Logger) grpc.UnaryServerInterceptor {
 			With("trace_id", traceIDOr(trace.SpanContextFromContext(ctx))).
 			With("method", info.FullMethod)
 		ctx = logctx.With(ctx, scoped)
+		ctx = errors.PrepareAppErrorContext(ctx)
 
 		resp, err := next(ctx, req)
 
 		code := status.Code(err)
 		fields := []any{"code", code.String(), "duration_ms", time.Since(start).Milliseconds()}
+		// rpcstatus stashed the classified AppError (cause + frame trail);
+		// fall back to the status error for faults gRPC itself raised.
+		logged := err
+		if app := errors.AppErrorFromContext(ctx); app != nil {
+			logged = app
+		}
 		switch {
 		case err == nil:
 			scoped.Info("rpc", fields...)
 		case isServerFault(code):
-			scoped.Error("rpc", append(fields, errors.LogFields(err)...)...)
+			scoped.Error("rpc", append(fields, errors.LogFields(logged)...)...)
 		default:
-			scoped.Warn("rpc", append(fields, errors.LogFields(err)...)...)
+			scoped.Warn("rpc", append(fields, errors.LogFields(logged)...)...)
 		}
 		return resp, err
 	}
 }
 
 // Recovery converts a handler panic into codes.Internal and logs the stack, so
-// one bad request cannot take the process down.
+// one bad request cannot take the process down. The call runs in a closure
+// so the deferred recover can replace the result without named returns.
 func Recovery() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (resp any, err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				logctx.From(ctx).Error("rpc: panic recovered",
-					"method", info.FullMethod,
-					"panic", r,
-					"stack", string(debug.Stack()),
-				)
-				err = status.Error(codes.Internal, "internal error")
-			}
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		var (
+			resp any
+			err  error
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logctx.From(ctx).Error("rpc: panic recovered",
+						"method", info.FullMethod,
+						"panic", r,
+						"stack", string(debug.Stack()),
+					)
+					resp, err = nil, status.Error(codes.Internal, "internal error")
+				}
+			}()
+			resp, err = next(ctx, req)
 		}()
-		return next(ctx, req)
+		return resp, err
 	}
 }
 
