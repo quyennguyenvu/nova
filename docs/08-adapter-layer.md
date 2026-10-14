@@ -87,7 +87,7 @@ Three things to preserve if you touch this:
 - **Nesting reuses, never nests.** `WithinTx` inside `WithinTx` runs `fn` on the existing transaction rather than opening a second one, so composing two usecase methods can't deadlock against itself. If you need genuine nesting, that's savepoints — a different method.
 - **`txKey struct{}`** is an unexported zero-size type, so no other package can collide with the context key or read the transaction out.
 
-The interface lives in `domain/`, the implementation here: the usecase injects `domain.TxManager` and never learns which database is wired in ([02](02-project-layout.md#notes-on-placement-that-differ-from-older-versions-of-this-spec)).
+The interface lives in `domain/`, the implementation here: the usecase injects `domain.TxManager` and never learns which database is wired in ([02](02-project-layout.md#notes-on-placement-that-differ-from-older-versions-of-this-spec)). `Register` runs its uniqueness check and insert inside `WithinTx`, `List` its page and count ([06](06-usecase-layer.md)); the in-memory adapter ships a no-op `TxManager` so the usecase constructor is the same without a database.
 
 ### qx.go — the TX-aware query executor
 
@@ -144,6 +144,25 @@ func (r *UserRepository) GetByID(ctx context.Context, id int64) (*entity.User, e
 **Translating `pgx.ErrNoRows` → `errors.ErrNotFound` is the adapter's job, and it is the whole reason this is an adapter and not infrastructure.** A driver sentinel is a storage detail; the usecase checks `errors.Is(err, errors.ErrNotFound)` and stays portable. Swap postgres for mysql and `sql.ErrNoRows` is translated to the same sentinel by the mysql variant.
 
 `stderrors` is the aliased standard library `errors` — the project's own `pkg/errors` owns the unqualified name. Both are needed here: `stderrors.Is` against the driver sentinel, `errors.Wrapf` for the app error.
+
+### Translating the unique violation
+
+`Create` is the one write whose failure the usecase must tell apart: a second registration for the same email loses the race on the `UNIQUE` index, and that is a 409, not a 500. `errors.go` owns the mapping:
+
+```go
+// translate maps driver errors the usecase must distinguish to the pkg/errors
+// sentinels, keeping the driver error in the chain; anything else passes
+// through for Wrapf to classify as a 500.
+func translate(err error) error {
+    var pgErr *pgconn.PgError
+    if stderrors.As(err, &pgErr) && pgErr.Code == uniqueViolation {   // "23505"
+        return fmt.Errorf("%w: %w", errors.ErrAlreadyExists, err)
+    }
+    return err
+}
+```
+
+The mysql variant checks `*mysql.MySQLError` number `1062`. Both keep the driver error wrapped, so the access log still shows the constraint name, and both are unit-tested without a database (`errors_test.go` builds the driver error by hand).
 
 ### mapper/ — pure row ↔ entity functions
 
@@ -343,7 +362,7 @@ Switching brokers in an existing project means re-rendering `publisher.go` and t
 
 | Method                       | Behaviour                                                |
 | ---------------------------- | -------------------------------------------------------- |
-| `GetByID`                    | Read-through, 15-min TTL                                 |
+| `GetByID`                    | Read-through, 15-min TTL plus up to 3 min of jitter      |
 | `GetByEmail`                 | **Bypasses cache** — it's the login path, needs the hash |
 | `Update`, `Delete`           | Write through, then `DEL` the key                        |
 | `Create`                     | Passthrough (nothing to invalidate)                      |
@@ -351,7 +370,7 @@ Switching brokers in an existing project means re-rendering `publisher.go` and t
 
 Three asymmetries that are all deliberate:
 
-- **Read failures degrade, write failures don't.** A cache read error or a decode error logs a warning and falls through to the database; a refill failure logs and returns the row anyway. But a failed `DEL` after a write **returns an error**, because silently leaving a stale entry is worse than a failed request the caller can retry.
+- **Every cache failure degrades.** A read error or a decode error logs a warning and falls through to the database; a refill failure logs and returns the row anyway; a failed `DEL` after a write logs a warning and relies on the TTL, because the write succeeded and failing the request would not make the cache any fresher. The jitter on the TTL keeps a cold start from expiring every key at once.
 - **`GetByEmail` never caches.** It is the only read that needs `PasswordHash`, and the cached projection deliberately omits credentials.
 - **List/Count/ListAfter don't cache.** Any write to the table invalidates every cached page, so the hit rate rarely pays for the staleness.
 

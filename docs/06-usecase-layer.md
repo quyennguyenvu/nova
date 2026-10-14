@@ -1,6 +1,6 @@
 # 6. Usecase layer
 
-Layer 2 — application business rules. Depends on `domain/` (plus `infrastructure/jwt` for the login flow), never on a framework or a transport. ([index](README.md))
+Layer 2 — application business rules. Depends on `domain/` and `pkg/` only, never on `infrastructure/`, a framework or a transport (`TestDependencyRule` in nova pins it). ([index](README.md))
 
 A usecase **orchestrates**: it loads entities through ports, applies application policy (clamping, uniqueness checks, authorization), performs side effects, and returns its own DTOs. Entities never cross this boundary — the transport layer only ever sees `usecase/*.Output`.
 
@@ -20,20 +20,21 @@ For a `--transport=worker` project a second package, `usecase/useraudit/`, follo
 
 ## internal/usecase/user/service.go
 
-The service holds only ports (plus one concrete `*jwt.TokenService` — see [04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface) for why that seam is deliberately absent). The publisher field only exists when a queue is selected:
+The service holds only ports — the token signer is `security.TokenIssuer` ([04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface)), so `service_test.go` runs every method against fakes. The publisher field only exists when a queue is selected:
 
 ```go
 // Service implements the user use case. It never calls the logger directly —
 // it wraps errors with errors.Wrapf and lets the transport boundary log once.
 //
-// Note the JWT TokenService dependency: Login lives on this service rather
-// than a separate auth feature because authentication IS a user concern in
-// the scaffold. Split it out when admin/service-account auth diverges from
-// end-user auth.
+// Login lives on this service rather than a separate auth feature because
+// authentication IS a user concern in the scaffold; it signs through the
+// security.TokenIssuer port, so the usecase never imports infrastructure.
+// Split it out when admin/service-account auth diverges from end-user auth.
 type Service struct {
     userRepo  domain.UserRepository
     hasher    security.PasswordHasher
-    tokenSvc  *jwtsec.TokenService
+    tokens    security.TokenIssuer
+    tx        domain.TxManager
     publisher domain.UserPublisher   // [--queue]
 }
 ```
@@ -49,37 +50,48 @@ Two error shapes, and the choice is not stylistic:
 | A rule the caller violated | `errors.L(locale.X, args…)`     | Carries a translatable code + HTTP status        |
 | A dependency failed        | `errors.Wrapf(err, "op ctx=…")` | Adds caller frame + context, preserves the cause |
 
-Both are `*errors.AppError`; `.WithCause(err)` attaches the underlying error to a locale-coded one so the log line keeps the technical detail while the response stays user-facing. [10](10-shared-packages.md) documents the type.
+`L` returns `*errors.AppError` (it is never nil, so `.WithCause(err)` chains to attach the underlying error while the response stays user-facing); `Wrapf` returns `error`, so a nil cause yields a true nil rather than a typed-nil pointer. [10](10-shared-packages.md) documents the type.
 
 The service **never logs** — except for one deliberate case (below). It wraps and returns; the transport boundary logs once. That keeps a single log line per request instead of one per layer.
 
-### Register — check, hash, create, publish
+### Register — hash, then check and insert in one transaction
 
 ```go
 func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, error) {
-    // Treat ErrNotFound as the only "ok, proceed" outcome; any other error
-    // from the lookup (DB outage, network) must propagate so we don't
-    // race-create a duplicate row when the uniqueness check itself failed.
-    existing, err := s.userRepo.GetByEmail(ctx, input.Email)
-    switch {
-    case err == nil && existing != nil:
-        return nil, errors.L(locale.UserEmailExists, input.Email).
-            WithCause(errors.New("email already registered"))
-    case err != nil && !errors.Is(err, errors.ErrNotFound):
-        return nil, errors.Wrapf(err, "register user email=%s: lookup", input.Email)
-    }
-
+    // Hash outside the transaction: bcrypt costs ~100ms and must not hold a
+    // connection open.
     hash, err := s.hasher.Hash(input.Password)
-    if err != nil {
-        return nil, errors.Wrapf(err, "register user email=%s: hash", input.Email)
-    }
-    // … build *entity.User with the hash, then s.userRepo.Create(ctx, user)
+    …
+    user, err := entity.NewUser(input.Email, input.Name, hash)   // invariants → 400
+    …
+    txErr := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+        // Treat ErrNotFound as the only "ok, proceed" outcome; any other error
+        // from the lookup (DB outage, network) must propagate so we don't
+        // race-create a duplicate row when the uniqueness check itself failed.
+        existing, lookupErr := s.userRepo.GetByEmail(ctx, user.Email)
+        switch {
+        case lookupErr == nil && existing != nil:
+            return errors.L(locale.UserEmailExists, user.Email).WithCause(errors.New("email already registered"))
+        case lookupErr != nil && !errors.Is(lookupErr, errors.ErrNotFound):
+            return errors.Wrapf(lookupErr, "register user email=%s: lookup", user.Email)
+        }
+        if createErr := s.userRepo.Create(ctx, user); createErr != nil {
+            // Two registrations can pass the check together; the unique index
+            // decides, and the adapter reports it as ErrAlreadyExists.
+            if errors.Is(createErr, errors.ErrAlreadyExists) {
+                return errors.L(locale.UserEmailExists, user.Email).WithCause(createErr)
+            }
+            return errors.Wrapf(createErr, "register user email=%s", user.Email)
+        }
+        return nil
+    })
 ```
 
-Two things worth copying into your own usecases:
+Three things worth copying into your own usecases:
 
 1. **The `switch` on the lookup error.** Collapsing it to `if err != nil { /* proceed */ }` turns a database outage into a duplicate insert. Only `ErrNotFound` means "free to create".
-2. **The uniqueness check is advisory.** It produces the friendly `UserEmailExists` message; the `UNIQUE` constraint in the migration is what actually guarantees it. Two concurrent registers can both pass the check — the loser gets the constraint violation.
+2. **The uniqueness check is advisory; the constraint decides.** Two concurrent registers can both pass the check. The loser's insert raises the unique violation, the adapter translates it to `errors.ErrAlreadyExists` ([08](08-adapter-layer.md#translating-the-unique-violation)), and the usecase turns that into the same `UserEmailExists` 409 — never a 500. `service_test.go` pins it with a fake repository whose `Create` returns the sentinel.
+3. **Expensive work stays outside `WithinTx`.** The hash is computed first; only the check and the insert hold a connection.
 
 The event publish is the one place the service logs, because the failure is deliberately swallowed:
 
@@ -104,7 +116,7 @@ const (
 )
 ```
 
-`List` clamps `Page`/`PerPage`, builds `domain.UserFilter`, then runs the page query **and** a `Count` against the same filter (the port contract says `Count` ignores `Limit`/`Offset`). It returns the _clamped_ values in `ListOutput`, so the page meta the client sees matches what was actually queried — an out-of-range `per_page=9999` reports `per_page: 10`, not a lie.
+`List` clamps `Page`/`PerPage`, builds `domain.UserFilter`, then runs the page query **and** a `Count` against the same filter inside one `WithinTx` (the port contract says `Count` ignores `Limit`/`Offset`; one transaction gives the two reads one snapshot where the engine's isolation level provides it — MySQL's REPEATABLE READ does, Postgres READ COMMITTED does not, so raise it in `TxManager` if that matters). It returns the _clamped_ values in `ListOutput`, so the page meta the client sees matches what was actually queried — an out-of-range `per_page=9999` reports `per_page: 10`, not a lie.
 
 Note that transport hands raw values in as `ListInput` and the service converts to `domain.UserFilter` internally: **transport never imports `domain`.**
 
@@ -151,7 +163,7 @@ On success it builds an `identity.UserPrincipal`, signs it, and returns the toke
 
 ### Ownership and input bounds
 
-`Update` and `Delete` begin with `requireSelf(ctx, id)`: no principal in ctx is 401, another user's id is 403. The check lives in the usecase, not the handler, so a future gRPC or CLI transport inherits it; widen it here (roles, an admin audience) when the product needs it. `Register` refuses passwords over `security.MaxPasswordLen` (72 bytes, the bcrypt bound) with the generic 400 instead of letting the hasher fail with a 500.
+`Update` loads the entity, calls `user.Rename(name)` — the entity validates and stamps `UpdatedAt` — and persists it, so the `updatedAt` in the response is the value that was written, not the pre-update one. `Update` and `Delete` begin with `requireSelf(ctx, id)`: no principal in ctx is 401, another user's id is 403. The check lives in the usecase, not the handler, so a future gRPC or CLI transport inherits it; widen it here (roles, an admin audience) when the product needs it. `Register` refuses passwords over `security.MaxPasswordLen` (72 bytes, the bcrypt bound) with the generic 400 instead of letting the hasher fail with a 500.
 
 ## internal/usecase/user/dto.go
 

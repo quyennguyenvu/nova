@@ -4,8 +4,9 @@
 // both keys (signs + verifies) while downstream services configure only the
 // public key and run verify-only — Sign errors when no private key is set.
 // Swap to a different algorithm by replacing the SigningMethod + key plumbing
-// here without touching callers; the TokenService surface (Sign /
-// ParseAndVerifyAccessToken) is what middleware and usecases depend on.
+// here without touching callers: middleware depends on the TokenService
+// surface (ParseAndVerifyAccessToken), the usecase only on the
+// security.TokenIssuer port this type satisfies.
 package jwtsec
 
 import (
@@ -15,9 +16,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt/v5"
 
 	"{{.ModuleName}}/internal/domain/identity"
+	"{{.ModuleName}}/internal/domain/security"
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/locale"
@@ -33,6 +35,8 @@ type TokenService struct {
 	audience       string
 	accessTokenTTL time.Duration
 }
+
+var _ security.TokenIssuer = (*TokenService)(nil)
 
 // NewTokenService parses the base64-encoded PEM keys from config once at
 // startup, so request-path verification touches only the in-memory key. The
@@ -70,8 +74,8 @@ func NewTokenService(cfg config.JWTConfig) (*TokenService, error) {
 func (s *TokenService) AccessTokenTTL() time.Duration { return s.accessTokenTTL }
 
 // Sign issues a signed access token for p. The token's exp/iat/iss/aud are
-// derived from config; custom claims (userId, email, …) come from p. Returns
-// an error on verify-only services (no private key configured).
+// derived from config; custom claims (userId, email, name) come from p.
+// Returns an error on verify-only services (no private key configured).
 func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 	if s.privateKey == nil {
 		return "", errors.L(locale.InternalError).
@@ -87,13 +91,9 @@ func (s *TokenService) Sign(p *identity.UserPrincipal) (string, error) {
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 		},
-		UserID:    p.UserID,
-		Email:     p.Email,
-		Name:      p.Name,
-		Phone:     p.Phone,
-		DeviceID:  p.DeviceID,
-		Platform:  p.Platform,
-		SessionID: p.SessionID,
+		UserID: p.UserID,
+		Email:  p.Email,
+		Name:   p.Name,
 	}
 	tkn := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	signed, err := tkn.SignedString(s.privateKey)
@@ -113,8 +113,20 @@ func (s *TokenService) ParseAndVerifyAccessToken(
 	ctx context.Context,
 	tokenStr string,
 ) (*identity.UserPrincipal, error) {
-	log := logctx.From(ctx)
 	var claims AccessTokenClaims
+	opts := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
+		jwt.WithExpirationRequired(),
+	}
+	// Issuer and audience are enforced by the parser, so a token signed with
+	// our key but minted for another environment fails like any other bad
+	// token; classifyParseError still flags it as anomalous.
+	if s.issuer != "" {
+		opts = append(opts, jwt.WithIssuer(s.issuer))
+	}
+	if s.audience != "" {
+		opts = append(opts, jwt.WithAudience(s.audience))
+	}
 	tkn, err := jwt.ParseWithClaims(
 		tokenStr,
 		&claims,
@@ -124,7 +136,7 @@ func (s *TokenService) ParseAndVerifyAccessToken(
 			}
 			return s.publicKey, nil
 		},
-		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
+		opts...,
 	)
 	if err != nil {
 		logVerifyFailure(ctx, err)
@@ -133,28 +145,13 @@ func (s *TokenService) ParseAndVerifyAccessToken(
 	if tkn == nil || !tkn.Valid {
 		return nil, errors.L(locale.Unauthorized).WithCause(errors.New("token invalid"))
 	}
-	// A token whose signature checked out against our key but carries the wrong
-	// issuer/audience is suspicious (cross-environment replay or misconfig), not
-	// routine — log it at Warn even though the client still gets a generic 401.
-	if s.issuer != "" && !claims.VerifyIssuer(s.issuer, true) {
-		log.Warn("jwt verification anomaly", "reason", "bad_issuer")
-		return nil, errors.L(locale.Unauthorized).WithCause(errors.New("issuer mismatch"))
-	}
-	if s.audience != "" && !claims.VerifyAudience(s.audience, true) {
-		log.Warn("jwt verification anomaly", "reason", "bad_audience")
-		return nil, errors.L(locale.Unauthorized).WithCause(errors.New("audience mismatch"))
-	}
 
 	return &identity.UserPrincipal{
 		Principal: identity.Principal{
 			UserID: claims.UserID,
 			Email:  claims.Email,
 		},
-		Name:      claims.Name,
-		Phone:     claims.Phone,
-		DeviceID:  claims.DeviceID,
-		Platform:  claims.Platform,
-		SessionID: claims.SessionID,
+		Name: claims.Name,
 	}, nil
 }
 
@@ -162,11 +159,13 @@ func (s *TokenService) ParseAndVerifyAccessToken(
 // than logging every one. At millions of logins the routine rejections —
 // expired tokens, malformed/garbage input from buggy or stale clients — are
 // constant background noise and carry no signal, so they go to Debug (silent at
-// the default Info level). An invalid signature or unverifiable token is the
-// opposite: it means either the public key has drifted across the fleet (an ops
-// bug) or someone is presenting a forged token, so it goes to Warn. The stable
-// `reason` field lets a log-based alert key off the anomalous bucket without a
-// metrics pipeline; raw err goes only to the server-side log, never the client.
+// the default Info level). An invalid signature, an unverifiable token or a
+// wrong issuer/audience is the opposite: it means either the public key has
+// drifted across the fleet (an ops bug), a token from another environment is
+// being replayed, or someone is presenting a forged token, so it goes to Warn.
+// The stable `reason` field lets a log-based alert key off the anomalous bucket
+// without a metrics pipeline; raw err goes only to the server-side log, never
+// the client.
 func logVerifyFailure(ctx context.Context, err error) {
 	log := logctx.From(ctx)
 	reason, anomalous := classifyParseError(err)
@@ -177,26 +176,28 @@ func logVerifyFailure(ctx context.Context, err error) {
 	log.Debug("jwt verification rejected", "reason", reason)
 }
 
-// classifyParseError maps a golang-jwt v4 *ValidationError bitfield to a
-// stable reason string, plus whether it is anomalous (worth a Warn). Anything
-// that is not a recognised routine rejection — including a non-ValidationError,
-// which shouldn't happen — is anomalous so it can never hide in the noise.
+// classifyParseError maps a golang-jwt v5 error to a stable reason string,
+// plus whether it is anomalous (worth a Warn). The specific sentinels are
+// checked before the generic ErrTokenInvalidClaims they are joined with.
+// Anything unrecognised is anomalous so it can never hide in the noise.
 func classifyParseError(err error) (string, bool) {
-	var ve *jwt.ValidationError
-	if !errors.As(err, &ve) {
-		return "unknown", true
-	}
 	switch {
-	case ve.Errors&(jwt.ValidationErrorSignatureInvalid|jwt.ValidationErrorUnverifiable) != 0:
+	case errors.Is(err, jwt.ErrTokenSignatureInvalid), errors.Is(err, jwt.ErrTokenUnverifiable):
 		return "signature_invalid", true
-	case ve.Errors&jwt.ValidationErrorMalformed != 0:
+	case errors.Is(err, jwt.ErrTokenInvalidIssuer):
+		return "bad_issuer", true
+	case errors.Is(err, jwt.ErrTokenInvalidAudience):
+		return "bad_audience", true
+	case errors.Is(err, jwt.ErrTokenMalformed):
 		return "malformed", false
-	case ve.Errors&jwt.ValidationErrorExpired != 0:
+	case errors.Is(err, jwt.ErrTokenExpired):
 		return "expired", false
-	case ve.Errors&jwt.ValidationErrorNotValidYet != 0:
+	case errors.Is(err, jwt.ErrTokenNotValidYet), errors.Is(err, jwt.ErrTokenUsedBeforeIssued):
 		return "not_yet_valid", false
-	default:
+	case errors.Is(err, jwt.ErrTokenInvalidClaims), errors.Is(err, jwt.ErrTokenRequiredClaimMissing):
 		return "claims_invalid", false
+	default:
+		return "unknown", true
 	}
 }
 

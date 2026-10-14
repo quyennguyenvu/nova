@@ -1,18 +1,22 @@
 // Package redis is the cache-aside decorator over UserRepository.
 //
-// Cache hits return an entity.User WITHOUT the Password/PasswordHash fields —
-// credentials are never serialized into Redis. Callers MUST NOT re-persist
-// the returned entity into the underlying store; pull a fresh row via
-// GetByEmail (which bypasses cache) when credentials are required.
+// Cache hits return an entity.User WITHOUT the PasswordHash field —
+// credentials are never serialized into Redis. Passing such an entity back
+// to Update is safe only because UpdateUser writes name and updated_at and
+// nothing else; keep it that way if that query grows columns, or pull a
+// fresh row via GetByEmail (which bypasses the cache) before persisting.
 //
-// Invalidation: Update and Delete return wrapped errors on Del failure so the
-// caller can retry. A failed Del would otherwise leave stale data in cache.
+// Invalidation is best effort: a failed DEL after a successful write logs a
+// warning and relies on the TTL, because failing the request would not make
+// the cache any fresher. The TTL carries jitter so a cold start does not
+// expire every key at once.
 package redis
 
 import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -28,7 +32,13 @@ import (
 const (
 	userCachePrefix = "user:"
 	userCacheTTL    = 15 * time.Minute
+	userCacheJitter = 3 * time.Minute
 )
+
+// ttl spreads expiry over [userCacheTTL, userCacheTTL+userCacheJitter).
+func ttl() time.Duration {
+	return userCacheTTL + time.Duration(rand.Int64N(int64(userCacheJitter))) //nolint:gosec // jitter, not a secret
+}
 
 // Decorating means satisfying the port, so binding domain.UserRepository to
 // this type in DI type-checks.
@@ -67,7 +77,7 @@ func (r *UserCacheRepository) GetByID(ctx context.Context, id int64) (*entity.Us
 
 	// Best-effort write — log the miss but don't fail the read.
 	if data, marshalErr := mapper.MarshalUser(user); marshalErr == nil {
-		if setErr := r.cache.Set(ctx, key, data, userCacheTTL).Err(); setErr != nil {
+		if setErr := r.cache.Set(ctx, key, data, ttl()).Err(); setErr != nil {
 			log.Warn("user cache: refill failed", "key", key, "err", setErr)
 		}
 	}
@@ -83,7 +93,7 @@ func (r *UserCacheRepository) Update(ctx context.Context, user *entity.User) err
 		return errors.Wrapf(err, "user cache: update id=%d", user.ID)
 	}
 	if delErr := r.cache.Del(ctx, userKey(user.ID)).Err(); delErr != nil {
-		return errors.Wrapf(delErr, "user cache: invalidate after update id=%d", user.ID)
+		logctx.From(ctx).Warn("user cache: invalidate failed", "key", userKey(user.ID), "err", delErr)
 	}
 	return nil
 }
@@ -93,7 +103,7 @@ func (r *UserCacheRepository) Delete(ctx context.Context, id int64) error {
 		return errors.Wrapf(err, "user cache: delete id=%d", id)
 	}
 	if delErr := r.cache.Del(ctx, userKey(id)).Err(); delErr != nil {
-		return errors.Wrapf(delErr, "user cache: invalidate after delete id=%d", id)
+		logctx.From(ctx).Warn("user cache: invalidate failed", "key", userKey(id), "err", delErr)
 	}
 	return nil
 }

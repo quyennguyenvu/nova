@@ -87,7 +87,7 @@ return errors.Wrapf(err, "register user email=%s: lookup", input.Email)
 // authoritative.
 ```
 
-That is the rule the whole design rests on: **classify once, at the layer that knows what went wrong.** Twelve layers of `Wrapf` on a 404 still produce a 404. And `Wrap(nil, …)` returns nil, so `return errors.Wrap(err, "…")` is safe unconditionally.
+That is the rule the whole design rests on: **classify once, at the layer that knows what went wrong.** Twelve layers of `Wrapf` on a 404 still produce a 404. `Wrap`/`Wrapf` return `error`, not `*AppError`, on purpose: a nil `*AppError` stored in an `error` is not nil, so returning the concrete type would make `return errors.Wrap(err, "…")` on a nil `err` report a failure. As `error`, `Wrap(nil, …)` is a true nil and the pattern is safe unconditionally; `errors.ToAppError` or `errors.As` recover the concrete type at the boundary (`errors_test.go` pins both). `L` keeps returning `*AppError` because it never returns nil and `.WithCause` chains off it.
 
 `WithCause` attaches a diagnostic cause **without** changing the classification:
 

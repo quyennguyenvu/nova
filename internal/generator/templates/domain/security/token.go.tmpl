@@ -1,0 +1,16 @@
+package security
+
+import (
+	"time"
+
+	"{{.ModuleName}}/internal/domain/identity"
+)
+
+// TokenIssuer signs access tokens for an authenticated principal and reports
+// their lifetime. Only the login flow needs it, so only signing is a port;
+// verification is a transport (middleware) concern that calls the
+// infrastructure/jwt service directly.
+type TokenIssuer interface {
+	Sign(p *identity.UserPrincipal) (string, error)
+	AccessTokenTTL() time.Duration
+}

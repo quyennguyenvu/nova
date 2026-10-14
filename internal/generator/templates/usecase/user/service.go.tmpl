@@ -7,13 +7,11 @@ import (
 	"math"
 	"strconv"
 	"sync"
-	"time"
 
 	"{{.ModuleName}}/internal/domain"
 	"{{.ModuleName}}/internal/domain/entity"
 	"{{.ModuleName}}/internal/domain/identity"
 	"{{.ModuleName}}/internal/domain/security"
-	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/pkg/errors"
 	"{{.ModuleName}}/pkg/locale"
 {{- if .HasMessageQueue}}
@@ -24,14 +22,15 @@ import (
 // Service implements the user use case. It never calls the logger directly —
 // it wraps errors with errors.Wrapf and lets the transport boundary log once.
 //
-// Note the JWT TokenService dependency: Login lives on this service rather
-// than a separate auth feature because authentication IS a user concern in
-// the scaffold. Split it out when admin/service-account auth diverges from
-// end-user auth.
+// Login lives on this service rather than a separate auth feature because
+// authentication IS a user concern in the scaffold; it signs through the
+// security.TokenIssuer port, so the usecase never imports infrastructure.
+// Split it out when admin/service-account auth diverges from end-user auth.
 type Service struct {
 	userRepo  domain.UserRepository
 	hasher    security.PasswordHasher
-	tokenSvc  *jwtsec.TokenService
+	tokens    security.TokenIssuer
+	tx        domain.TxManager
 {{- if .HasMessageQueue}}
 	publisher domain.UserPublisher
 {{- end}}
@@ -44,7 +43,8 @@ type Service struct {
 func NewService(
 	userRepo domain.UserRepository,
 	hasher security.PasswordHasher,
-	tokenSvc *jwtsec.TokenService,
+	tokens security.TokenIssuer,
+	tx domain.TxManager,
 {{- if .HasMessageQueue}}
 	publisher domain.UserPublisher,
 {{- end}}
@@ -52,7 +52,8 @@ func NewService(
 	return &Service{
 		userRepo: userRepo,
 		hasher:   hasher,
-		tokenSvc: tokenSvc,
+		tokens:   tokens,
+		tx:       tx,
 {{- if .HasMessageQueue}}
 		publisher: publisher,
 {{- end}}
@@ -64,34 +65,42 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, e
 		return nil, errors.L(locale.InvalidRequest).
 			WithCause(fmt.Errorf("password longer than %d bytes", security.MaxPasswordLen))
 	}
-	// Treat ErrNotFound as the only "ok, proceed" outcome; any other error
-	// from the lookup (DB outage, network) must propagate so we don't
-	// race-create a duplicate row when the uniqueness check itself failed.
-	existing, err := s.userRepo.GetByEmail(ctx, input.Email)
-	switch {
-	case err == nil && existing != nil:
-		// Locale-coded error: transport translates UserEmailExists with input.Email
-		// substituted into the user's language (e.g. "Email foo@bar already exists").
-		return nil, errors.L(locale.UserEmailExists, input.Email).WithCause(errors.New("email already registered"))
-	case err != nil && !errors.Is(err, errors.ErrNotFound):
-		return nil, errors.Wrapf(err, "register user email=%s: lookup", input.Email)
-	}
-
+	// Hash outside the transaction: bcrypt costs ~100ms and must not hold a
+	// connection open.
 	hash, err := s.hasher.Hash(input.Password)
 	if err != nil {
 		return nil, errors.Wrapf(err, "register user email=%s: hash", input.Email)
 	}
-
-	now := time.Now()
-	user := &entity.User{
-		Email:        input.Email,
-		Name:         input.Name,
-		PasswordHash: hash,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+	user, err := entity.NewUser(input.Email, input.Name, hash)
+	if err != nil {
+		return nil, errors.L(locale.InvalidRequest).WithCause(err)
 	}
-	if createErr := s.userRepo.Create(ctx, user); createErr != nil {
-		return nil, errors.Wrapf(createErr, "register user email=%s", input.Email)
+
+	txErr := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		// Treat ErrNotFound as the only "ok, proceed" outcome; any other error
+		// from the lookup (DB outage, network) must propagate so we don't
+		// race-create a duplicate row when the uniqueness check itself failed.
+		existing, lookupErr := s.userRepo.GetByEmail(ctx, user.Email)
+		switch {
+		case lookupErr == nil && existing != nil:
+			// Locale-coded error: transport translates UserEmailExists with the
+			// email substituted into the user's language.
+			return errors.L(locale.UserEmailExists, user.Email).WithCause(errors.New("email already registered"))
+		case lookupErr != nil && !errors.Is(lookupErr, errors.ErrNotFound):
+			return errors.Wrapf(lookupErr, "register user email=%s: lookup", user.Email)
+		}
+		if createErr := s.userRepo.Create(ctx, user); createErr != nil {
+			// Two registrations can pass the check together; the unique index
+			// decides, and the adapter reports it as ErrAlreadyExists.
+			if errors.Is(createErr, errors.ErrAlreadyExists) {
+				return errors.L(locale.UserEmailExists, user.Email).WithCause(createErr)
+			}
+			return errors.Wrapf(createErr, "register user email=%s", user.Email)
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, txErr
 	}
 
 {{- if .HasMessageQueue}}
@@ -132,7 +141,11 @@ func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*Out
 	}
 
 	if input.Name != "" {
-		user.Name = input.Name
+		// The entity owns the name invariant and stamps UpdatedAt, so the row
+		// written and the response returned agree.
+		if renameErr := user.Rename(input.Name); renameErr != nil {
+			return nil, errors.L(locale.InvalidRequest).WithCause(renameErr)
+		}
 	}
 
 	if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
@@ -176,8 +189,9 @@ const (
 
 // List returns one admin (page-based) page of users plus the totals needed to
 // render "page N of M". It runs the page query and a COUNT against the same
-// filter; the COUNT ignores Limit/Offset. Page/PerPage in the result are the
-// clamped values, so the caller's page meta matches what was actually queried.
+// filter inside one transaction; the COUNT ignores Limit/Offset. Page/PerPage
+// in the result are the clamped values, so the caller's page meta matches
+// what was actually queried.
 func (s *Service) List(ctx context.Context, input ListInput) (*ListOutput, error) {
 	perPage := input.PerPage
 	if perPage <= 0 || perPage > listMaxPerPage {
@@ -198,13 +212,25 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListOutput, error
 		Limit:  int32(perPage),
 		Offset: int32(offset),  //nolint:gosec // bounded by the MaxInt32 check above
 	}
-	users, err := s.userRepo.List(ctx, filter)
-	if err != nil {
-		return nil, errors.Wrapf(err, "list users page=%d perPage=%d", page, perPage)
-	}
-	total, err := s.userRepo.Count(ctx, filter)
-	if err != nil {
-		return nil, errors.Wrapf(err, "count users email=%s", input.Email)
+	var (
+		users []*entity.User
+		total int64
+	)
+	// One transaction so the page and its count come from one snapshot where
+	// the engine's isolation level gives one (MySQL's REPEATABLE READ does;
+	// Postgres READ COMMITTED does not — raise it in TxManager if it matters).
+	txErr := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		var err error
+		if users, err = s.userRepo.List(ctx, filter); err != nil {
+			return errors.Wrapf(err, "list users page=%d perPage=%d", page, perPage)
+		}
+		if total, err = s.userRepo.Count(ctx, filter); err != nil {
+			return errors.Wrapf(err, "count users email=%s", input.Email)
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, txErr
 	}
 	items := make([]*Output, len(users))
 	for i, u := range users {
@@ -318,14 +344,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*LoginOutput, er
 		Principal: identity.Principal{UserID: user.ID, Email: user.Email},
 		Name:      user.Name,
 	}
-	token, err := s.tokenSvc.Sign(principal)
+	token, err := s.tokens.Sign(principal)
 	if err != nil {
 		return nil, errors.Wrapf(err, "login email=%s: sign", input.Email)
 	}
 
 	return &LoginOutput{
 		AccessToken: token,
-		ExpiresIn:   int64(s.tokenSvc.AccessTokenTTL().Seconds()),
+		ExpiresIn:   int64(s.tokens.AccessTokenTTL().Seconds()),
 		User:        toOutput(user),
 	}, nil
 }

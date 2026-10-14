@@ -130,11 +130,12 @@ type NotificationSender interface {
 ```
 
 ```go
-// internal/domain/auth.go — only if usecase needs to GENERATE tokens (e.g. login flow)
-package domain
+// internal/domain/security/token.go — the usecase needs to GENERATE tokens (login flow)
+package security
 
-type TokenGenerator interface {
-    GenerateToken(userID int64, role string) (string, error)
+type TokenIssuer interface {
+    Sign(p *identity.UserPrincipal) (string, error)
+    AccessTokenTTL() time.Duration
 }
 ```
 
@@ -144,12 +145,12 @@ Implementations live in `adapter/`, unless the port is pure computation with no 
 // internal/adapter/external/stripe.go
 var _ domain.PaymentGateway = (*StripeClient)(nil)
 
-// internal/infrastructure/jwt/service.go — implements domain.TokenGenerator
+// internal/infrastructure/jwt/service.go — implements security.TokenIssuer
 // (signing is pure computation, so infrastructure/ rather than adapter/)
-var _ domain.TokenGenerator = (*TokenService)(nil)
+var _ security.TokenIssuer = (*TokenService)(nil)
 ```
 
-> **Shipped variant:** `nova new` does **not** emit `domain/auth.go`. The user service holds a concrete `*jwt.TokenService` (`internal/infrastructure/jwt`) and calls it directly from `Login`, so the scaffold has one usecase → infrastructure import. It buys a working login flow with no extra indirection; the cost is that mocking `Login` in a unit test means constructing a real `TokenService` (a keypair) instead of a fake. Introduce `domain.TokenGenerator` and bind it in DI as soon as you want that seam — nothing else in the layout has to change.
+> **Shipped variant:** `nova new` emits exactly this as `domain/security/token.go`. The user service holds the `security.TokenIssuer` port, DI binds `*jwtsec.TokenService` to it (`wire.Bind` / `provideTokenIssuer`), and `usecase/` imports nothing from `infrastructure/` — `TestDependencyRule` in nova pins that. The payoff is in `usecase/user/service_test.go`: `Login` runs against a two-line fake issuer instead of a real keypair.
 
 ### If only transport calls it → NO domain interface
 
@@ -203,7 +204,7 @@ per concern)   by middleware/handler.
 | User repository           | Yes               | `domain/user.go`                          | `adapter/repository/postgres/`  |
 | Payment gateway           | Yes               | `domain/payment.go`                       | `adapter/external/stripe.go`    |
 | Email/SMS sender          | Yes               | `domain/notification.go`                  | `adapter/external/sendgrid.go`  |
-| Token generator (login)   | Yes               | `domain/auth.go` — not shipped; see above | `infrastructure/jwt/service.go` |
+| Token generator (login)   | Yes               | `domain/security/token.go` (TokenIssuer)  | `infrastructure/jwt/service.go` |
 | JWT verifier (middleware) | No                | None                                      | `infrastructure/jwt/service.go` |
 | Rate limiter              | No                | None                                      | Middleware concern              |
 

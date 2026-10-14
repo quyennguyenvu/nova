@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -48,8 +50,9 @@ type CreateUserParams struct {
 	CreatedAt, UpdatedAt  pgtype.Timestamptz
 }
 type UpdateUserParams struct {
-	ID   int64
-	Name string
+	ID        int64
+	Name      string
+	UpdatedAt pgtype.Timestamptz
 }
 type ListUsersParams struct {
 	Email         string
@@ -115,8 +118,9 @@ type CreateUserParams struct {
 	CreatedAt, UpdatedAt  time.Time
 }
 type UpdateUserParams struct {
-	ID   int64
-	Name string
+	ID        int64
+	Name      string
+	UpdatedAt time.Time
 }
 type ListUsersParams struct {
 	Email         string
@@ -1395,11 +1399,13 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 	// user's first run is exactly this.
 	run("make", "gen")
 	run("go", "build", "./...")
+	// Rendered unit tests (errors, usecase with fakes, adapter translation,
+	// worker policy and settle): run them so they are proven, not just compiled.
+	pkgs := []string{"./pkg/...", "./internal/usecase/...", "./internal/adapter/..."}
 	if cfg.HasWorker() {
-		// The worker ships broker-less unit tests (policy and consumer settle
-		// semantics); run them so the rendered tests are proven, not just compiled.
-		run("go", "test", "./internal/transport/worker/...")
+		pkgs = append(pkgs, "./internal/transport/worker/...")
 	}
+	run("go", append([]string{"test"}, pkgs...)...)
 	// The generated project ships a strict golangci config plus a pre-commit
 	// hook and CI job that run it, so a fresh render must already be clean.
 	if _, err := exec.LookPath("golangci-lint"); err == nil {
@@ -1701,4 +1707,143 @@ func assertWorkerContract(t *testing.T, dir, broker string) {
 		"d.Nack(false, true)", "cfg.Queue", "cfg.Prefetch")
 	mustContainAll(t, consumerTest, "func TestRabbitMQHandle(")
 	mustContainAll(t, query, "ON DUPLICATE KEY UPDATE id = id") // mysql
+}
+
+// TestDependencyRule walks the rendered domain and usecase packages and fails
+// on any import that points outward: domain may import only the standard
+// library and other domain packages, usecase additionally pkg/. The vet matrix
+// cannot catch this (an outward import compiles fine), so it is pinned here.
+func TestDependencyRule(t *testing.T) {
+	t.Parallel()
+	cfg := httpMatrixConfig("fiber", "postgres", "wire")
+	cfg.MessageQueue = "kafka"
+	for _, c := range []*config.ProjectConfig{cfg, workerMatrixConfig("mysql", "rabbitmq", "fx")} {
+		dir := renderProject(t, c)
+		assertInwardImports(t, dir, "internal/domain", "internal/domain")
+		assertInwardImports(t, dir, "internal/usecase", "internal/domain", "pkg")
+	}
+}
+
+// assertInwardImports checks every .go file under root: an import of the
+// project's own module must be one of the allowed packages or a subpackage.
+func assertInwardImports(t *testing.T, dir, root string, allowed ...string) {
+	t.Helper()
+	const module = "matrixtest/"
+	walkErr := filepath.WalkDir(filepath.Join(dir, root), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
+			return err
+		}
+		f, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if parseErr != nil {
+			return parseErr
+		}
+		for _, imp := range f.Imports {
+			p := strings.Trim(imp.Path.Value, `"`)
+			if !strings.HasPrefix(p, module) {
+				continue
+			}
+			ok := false
+			for _, a := range allowed {
+				ok = ok || p == module+a || strings.HasPrefix(p, module+a+"/")
+			}
+			if !ok {
+				rel, _ := filepath.Rel(dir, path)
+				t.Errorf("%s imports %s: %s may only import %v", rel, p, root, allowed)
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatal(walkErr)
+	}
+}
+
+// TestLayersContract pins the phase 6 contract: the usecase depends on ports
+// only, Wrap cannot return a typed nil, transactions and unique-violation
+// translation guard Register, the entity owns its invariants, and the
+// infrastructure degrades instead of blocking.
+func TestLayersContract(t *testing.T) {
+	t.Parallel()
+	t.Run("postgres_wire", func(t *testing.T) {
+		t.Parallel()
+		cfg := httpMatrixConfig("fiber", "postgres", "wire")
+		cfg.MessageQueue = "kafka"
+		assertLayersContract(t, renderProject(t, cfg), "postgres")
+	})
+	t.Run("mysql_fx", func(t *testing.T) {
+		t.Parallel()
+		assertLayersContract(t, renderProject(t, httpMatrixConfig("gin", "mysql", "fx")), "mysql")
+	})
+	t.Run("memory", func(t *testing.T) {
+		t.Parallel()
+		dir := renderProject(t, noDBMatrixConfig("echo", "wire"))
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/adapter/repository/memory/tx_manager.go")),
+			"func NewTxManager() *TxManager")
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/wire.go")),
+			"memoryrepo.NewTxManager", "wire.Bind(new(domain.TxManager), new(*memoryrepo.TxManager))")
+	})
+}
+
+func assertLayersContract(t *testing.T, dir, engine string) {
+	t.Helper()
+	assertUsecaseSeams(t, dir, engine)
+	assertStorageSeams(t, dir, engine)
+	mustContainAll(t, readFile(t, filepath.Join(dir, "pkg/errors/errors.go")),
+		"func Wrap(err error, message string) error", "func Wrapf(err error, format string, args ...any) error")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "pkg/errors/errors_test.go")), "func TestWrapNilIsNil(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "pkg/locale/locale.go")), "sync.Once")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/cache/redis.go")), "starting degraded")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/adapter/repository/redis/user_cache.go")),
+		"userCacheJitter", "invalidate failed")
+}
+
+// assertUsecaseSeams: the usecase sees ports only, the token port is bound
+// in DI, the JWT service is on v5, and the principal carries identity only.
+func assertUsecaseSeams(t *testing.T, dir, engine string) {
+	t.Helper()
+	svc := readFile(t, filepath.Join(dir, "internal/usecase/user/service.go"))
+	mustContainAll(t, svc, "security.TokenIssuer", "domain.TxManager", "entity.NewUser(", "user.Rename(",
+		"errors.ErrAlreadyExists", "s.tx.WithinTx(")
+	mustNotContain(t, svc, "jwtsec", "infrastructure/")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/usecase/user/service_test.go")),
+		"func TestRegisterDuplicateEmailIs409(", "func TestUpdateReportsNewUpdatedAt(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/domain/security/token.go")),
+		"type TokenIssuer interface")
+	jwtSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/jwt/service.go"))
+	mustContainAll(t, jwtSrc, "var _ security.TokenIssuer = (*TokenService)(nil)", "github.com/golang-jwt/jwt/v5",
+		"jwt.WithIssuer(", "jwt.ErrTokenSignatureInvalid")
+	mustNotContain(t, jwtSrc, "ValidationError")
+	mustNotContain(t, readFile(t, filepath.Join(dir, "internal/domain/identity/principal.go")),
+		"SessionID", "DeviceID", "Platform", "Phone")
+	if engine == "postgres" {
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/wire.go")),
+			"wire.Bind(new(domainsec.TokenIssuer), new(*jwtsec.TokenService))",
+			"postgresrepo.NewTxManager", "wire.Bind(new(domain.TxManager), new(*postgresrepo.TxManager))")
+		return
+	}
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx_provider.go")),
+		"func provideTokenIssuer(ts *jwtsec.TokenService) domainsec.TokenIssuer")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx.go")),
+		"provideTokenIssuer,", "fx.Annotate(mysqlrepo.NewTxManager, fx.As(new(domain.TxManager)))")
+}
+
+// assertStorageSeams: the adapter translates the unique violation, the entity
+// owns its invariants, and the update query writes the entity's timestamp.
+func assertStorageSeams(t *testing.T, dir, engine string) {
+	t.Helper()
+	repoDir := filepath.Join(dir, "internal/adapter/repository", engine)
+	mustContainAll(t, readFile(t, filepath.Join(repoDir, "user_repository.go")), "translate(err)")
+	mustContainAll(t, readFile(t, filepath.Join(repoDir, "errors.go")),
+		"func translate(err error) error", "errors.ErrAlreadyExists")
+	mustContainAll(t, readFile(t, filepath.Join(repoDir, "errors_test.go")), "func TestTranslateUniqueViolation(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/domain/entity/user.go")),
+		"func NewUser(email, name, passwordHash string) (*User, error)", "func (u *User) Rename(name string) error",
+		"ErrEmailInvalid", "ErrNameInvalid")
+	mustNotContain(t, readFile(t, filepath.Join(dir, "internal/domain/user.go")), "Name   string")
+	query := readFile(t, filepath.Join(dir, "sqlc/query/user.sql"))
+	if engine == "postgres" {
+		mustContainAll(t, query, "UPDATE users SET name = $1, updated_at = $2")
+		return
+	}
+	mustContainAll(t, query, "UPDATE users SET name = ?, updated_at = ?")
 }

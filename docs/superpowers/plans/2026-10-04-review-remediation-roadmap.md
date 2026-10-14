@@ -116,7 +116,7 @@ Plan shape: a `trusted_proxies` CIDR list in config honored per framework; pass-
 
 Exit criteria: the parity table from the review has no "no"/"not set"/"missing" cells; `TestHTTPParity` green across fiber/gin/chi/echo.
 
-## Phase 5: worker reliability and messaging
+## Phase 5: worker reliability and messaging (done 2026-10-13, commit `331c422`)
 
 Detailed plan: [2026-10-13-phase5-worker-reliability-messaging.md](2026-10-13-phase5-worker-reliability-messaging.md).
 
@@ -133,6 +133,8 @@ Plan shape: exchange/topic/queue names flow from config into both publisher and 
 Exit criteria: a broker-less unit test suite for the worker (fake consumer) proves ack/nack/retry/park semantics are identical for kafka and rabbitmq; a manual run against docker-compose shows the README demo delivering to `user_audit_log`.
 
 ## Phase 6: layers and domain correctness
+
+Detailed plan: [2026-10-14-phase6-layers-domain-correctness.md](2026-10-14-phase6-layers-domain-correctness.md).
 
 Findings:
 

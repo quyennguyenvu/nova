@@ -175,6 +175,7 @@ func (g *Generator) domainFiles() []templateFile {
 		{"templates/domain/identity/principal.go.tmpl", "internal/domain/identity/principal.go", true},
 		{"templates/domain/identity/context.go.tmpl", "internal/domain/identity/context.go", true},
 		{"templates/domain/security/hasher.go.tmpl", "internal/domain/security/hasher.go", true},
+		{"templates/domain/security/token.go.tmpl", "internal/domain/security/token.go", true},
 		{"templates/domain/user_publisher.go.tmpl", "internal/domain/user_publisher.go", cfg.HasMessageQueue()},
 		// UserAudit aggregate — port + entry for the consumer worker's
 		// example DB write. Only emitted in worker mode with a SQL backend.
@@ -187,6 +188,8 @@ func (g *Generator) usecaseFiles() []templateFile {
 	return []templateFile{
 		{"templates/usecase/user/service.go.tmpl", "internal/usecase/user/service.go", true},
 		{"templates/usecase/user/dto.go.tmpl", "internal/usecase/user/dto.go", true},
+		// Unit tests with fakes for every port; the bootstrap runs them.
+		{"templates/usecase/user/service_test.go.tmpl", "internal/usecase/user/service_test.go", true},
 		// useraudit usecase — worker-only. Records inbound user.* events
 		// to user_audit_log via the audit repo.
 		{
@@ -204,7 +207,7 @@ func (g *Generator) usecaseFiles() []templateFile {
 
 func (g *Generator) adapterFiles() []templateFile {
 	cfg := g.cfg
-	return []templateFile{
+	files := []templateFile{
 		// Pubsub
 		{
 			"templates/adapter/pubsub/user_message.go.tmpl",
@@ -217,75 +220,20 @@ func (g *Generator) adapterFiles() []templateFile {
 			"internal/adapter/pubsub/user_publisher.go",
 			cfg.HasMessageQueue(),
 		},
-		// Repository — postgres
-		{
-			"templates/adapter/repository/postgres/qx.go.tmpl",
-			"internal/adapter/repository/postgres/qx.go",
-			cfg.HasSQL() && (cfg.Database == postgres),
-		},
-		{
-			"templates/adapter/repository/postgres/tx_manager.go.tmpl",
-			"internal/adapter/repository/postgres/tx_manager.go",
-			cfg.HasSQL() && (cfg.Database == postgres),
-		},
-		{
-			"templates/adapter/repository/postgres/mapper/user.go.tmpl",
-			"internal/adapter/repository/postgres/mapper/user.go",
-			cfg.HasSQL() && (cfg.Database == postgres),
-		},
-		{
-			"templates/adapter/repository/postgres/user_repository.go.tmpl",
-			"internal/adapter/repository/postgres/user_repository.go",
-			cfg.HasSQL() && (cfg.Database == postgres),
-		},
-		// Audit repo + mapper (postgres) — worker-only.
-		{
-			"templates/adapter/repository/postgres/mapper/user_audit.go.tmpl",
-			"internal/adapter/repository/postgres/mapper/user_audit.go",
-			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == postgres,
-		},
-		{
-			"templates/adapter/repository/postgres/user_audit_repository.go.tmpl",
-			"internal/adapter/repository/postgres/user_audit_repository.go",
-			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == postgres,
-		},
-		// Repository — mysql
-		{
-			"templates/adapter/repository/mysql/qx.go.tmpl",
-			"internal/adapter/repository/mysql/qx.go",
-			cfg.HasSQL() && (cfg.Database == mysql),
-		},
-		{
-			"templates/adapter/repository/mysql/tx_manager.go.tmpl",
-			"internal/adapter/repository/mysql/tx_manager.go",
-			cfg.HasSQL() && (cfg.Database == mysql),
-		},
-		{
-			"templates/adapter/repository/mysql/mapper/user.go.tmpl",
-			"internal/adapter/repository/mysql/mapper/user.go",
-			cfg.HasSQL() && (cfg.Database == mysql),
-		},
-		{
-			"templates/adapter/repository/mysql/user_repository.go.tmpl",
-			"internal/adapter/repository/mysql/user_repository.go",
-			cfg.HasSQL() && (cfg.Database == mysql),
-		},
-		// Audit repo + mapper (mysql) — worker-only.
-		{
-			"templates/adapter/repository/mysql/mapper/user_audit.go.tmpl",
-			"internal/adapter/repository/mysql/mapper/user_audit.go",
-			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == mysql,
-		},
-		{
-			"templates/adapter/repository/mysql/user_audit_repository.go.tmpl",
-			"internal/adapter/repository/mysql/user_audit_repository.go",
-			cfg.HasWorker() && cfg.HasSQL() && cfg.Database == mysql,
-		},
+	}
+	files = append(files, g.sqlRepositoryFiles(postgres)...)
+	files = append(files, g.sqlRepositoryFiles(mysql)...)
+	return append(files, []templateFile{
 		// Repository — in-memory. Keeps the User slice runnable when the project
 		// has no database; the SQL adapters replace it otherwise.
 		{
 			"templates/adapter/repository/memory/user_repository.go.tmpl",
 			"internal/adapter/repository/memory/user_repository.go",
+			!cfg.HasDatabase(),
+		},
+		{
+			"templates/adapter/repository/memory/tx_manager.go.tmpl",
+			"internal/adapter/repository/memory/tx_manager.go",
 			!cfg.HasDatabase(),
 		},
 		// Repository — cache
@@ -306,6 +254,27 @@ func (g *Generator) adapterFiles() []templateFile {
 			"internal/adapter/repository/elasticsearch/user_search.go",
 			cfg.HasElasticsearch(),
 		},
+	}...)
+}
+
+// sqlRepositoryFiles lists the per-engine repository package: both engines
+// share one layout, so the paths derive from the engine name.
+func (g *Generator) sqlRepositoryFiles(engine string) []templateFile {
+	cfg := g.cfg
+	base := cfg.HasSQL() && cfg.Database == engine
+	tmpl := "templates/adapter/repository/" + engine + "/"
+	out := "internal/adapter/repository/" + engine + "/"
+	return []templateFile{
+		{tmpl + "qx.go.tmpl", out + "qx.go", base},
+		{tmpl + "tx_manager.go.tmpl", out + "tx_manager.go", base},
+		{tmpl + "mapper/user.go.tmpl", out + "mapper/user.go", base},
+		{tmpl + "user_repository.go.tmpl", out + "user_repository.go", base},
+		// Driver error translation (unique violation → ErrAlreadyExists) + its test.
+		{tmpl + "errors.go.tmpl", out + "errors.go", base},
+		{tmpl + "errors_test.go.tmpl", out + "errors_test.go", base},
+		// Audit repo + mapper — worker-only.
+		{tmpl + "mapper/user_audit.go.tmpl", out + "mapper/user_audit.go", base && cfg.HasWorker()},
+		{tmpl + "user_audit_repository.go.tmpl", out + "user_audit_repository.go", base && cfg.HasWorker()},
 	}
 }
 
@@ -616,6 +585,7 @@ func (g *Generator) pkgFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{
 		{"templates/pkg/errors/errors.go.tmpl", "pkg/errors/errors.go", true},
+		{"templates/pkg/errors/errors_test.go.tmpl", "pkg/errors/errors_test.go", true},
 		{"templates/pkg/httputil/response.go.tmpl", "pkg/httputil/response.go", cfg.HasHTTP()},
 		// Request-id context plumbing shared by HTTP, gRPC, the worker and the publishers.
 		{"templates/pkg/requestid/requestid.go.tmpl", "pkg/requestid/requestid.go", true},

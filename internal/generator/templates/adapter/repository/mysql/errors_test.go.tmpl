@@ -1,0 +1,21 @@
+package mysql
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/go-sql-driver/mysql"
+
+	apperrors "{{.ModuleName}}/pkg/errors"
+)
+
+func TestTranslateUniqueViolation(t *testing.T) {
+	err := translate(&mysql.MySQLError{Number: duplicateEntry, Message: "Duplicate entry for key 'users.email'"})
+	if !errors.Is(err, apperrors.ErrAlreadyExists) {
+		t.Fatalf("translate(1062) = %v, want ErrAlreadyExists", err)
+	}
+	other := &mysql.MySQLError{Number: 1146}
+	if got := translate(other); !errors.Is(got, other) {
+		t.Fatalf("translate(1146) = %v, want the driver error untouched", got)
+	}
+}

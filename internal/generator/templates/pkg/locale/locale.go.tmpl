@@ -8,6 +8,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"sync"
 )
 
 // Language represents a supported language.
@@ -88,11 +89,17 @@ type Mapping map[Locale]string
 // translations is populated by NewMapping() — no init() side effects.
 var translations = map[Language]Mapping{}
 
-// NewMapping registers all language translations.
-// Call this ONCE at app startup (e.g. in main.go or DI provider).
+// mappingOnce guards the translations map: NewMapping is called from the DI
+// provider and from tests, and a second registration must not race a reader.
+var mappingOnce sync.Once
+
+// NewMapping registers all language translations. Safe to call more than
+// once; only the first call does work.
 func NewMapping() {
-	enMapping()
-	viMapping()
+	mappingOnce.Do(func() {
+		enMapping()
+		viMapping()
+	})
 }
 
 // Translate resolves a Locale code to the user's language.

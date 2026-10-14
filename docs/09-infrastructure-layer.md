@@ -30,7 +30,7 @@ func NewHTTPServer(_ context.Context, cfg config.HTTPConfig, …) (*HTTPServer, 
 
 **Each component owns its own shutdown.** No `Close()` on a domain port, no central teardown function listing every resource. Wire composes the cleanups automatically and runs them in reverse construction order; fx's lifecycle hooks do the same ([11](11-di-and-entrypoints.md#how-cleanup-works)). Adding a dependency therefore cannot leak it: if it needs teardown, its constructor returns the hook and the graph picks it up.
 
-The other consistent choice: **constructors verify connectivity**. Postgres pings, Redis pings, Elasticsearch pings, RabbitMQ declares its exchange. A misconfigured dependency fails at startup with a clear error rather than on the first request in production.
+The other consistent choice: **constructors verify connectivity**. Postgres pings, Elasticsearch pings, RabbitMQ declares its exchange. A misconfigured dependency fails at startup with a clear error rather than on the first request in production. Redis is the one exception: it pings, logs `redis: ping failed, starting degraded` and returns the client anyway, because a cache outage is survivable — reads fall through to the database and readiness reports `redis: fail` until it is back.
 
 ## config/ — one struct, three layers of value
 
@@ -280,11 +280,11 @@ Telling a caller _why_ their token failed ("expired" vs "bad signature") is an o
 // bug) or someone is presenting a forged token, so it goes to Warn.
 ```
 
-`classifyParseError` maps the golang-jwt validation bitfield to a stable `reason` field, and treats anything unrecognised as anomalous — so a new failure mode surfaces as a Warn instead of hiding in Debug.
+`classifyParseError` maps golang-jwt v5's sentinel errors (`ErrTokenExpired`, `ErrTokenSignatureInvalid`, …) to a stable `reason` field, and treats anything unrecognised as anomalous — so a new failure mode surfaces as a Warn instead of hiding in Debug. Issuer and audience are enforced by the parser options (`jwt.WithIssuer`, `jwt.WithAudience`) and classified as anomalous too: a token our key signed but another environment minted is replay or misconfiguration, not routine noise.
 
 `formatSubject` stringifies the user ID for the `sub` claim, because "JSON numbers in JWT can lose precision in some libraries".
 
-`AccessTokenClaims` embeds `jwt.RegisteredClaims` and adds `userId`/`email`/`name` plus optional device/session fields. The registered set stays authoritative for lifecycle; custom claims are convenience.
+`AccessTokenClaims` embeds `jwt.RegisteredClaims` and adds `userId`/`email`/`name` — the same fields as `identity.UserPrincipal`, extended together. The registered set stays authoritative for lifecycle; custom claims are convenience.
 
 ## security/ — implements domain/security.PasswordHasher
 

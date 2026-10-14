@@ -39,7 +39,10 @@ func New(cfg config.RedisConfig, log *logger.Logger) (*Client, func(), error) {
 	}
 
 	if err := ping(uc, cfg.PingTimeout); err != nil {
-		return nil, nil, fmt.Errorf("redis: ping failed (%s): %w", cfg.Mode, err)
+		// Redis is a cache: reads fall through to the database and readiness
+		// reports it as "fail" until it is back, so an unreachable cache must
+		// not keep the process from booting.
+		log.Warn("redis: ping failed, starting degraded", "mode", cfg.Mode, "err", err)
 	}
 
 	cleanup := func() {

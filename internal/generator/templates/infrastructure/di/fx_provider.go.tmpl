@@ -17,10 +17,12 @@ import (
 {{- if .HasElasticsearch}}
 	infraSearch "{{.ModuleName}}/internal/infrastructure/search"
 {{- end}}
+	domainsec "{{.ModuleName}}/internal/domain/security"
 	"{{.ModuleName}}/internal/infrastructure/config"
 {{- if .HasDatabase}}
 	"{{.ModuleName}}/internal/infrastructure/database"
 {{- end}}
+	jwtsec "{{.ModuleName}}/internal/infrastructure/jwt"
 	"{{.ModuleName}}/internal/infrastructure/logger"
 {{- if .HasMessageQueue}}
 	infraPubsub "{{.ModuleName}}/internal/infrastructure/pubsub"
@@ -56,6 +58,10 @@ import (
 // This file holds the fx providers consumed by the modules in fx.go — the fx
 // analogue of provider.go's shared helpers, kept separate so fx.go reads as a
 // clean list of modules and Initialize* entry points (mirroring wire.go).
+
+// provideTokenIssuer bridges the concrete signer to the usecase's port; the
+// concrete type stays provided for the Auth middleware's verify path.
+func provideTokenIssuer(ts *jwtsec.TokenService) domainsec.TokenIssuer { return ts }
 
 // --- config field providers ---
 // fx wires by type, so each sub-config the constructors depend on is projected

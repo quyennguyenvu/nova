@@ -6,9 +6,10 @@ import (
 	"{{.ModuleName}}/internal/domain/entity"
 )
 
+// UserFilter is the admin list's filter: an optional exact-match email plus
+// the page window. Zero values mean "no filter".
 type UserFilter struct {
 	Email  string
-	Name   string
 	Limit  int32
 	Offset int32
 }

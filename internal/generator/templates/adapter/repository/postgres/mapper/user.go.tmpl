@@ -44,7 +44,8 @@ func UserToCreateParams(u *entity.User) dbgen.CreateUserParams {
 // UserToUpdateParams builds the sqlc update params from the entity.
 func UserToUpdateParams(u *entity.User) dbgen.UpdateUserParams {
 	return dbgen.UpdateUserParams{
-		ID:   u.ID,
-		Name: u.Name,
+		ID:        u.ID,
+		Name:      u.Name,
+		UpdatedAt: pgtype.Timestamptz{Time: u.UpdatedAt, Valid: true},
 	}
 }

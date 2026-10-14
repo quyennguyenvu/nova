@@ -1,23 +1,19 @@
 package jwtsec
 
-import "github.com/golang-jwt/jwt/v4"
+import "github.com/golang-jwt/jwt/v5"
 
 // AccessTokenClaims is the canonical user access-token shape this service
 // issues + verifies. Custom claims sit alongside the registered ones; the
 // registered set (Issuer, Subject, Audience, ExpiresAt, IssuedAt, ID) is the
 // authoritative source for token lifecycle — custom fields are convenience.
 //
-// Add admin/service-token claim types here as new audiences come online —
-// keep them as separate structs so the verifier can dispatch on aud without
-// runtime conditionals.
+// Add a claim here and on identity.UserPrincipal together. Add admin/service
+// token claim types as separate structs so the verifier can dispatch on aud
+// without runtime conditionals.
 type AccessTokenClaims struct {
 	jwt.RegisteredClaims
 
-	UserID    int64  `json:"userId"`
-	Email     string `json:"email"`
-	Name      string `json:"name"`
-	Phone     string `json:"phone,omitempty"`
-	DeviceID  string `json:"deviceId,omitempty"`
-	Platform  string `json:"platform,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
+	UserID int64  `json:"userId"`
+	Email  string `json:"email"`
+	Name   string `json:"name"`
 }

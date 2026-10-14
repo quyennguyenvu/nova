@@ -1,0 +1,21 @@
+package postgres
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
+
+	apperrors "{{.ModuleName}}/pkg/errors"
+)
+
+func TestTranslateUniqueViolation(t *testing.T) {
+	err := translate(&pgconn.PgError{Code: uniqueViolation, ConstraintName: "users_email_key"})
+	if !errors.Is(err, apperrors.ErrAlreadyExists) {
+		t.Fatalf("translate(23505) = %v, want ErrAlreadyExists", err)
+	}
+	other := &pgconn.PgError{Code: "42P01"}
+	if got := translate(other); !errors.Is(got, other) {
+		t.Fatalf("translate(42P01) = %v, want the driver error untouched", got)
+	}
+}

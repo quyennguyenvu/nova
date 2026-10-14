@@ -49,18 +49,20 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   ├── identity/
 │   │   │   ├── principal.go                # Authenticated-caller identity
 │   │   │   └── context.go                  # Principal ↔ context.Context plumbing
-│   │   ├── security/                       # Crypto ports (PasswordHasher)
-│   │   │   └── hasher.go                   # Impls live in infrastructure/security/
+│   │   ├── security/                       # Crypto ports (PasswordHasher, TokenIssuer)
+│   │   │   ├── hasher.go                   # Impls live in infrastructure/security/
+│   │   │   └── token.go                    # TokenIssuer — what Login signs through (impl: infrastructure/jwt)
 │   │   ├── user.go                         # UserRepository interface + UserFilter
 │   │   ├── user_audit.go                   # [worker] UserAuditRepository port
 │   │   ├── user_publisher.go               # [--queue] UserPublisher port + UserCreated event
 │   │   └── tx_manager.go                   # TxManager interface (usecase-facing seam)
 │   │
 │   ├── usecase/                            # Layer 2 — Application Business Rules
-│   │   │                                   # Depends on: domain (+ infrastructure/jwt for Login)
+│   │   │                                   # Depends on: domain and pkg only (TestDependencyRule pins it)
 │   │   ├── user/
 │   │   │   ├── service.go                  # Orchestrates the domain
-│   │   │   └── dto.go                      # Input/Output DTOs for this feature
+│   │   │   ├── dto.go                      # Input/Output DTOs for this feature
+│   │   │   └── service_test.go             # Unit tests with a fake for every port
 │   │   └── useraudit/                      # [worker] audit-trail feature
 │   │       ├── service.go
 │   │       └── dto.go
@@ -71,13 +73,16 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   │   ├── tx_manager.go           # Implements domain.TxManager
 │   │   │   │   ├── qx.go                   # TX-aware query executor
 │   │   │   │   ├── user_repository.go      # Implements domain.UserRepository
+│   │   │   │   ├── errors.go               # Driver error → sentinel (unique violation → ErrAlreadyExists)
+│   │   │   │   ├── errors_test.go
 │   │   │   │   ├── user_audit_repository.go # [worker] Implements domain.UserAuditRepository
 │   │   │   │   └── mapper/
 │   │   │   │       ├── user.go             # Row ↔ entity mapping (keeps repo file thin)
 │   │   │   │       └── user_audit.go       # [worker]
 │   │   │   ├── mysql/                      # [--database=mysql]   (same shape as postgres/)
 │   │   │   ├── memory/                     # [--database=none]    in-process UserRepository (demos, handler tests)
-│   │   │   │   └── user_repository.go
+│   │   │   │   ├── user_repository.go
+│   │   │   │   └── tx_manager.go           # No-op domain.TxManager
 │   │   │   ├── redis/                      # [--cache=redis]
 │   │   │   │   ├── user_cache.go           # Read-through cache decorator
 │   │   │   │   └── mapper/
@@ -165,7 +170,8 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │
 ├── pkg/                                    # Cross-cutting utilities (no layer affiliation)
 │   ├── errors/
-│   │   └── errors.go                       # AppError + wrap/classify/locale→status helpers
+│   │   ├── errors.go                       # AppError + wrap/classify/locale→status helpers
+│   │   └── errors_test.go                  # Wrap(nil) is nil; sentinels classify
 │   ├── httputil/
 │   │   └── response.go                     # [HTTP] framework-free {success,data,error,meta} envelope
 │   ├── locale/                             # i18n error codes + translations

@@ -1,0 +1,20 @@
+package memory
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/domain"
+)
+
+var _ domain.TxManager = (*TxManager)(nil)
+
+// TxManager is the no-op domain.TxManager for the in-memory repository: there
+// is no transaction to open, so fn runs on ctx as it is. It exists so the
+// usecase can depend on the port whichever storage is wired.
+type TxManager struct{}
+
+func NewTxManager() *TxManager { return &TxManager{} }
+
+func (*TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	return fn(ctx)
+}

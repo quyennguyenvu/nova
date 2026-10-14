@@ -12,8 +12,8 @@ SELECT * FROM users
 WHERE email = $1;
 
 -- name: UpdateUser :exec
-UPDATE users SET name = $1, updated_at = NOW()
-WHERE id = $2;
+UPDATE users SET name = $1, updated_at = $2
+WHERE id = $3;
 
 -- name: DeleteUser :exec
 DELETE FROM users

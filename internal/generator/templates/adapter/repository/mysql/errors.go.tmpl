@@ -1,0 +1,25 @@
+package mysql
+
+import (
+	stderrors "errors"
+	"fmt"
+
+	"github.com/go-sql-driver/mysql"
+
+	"{{.ModuleName}}/pkg/errors"
+)
+
+// duplicateEntry is the MySQL error a unique index raises; the only driver
+// error the usecase has to act on (a duplicate email is a 409, not a 500).
+const duplicateEntry = 1062
+
+// translate maps driver errors the usecase must distinguish to the pkg/errors
+// sentinels, keeping the driver error in the chain; anything else passes
+// through for Wrapf to classify as a 500.
+func translate(err error) error {
+	var me *mysql.MySQLError
+	if stderrors.As(err, &me) && me.Number == duplicateEntry {
+		return fmt.Errorf("%w: %w", errors.ErrAlreadyExists, err)
+	}
+	return err
+}

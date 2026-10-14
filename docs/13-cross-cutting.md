@@ -177,7 +177,7 @@ Being explicit about the gaps, so nobody assumes coverage that isn't there:
 - **No `/metrics`.** Add `prometheus/client_golang` and a route; the port-vs-impl split for it would mirror `pkg/observability.Logger`.
 - **No general rate limiter.** Only `/login` is throttled, and only per-process. Global shedding belongs upstream (CDN, ingress) where it can drop traffic before it costs you a goroutine.
 - **No outbox.** Event publishing is best-effort-with-logging. If an event must not be lost, write it to a table in the same transaction as the aggregate and relay it separately.
-- **No refresh tokens.** `AccessTokenTTL` only; `AccessTokenClaims` has a `SessionID` field to build on.
+- **No refresh tokens.** `AccessTokenTTL` only; add a session id claim to `AccessTokenClaims` and `identity.UserPrincipal` together to build on.
 - **No authorization.** `middleware.Auth` establishes *who* the caller is; deciding *what* they may do is a domain concern with no scaffold.
 - **gRPC is a stub.** Server, DI and entry point are real; the service implementation is yours ([07](07-transport-layer.md#internaltransportgrpc)).
 - **`transport/cronjob/` and `cmd/cron.go` are not rendered.** The `cron.go.tmpl` template exists but is not wired into `buildFileList`.

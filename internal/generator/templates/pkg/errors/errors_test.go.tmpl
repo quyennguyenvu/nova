@@ -1,0 +1,46 @@
+package errors
+
+import (
+	"net/http"
+	"testing"
+
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// TestWrapNilIsNil pins the reason Wrap and Wrapf return error rather than
+// *AppError: a typed nil pointer in an error interface is non-nil, so
+// `return errors.Wrap(err, "...")` on a nil err must yield a true nil.
+func TestWrapNilIsNil(t *testing.T) {
+	if err := Wrap(nil, "ctx"); err != nil {
+		t.Fatalf("Wrap(nil) = %v, want nil", err)
+	}
+	if err := Wrapf(nil, "ctx %d", 1); err != nil {
+		t.Fatalf("Wrapf(nil) = %v, want nil", err)
+	}
+}
+
+func TestWrapKeepsClassification(t *testing.T) {
+	err := Wrapf(L(locale.UserEmailExists, "a@b.co"), "register")
+	app := ToAppError(err)
+	if app.Code != http.StatusConflict || app.Locale != locale.UserEmailExists {
+		t.Fatalf("got code=%d locale=%d, want 409/%d", app.Code, app.Locale, locale.UserEmailExists)
+	}
+	if len(app.Frames()) != 2 {
+		t.Fatalf("frames = %d, want 2 (L + Wrapf)", len(app.Frames()))
+	}
+}
+
+func TestSentinelsClassify(t *testing.T) {
+	cases := map[error]int{
+		ErrNotFound:      http.StatusNotFound,
+		ErrAlreadyExists: http.StatusConflict,
+		ErrInvalid:       http.StatusBadRequest,
+		ErrUnauthorized:  http.StatusUnauthorized,
+		ErrForbidden:     http.StatusForbidden,
+	}
+	for sentinel, want := range cases {
+		if got := ToAppError(Wrap(sentinel, "op")).Code; got != want {
+			t.Errorf("%v -> %d, want %d", sentinel, got, want)
+		}
+	}
+}

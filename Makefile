@@ -99,7 +99,7 @@ diff-gen: gen-api ## Generate + show key template outputs for quick review
 test: ## Fast suite (-short skips the render-then-vet matrix)
 	go test -short ./...
 
-test-all: ## Full suite: 36-case vet matrix (2 at a time) + 6 real-toolchain bootstraps (~5 min warm cache; <2.5 GB)
+test-all: ## Full suite: 36-case vet matrix (2 at a time) + 6 real-toolchain bootstraps (~3 min warm cache; <2.5 GB)
 	go test -parallel 2 -timeout 30m ./...
 
 lint: ## Run linter (GOGC=50 trades a few seconds for a lower memory peak)

@@ -11,15 +11,12 @@ type Principal struct {
 	Email  string
 }
 
-// UserPrincipal represents an authenticated end-user. Extend with new claims
-// here as the access token grows; add a sibling type (e.g. AdminPrincipal,
+// UserPrincipal represents an authenticated end-user. It carries identity
+// only; add a field here and the matching claim in jwt.AccessTokenClaims
+// together as the token grows. Add a sibling type (AdminPrincipal,
 // ServicePrincipal) for distinct audiences rather than overloading this one.
 type UserPrincipal struct {
 	Principal
 
-	Name      string
-	Phone     string
-	DeviceID  string
-	Platform  string
-	SessionID string
+	Name string
 }

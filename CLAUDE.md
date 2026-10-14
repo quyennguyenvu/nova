@@ -26,7 +26,7 @@ Module is `github.com/quyennguyenvu/nova`, binary is `bin/nova`. Requires Go 1.2
 make build            # go build -o bin/nova .
 make rebuild          # clean + build
 make test             # go test -short ./... (fast; skips the render-then-vet matrix)
-make test-all         # full suite: 36-case vet matrix (2 at a time) + 6 real-toolchain bootstraps (~5 min warm cache; <2.5 GB)
+make test-all         # full suite: 36-case vet matrix (2 at a time) + 6 real-toolchain bootstraps (~3 min warm cache; <2.5 GB)
 make lint             # GOGC=50 golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...

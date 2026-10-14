@@ -70,6 +70,7 @@ var infraSet = wire.NewSet(
 	// the concrete while transport stays decoupled from infrastructure/logger.
 	wire.Bind(new(observability.Logger), new(*logger.Logger)),
 	jwtsec.NewTokenService,
+	wire.Bind(new(domainsec.TokenIssuer), new(*jwtsec.TokenService)),
 	infrasec.NewBcryptHasher,
 	wire.Bind(new(domainsec.PasswordHasher), new(*infrasec.BcryptHasher)),
 	provideValidator,
@@ -150,6 +151,8 @@ var adapterSet = wire.NewSet(
 {{- if eq .Database "postgres"}}
 	postgresrepo.NewUserRepository,
 	wire.Bind(new(domain.UserRepository), new(*postgresrepo.UserRepository)),
+	postgresrepo.NewTxManager,
+	wire.Bind(new(domain.TxManager), new(*postgresrepo.TxManager)),
 {{- if .HasWorker}}
 	postgresrepo.NewUserAuditRepository,
 	wire.Bind(new(domain.UserAuditRepository), new(*postgresrepo.UserAuditRepository)),
@@ -158,6 +161,8 @@ var adapterSet = wire.NewSet(
 {{- if eq .Database "mysql"}}
 	mysqlrepo.NewUserRepository,
 	wire.Bind(new(domain.UserRepository), new(*mysqlrepo.UserRepository)),
+	mysqlrepo.NewTxManager,
+	wire.Bind(new(domain.TxManager), new(*mysqlrepo.TxManager)),
 {{- if .HasWorker}}
 	mysqlrepo.NewUserAuditRepository,
 	wire.Bind(new(domain.UserAuditRepository), new(*mysqlrepo.UserAuditRepository)),
@@ -166,6 +171,8 @@ var adapterSet = wire.NewSet(
 {{- if not .HasDatabase}}
 	memoryrepo.NewUserRepository,
 	wire.Bind(new(domain.UserRepository), new(*memoryrepo.UserRepository)),
+	memoryrepo.NewTxManager,
+	wire.Bind(new(domain.TxManager), new(*memoryrepo.TxManager)),
 {{- end}}
 {{- if .HasMessageQueue}}
 	pubsub.NewPublisher,

@@ -171,10 +171,11 @@ func captureFrame(skip int, msg string) Frame {
 // Wrap attaches a caller frame (with an optional context message) to err.
 // If err is already an *AppError, the frame is appended and Code/Message/
 // Locale/Args are preserved so the originating layer's classification stays
-// authoritative.
-// If err is a plain or sentinel error, it is classified into HTTP terms.
-// Returns nil if err is nil — safe to use as `return errors.Wrap(err, "...")`.
-func Wrap(err error, message string) *AppError {
+// authoritative. If err is a plain or sentinel error, it is classified into
+// HTTP terms. Returns nil for a nil err — and returns error, not *AppError,
+// so that nil is a true nil and `return errors.Wrap(err, "...")` is safe
+// unconditionally. Reach the *AppError with ToAppError or errors.As.
+func Wrap(err error, message string) error {
 	if err == nil {
 		return nil
 	}
@@ -182,7 +183,7 @@ func Wrap(err error, message string) *AppError {
 }
 
 // Wrapf is Wrap with fmt.Sprintf-style formatting for the context message.
-func Wrapf(err error, format string, args ...any) *AppError {
+func Wrapf(err error, format string, args ...any) error {
 	if err == nil {
 		return nil
 	}
@@ -399,6 +400,7 @@ func LogFields(err error) []any {
 // translated template via fmt.Sprintf. The HTTP status is derived from the code
 // through localeHTTPStatus — the single source of truth — so callers never
 // restate it and a code maps to exactly one status everywhere it is raised.
+// L never returns nil, so it keeps the concrete type for chaining WithCause.
 func L(code locale.Locale, args ...any) *AppError {
 	return newAtL(httpStatusForLocale(code), code, args)
 }

@@ -23,7 +23,20 @@ type User struct {
 }
 ```
 
-The scaffold has no `NewUser` constructor: the only invariant at creation time is "the password is hashed", and that hashing belongs to the usecase (it holds the `PasswordHasher` port). Add a constructor when the entity gains invariants it can enforce alone.
+The entity owns its invariants, so every transport inherits them instead of re-stating them as request-validation tags (gRPC, the worker and `nova add` output would otherwise bypass them):
+
+```go
+// NewUser builds a valid user or reports which invariant failed. The email
+// must parse as a bare address and the name must be 2–100 characters; both
+// are trimmed. passwordHash is the hasher's output, never the plaintext.
+func NewUser(email, name, passwordHash string) (*User, error)
+
+// Rename applies the name invariant and stamps UpdatedAt, so the row the
+// repository writes and the response the caller sees agree on the time.
+func (u *User) Rename(name string) error
+```
+
+Violations are the sentinels `ErrEmailInvalid` and `ErrNameInvalid`; the usecase maps them to a 400 with `errors.L(locale.InvalidRequest).WithCause(err)`. Hashing stays in the usecase (it holds the `PasswordHasher` port); the entity only insists the hash is present. The HTTP `validate` tags still exist, but as a fast first line that produces field-level messages — the entity is the rule.
 
 ## internal/domain/valueobject/ — what are value objects?
 
@@ -145,7 +158,6 @@ import (
 // repository contract — no framework tags. Zero values mean "no filter".
 type UserFilter struct {
     Email  string
-    Name   string
     Limit  int32
     Offset int32
 }

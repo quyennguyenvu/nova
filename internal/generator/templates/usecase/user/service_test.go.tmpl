@@ -1,0 +1,146 @@
+package user
+
+import (
+	"context"
+	"net/http"
+	"testing"
+	"time"
+
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/internal/domain/entity"
+	"{{.ModuleName}}/internal/domain/identity"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// fakeRepo is the smallest domain.UserRepository the service tests need: one
+// stored user, a scripted Create error, and Update recording what it got.
+type fakeRepo struct {
+	stored    *entity.User
+	createErr error
+	updated   *entity.User
+}
+
+func (r *fakeRepo) Create(_ context.Context, u *entity.User) error {
+	if r.createErr != nil {
+		return r.createErr
+	}
+	u.ID = 1
+	return nil
+}
+
+func (r *fakeRepo) GetByID(_ context.Context, id int64) (*entity.User, error) {
+	if r.stored == nil || r.stored.ID != id {
+		return nil, errors.Wrapf(errors.ErrNotFound, "fake: id=%d", id)
+	}
+	cp := *r.stored
+	return &cp, nil
+}
+
+func (r *fakeRepo) GetByEmail(_ context.Context, email string) (*entity.User, error) {
+	if r.stored == nil || r.stored.Email != email {
+		return nil, errors.Wrapf(errors.ErrNotFound, "fake: email=%s", email)
+	}
+	cp := *r.stored
+	return &cp, nil
+}
+
+func (r *fakeRepo) Update(_ context.Context, u *entity.User) error {
+	cp := *u
+	r.updated = &cp
+	return nil
+}
+
+func (*fakeRepo) Delete(context.Context, int64) error { return nil }
+
+func (*fakeRepo) List(context.Context, domain.UserFilter) ([]*entity.User, error) { return nil, nil }
+
+func (*fakeRepo) Count(context.Context, domain.UserFilter) (int64, error) { return 0, nil }
+
+func (*fakeRepo) ListAfter(context.Context, int64, int32) ([]*entity.User, error) { return nil, nil }
+
+type fakeHasher struct{}
+
+func (fakeHasher) Hash(plain string) (string, error) { return "h:" + plain, nil }
+
+func (fakeHasher) Verify(hash, plain string) error {
+	if hash != "h:"+plain {
+		return errors.ErrUnauthorized
+	}
+	return nil
+}
+
+type fakeIssuer struct{}
+
+func (fakeIssuer) Sign(*identity.UserPrincipal) (string, error) { return "tok", nil }
+
+func (fakeIssuer) AccessTokenTTL() time.Duration { return time.Hour }
+
+type noopTx struct{}
+
+func (noopTx) WithinTx(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
+{{- if .HasMessageQueue}}
+
+type fakePublisher struct{}
+
+func (fakePublisher) PublishUserCreated(context.Context, domain.UserCreated) error { return nil }
+{{- end}}
+
+func newTestService(repo *fakeRepo) *Service {
+	return NewService(repo, fakeHasher{}, fakeIssuer{}, noopTx{}{{if .HasMessageQueue}}, fakePublisher{}{{end}})
+}
+
+// TestRegisterDuplicateEmailIs409 pins the race the uniqueness check cannot
+// close: when the insert itself reports the duplicate (the adapter has
+// translated the driver's unique violation to ErrAlreadyExists), the client
+// still gets the 409 it would have got from the check.
+func TestRegisterDuplicateEmailIs409(t *testing.T) {
+	repo := &fakeRepo{createErr: errors.Wrap(errors.ErrAlreadyExists, "user repo: insert")}
+	in := RegisterInput{Email: "a@b.co", Name: "Ann", Password: "hunter2-pass"}
+	_, err := newTestService(repo).Register(t.Context(), in)
+	app := errors.ToAppError(err)
+	if app == nil || app.Code != http.StatusConflict || app.Locale != locale.UserEmailExists {
+		t.Fatalf("Register on duplicate insert = %v, want 409 UserEmailExists", err)
+	}
+}
+
+func TestRegisterRejectsInvalidInput(t *testing.T) {
+	cases := map[string]RegisterInput{
+		"bad email":  {Email: "not-an-email", Name: "Ann", Password: "hunter2-pass"},
+		"short name": {Email: "a@b.co", Name: "A", Password: "hunter2-pass"},
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := newTestService(&fakeRepo{}).Register(t.Context(), in)
+			if app := errors.ToAppError(err); app == nil || app.Code != http.StatusBadRequest {
+				t.Fatalf("Register(%+v) = %v, want 400", in, err)
+			}
+		})
+	}
+}
+
+func TestUpdateReportsNewUpdatedAt(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	repo := &fakeRepo{stored: &entity.User{ID: 1, Email: "a@b.co", Name: "Ann", UpdatedAt: before}}
+	principal := &identity.UserPrincipal{Principal: identity.Principal{UserID: 1}}
+	ctx := identity.WithUserPrincipal(t.Context(), principal)
+	out, err := newTestService(repo).Update(ctx, 1, UpdateInput{Name: "Anne"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !out.UpdatedAt.After(before) || repo.updated == nil || !repo.updated.UpdatedAt.Equal(out.UpdatedAt) {
+		t.Fatalf("UpdatedAt = %v (persisted %+v), want a fresh stamp that was also persisted",
+			out.UpdatedAt, repo.updated)
+	}
+}
+
+func TestLoginSignsThroughThePort(t *testing.T) {
+	repo := &fakeRepo{stored: &entity.User{ID: 1, Email: "a@b.co", Name: "Ann", PasswordHash: "h:hunter2-pass"}}
+	out, err := newTestService(repo).Login(t.Context(), LoginInput{Email: "a@b.co", Password: "hunter2-pass"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if out.AccessToken != "tok" || out.ExpiresIn != 3600 {
+		t.Fatalf("Login = %+v, want the port's token and TTL", out)
+	}
+}

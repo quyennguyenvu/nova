@@ -1,6 +1,26 @@
 package entity
 
-import "time"
+import (
+	"errors"
+	"net/mail"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+// Invariant violations. The usecase maps them to a 400; every transport
+// (HTTP, gRPC, worker, a future CLI) inherits the same rules because they
+// live here, not in request-validation tags.
+var (
+	ErrEmailInvalid = errors.New("email is invalid")
+	ErrNameInvalid  = errors.New("name must be 2 to 100 characters")
+	errHashEmpty    = errors.New("password hash is empty")
+)
+
+const (
+	nameMinLen = 2
+	nameMaxLen = 100
+)
 
 // User is a domain entity. NO framework tags — serialization is a transport
 // concern. The stored credential is PasswordHash (bcrypt output); plaintext
@@ -12,4 +32,40 @@ type User struct {
 	PasswordHash string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+// NewUser builds a valid user or reports which invariant failed. The email
+// must parse as a bare address and the name must be 2–100 characters; both
+// are trimmed. passwordHash is the hasher's output, never the plaintext.
+func NewUser(email, name, passwordHash string) (*User, error) {
+	email = strings.TrimSpace(email)
+	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email {
+		return nil, ErrEmailInvalid
+	}
+	name = strings.TrimSpace(name)
+	if !validName(name) {
+		return nil, ErrNameInvalid
+	}
+	if passwordHash == "" {
+		return nil, errHashEmpty
+	}
+	now := time.Now()
+	return &User{Email: email, Name: name, PasswordHash: passwordHash, CreatedAt: now, UpdatedAt: now}, nil
+}
+
+// Rename applies the name invariant and stamps UpdatedAt, so the row the
+// repository writes and the response the caller sees agree on the time.
+func (u *User) Rename(name string) error {
+	name = strings.TrimSpace(name)
+	if !validName(name) {
+		return ErrNameInvalid
+	}
+	u.Name = name
+	u.UpdatedAt = time.Now()
+	return nil
+}
+
+func validName(name string) bool {
+	n := utf8.RuneCountInString(name)
+	return n >= nameMinLen && n <= nameMaxLen
 }

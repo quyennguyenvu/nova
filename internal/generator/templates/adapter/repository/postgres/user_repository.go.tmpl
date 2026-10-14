@@ -29,7 +29,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
 	row, err := r.qx.Q(ctx).CreateUser(ctx, mapper.UserToCreateParams(user))
 	if err != nil {
-		return errors.Wrapf(err, "user repo: insert email=%s", user.Email)
+		return errors.Wrapf(translate(err), "user repo: insert email=%s", user.Email)
 	}
 	user.ID = row.ID
 	return nil

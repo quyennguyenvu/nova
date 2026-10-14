@@ -1,0 +1,25 @@
+package postgres
+
+import (
+	stderrors "errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"{{.ModuleName}}/pkg/errors"
+)
+
+// uniqueViolation is the SQLSTATE a unique index raises; the only driver
+// error the usecase has to act on (a duplicate email is a 409, not a 500).
+const uniqueViolation = "23505"
+
+// translate maps driver errors the usecase must distinguish to the pkg/errors
+// sentinels, keeping the driver error in the chain; anything else passes
+// through for Wrapf to classify as a 500.
+func translate(err error) error {
+	var pgErr *pgconn.PgError
+	if stderrors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+		return fmt.Errorf("%w: %w", errors.ErrAlreadyExists, err)
+	}
+	return err
+}
