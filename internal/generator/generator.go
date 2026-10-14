@@ -33,9 +33,10 @@ const (
 
 // Generator creates a new project from templates.
 type Generator struct {
-	cfg  *config.ProjectConfig
-	tmpl *template.Template
-	Out  io.Writer // progress output; os.Stdout by default
+	cfg    *config.ProjectConfig
+	tmpl   *template.Template
+	Out    io.Writer // progress output; os.Stdout by default
+	outDir string    // set by Generate; migrationFiles looks for existing names there
 }
 
 // New creates a new Generator. It validates cfg first so a typo (e.g. "echo2")
@@ -73,6 +74,7 @@ func (g *Generator) Generate(outputDir string) error {
 	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
+	g.outDir = outputDir
 
 	files := g.buildFileList()
 
@@ -305,6 +307,14 @@ func (g *Generator) transportFiles() []templateFile {
 			cfg.HasHTTP(),
 		},
 
+		// Behavior tests for the real router: envelope on 404/405, 413, 504,
+		// client-IP resolution through the login limiter, the access line.
+		{
+			fmt.Sprintf("templates/transport/http/%s_router_test.go.tmpl", cfg.HTTPFramework),
+			"internal/transport/http/router_test.go",
+			cfg.HasHTTP(),
+		},
+
 		// HTTP v1/user — framework-agnostic DTO + assembler.
 		{
 			"templates/transport/http/v1/user/dto.go.tmpl",
@@ -366,6 +376,21 @@ func (g *Generator) grpcFiles() []templateFile {
 			grpc,
 		},
 		{"templates/transport/grpc/interceptor/auth.go.tmpl", "internal/transport/grpc/interceptor/auth.go", grpc},
+		{
+			"templates/transport/grpc/interceptor/deadline.go.tmpl",
+			"internal/transport/grpc/interceptor/deadline.go",
+			grpc,
+		},
+		{
+			"templates/transport/grpc/interceptor/throttle.go.tmpl",
+			"internal/transport/grpc/interceptor/throttle.go",
+			grpc,
+		},
+		{
+			"templates/transport/grpc/interceptor/interceptor_test.go.tmpl",
+			"internal/transport/grpc/interceptor/interceptor_test.go",
+			grpc,
+		},
 		{"templates/transport/grpc/interceptor/locale.go.tmpl", "internal/transport/grpc/interceptor/locale.go", grpc},
 	}
 }
@@ -430,12 +455,13 @@ func (g *Generator) httpMiddlewareFiles() []templateFile {
 			"internal/transport/http/middleware/bodylimit.go",
 			cfg.HasHTTP() && cfg.HTTPFramework != "fiber",
 		},
-		// Client IP: fiber, gin and echo resolve trusted proxies natively; chi
-		// needs a middleware that rewrites RemoteAddr.
+		// Client IP: gin and echo resolve trusted proxies natively and safely;
+		// chi has no resolver and fiber's returns the raw header, so both get
+		// a middleware that walks X-Forwarded-For past the trusted proxies.
 		{
-			"templates/transport/http/middleware/chi_clientip.go.tmpl",
+			fmt.Sprintf("templates/transport/http/middleware/%s_clientip.go.tmpl", cfg.HTTPFramework),
 			"internal/transport/http/middleware/clientip.go",
-			cfg.HasHTTP() && cfg.HTTPFramework == "chi",
+			cfg.HasHTTP() && (cfg.HTTPFramework == "chi" || cfg.HTTPFramework == "fiber"),
 		},
 	}
 }
@@ -444,6 +470,12 @@ func (g *Generator) infrastructureFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{
 		{"templates/infrastructure/config/config.go.tmpl", "internal/infrastructure/config/config.go", true},
+		// Pins how .env combines with the YAML (needs the HTTP section).
+		{
+			"templates/infrastructure/config/config_test.go.tmpl",
+			"internal/infrastructure/config/config_test.go",
+			cfg.HasHTTP(),
+		},
 		{"templates/infrastructure/config/constant.go.tmpl", "internal/infrastructure/config/constant.go", true},
 		{
 			"templates/infrastructure/config/base.yaml.tmpl",
@@ -613,6 +645,17 @@ func (g *Generator) pkgFiles() []templateFile {
 	}
 }
 
+// migrationName returns <stamp>_<suffix>, reusing the stamp of a migration
+// already in the target directory: re-rendering with --force then overwrites
+// it instead of adding a second copy a migration runner would apply again.
+func (g *Generator) migrationName(dir, suffix, stamp string) string {
+	existing, _ := filepath.Glob(filepath.Join(g.outDir, dir, "*_"+suffix+".up.sql"))
+	if len(existing) > 0 {
+		return strings.TrimSuffix(filepath.Base(existing[0]), ".up.sql")
+	}
+	return stamp + "_" + suffix
+}
+
 func (g *Generator) migrationFiles() []templateFile {
 	cfg := g.cfg
 
@@ -622,11 +665,11 @@ func (g *Generator) migrationFiles() []templateFile {
 		dir = "sqlc/migrations"
 	}
 
-	filename := fmt.Sprintf("%s_create_users_table", now)
+	filename := g.migrationName(dir, "create_users_table", now)
 	// The audit migration timestamp is bumped by one second so migration
 	// runners apply create_users_table first.
 	auditNow := time.Now().Add(time.Second).Format("20060102150405")
-	auditFilename := fmt.Sprintf("%s_create_user_audit_log", auditNow)
+	auditFilename := g.migrationName(dir, "create_user_audit_log", auditNow)
 	return []templateFile{
 		{
 			"templates/migrations/create_users_table.up.sql.tmpl",

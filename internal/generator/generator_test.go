@@ -325,6 +325,14 @@ func renderAndVet(t *testing.T, cfg *config.ProjectConfig, wireStub string) {
 	if vetErr := runGo(t, dir, "vet", "./..."); vetErr != nil {
 		t.Fatalf("go vet: %v", vetErr)
 	}
+	// wire.go is build-tagged out of the vet above (the stub stands in for
+	// wire_gen.go); vet it on its own so a provider set that references a
+	// missing package or symbol fails here, not only in the bootstrap.
+	if cfg.UseWire() {
+		if vetErr := runGo(t, dir, "vet", "-tags", "wireinject", "./internal/infrastructure/di/"); vetErr != nil {
+			t.Fatalf("go vet -tags wireinject: %v", vetErr)
+		}
+	}
 }
 
 // generateProtos runs the rendered project's own codegen for api/gen (buf
@@ -960,7 +968,7 @@ func TestUserListAdminPagination(t *testing.T) {
 
 // TestUserPublicListCursorPagination pins the public, cursor-paginated User
 // directory end to end: the keyset sqlc query, the domain ListAfter port, the
-// service producing a cursor page (encodeCursor + limit+1 probe), the email+name
+// service producing a cursor page (encodeCursor + limit+1 probe), the name-only
 // public projection, the cursor meta, the handler, and — crucially — that the
 // route is mounted on a NO-AUTH group (the user asked for no auth). The matrix's
 // `go vet` proves it compiles; this proves it's wired and unauthenticated.
@@ -1166,7 +1174,17 @@ func TestDockerComposeStack(t *testing.T) {
 		c := loadCompose(t, workerMatrixConfig("postgres", "kafka", "wire"))
 
 		assertComposeServices(t, c, []string{"app", "postgres", "kafka"}, []string{"rabbitmq"})
-		assertComposeEnv(t, c, map[string]string{"KAFKA_BROKERS": "kafka:9092"})
+		assertComposeEnv(t, c, map[string]string{"KAFKA_BROKERS": "kafka:29092"})
+		// The host listener is the address .env.example and base.yaml use.
+		if ports := c.Services["kafka"].Ports; len(ports) != 1 || ports[0] != "9092:9092" {
+			t.Errorf("kafka publishes %v, want [9092:9092] for host runs", ports)
+		}
+		// Kafka 3.9 refuses to start when a listener bound to 0.0.0.0 would be
+		// advertised, and the healthcheck must survive a remapped host port.
+		raw := readFile(t, filepath.Join(renderProject(t, workerMatrixConfig("postgres", "kafka", "wire")),
+			"docker-compose.yaml"))
+		mustNotContain(t, raw, "://0.0.0.0:")
+		mustContainAll(t, raw, "--bootstrap-server localhost:29092")
 		assertHealthyDeps(t, c, "postgres", "kafka")
 	})
 
@@ -1394,13 +1412,19 @@ func TestGeneratedProjectBootstrap(t *testing.T) {
 		cfg.Search = "none"
 		return cfg
 	}
+	// The stacks nova's own `make gen-api`, `gen-worker` and `gen-grpc`
+	// produce (gen-api minus Elasticsearch, see above).
+	with := func(cfg *config.ProjectConfig, cache, queue string) *config.ProjectConfig {
+		cfg.Cache, cfg.MessageQueue = cache, queue
+		return cfg
+	}
 	cases := []struct {
 		name string
 		cfg  *config.ProjectConfig
 	}{
-		{"http_fiber_postgres_wire", noSearch(httpMatrixConfig("fiber", "postgres", "wire"))},
+		{"http_fiber_postgres_wire", noSearch(with(httpMatrixConfig("fiber", "postgres", "wire"), "redis", "kafka"))},
 		{"http_gin_mysql_wire", noSearch(httpMatrixConfig("gin", "mysql", "wire"))},
-		{"worker_postgres_kafka_wire", workerMatrixConfig("postgres", "kafka", "wire")},
+		{"worker_postgres_kafka_wire", with(workerMatrixConfig("postgres", "kafka", "wire"), "redis", "kafka")},
 		// RabbitMQ, MySQL and fx had no real toolchain run; this also runs
 		// sqlc on the MySQL upsert and executes the RabbitMQ consumer tests.
 		{"worker_mysql_rabbitmq_fx", workerMatrixConfig("mysql", "rabbitmq", "fx")},
@@ -1410,7 +1434,7 @@ func TestGeneratedProjectBootstrap(t *testing.T) {
 		{"http_chi_postgres_fx", noSearch(httpMatrixConfig("chi", "postgres", "fx"))},
 		// gRPC: real buf + wire over sqlc, and the fx graph booted for real
 		// against the in-memory repository (the smoke test dials the port).
-		{"grpc_postgres_wire", grpcMatrixConfig("wire")},
+		{"grpc_postgres_wire", with(grpcMatrixConfig("wire"), "redis", "kafka")},
 		{"grpc_none_fx", noDBGRPCConfig("fx")},
 	}
 	for _, tc := range cases {
@@ -1432,9 +1456,7 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 		t.Helper()
 		cmd := exec.Command(name, args...)
 		cmd.Dir = dir
-		// PWD is set explicitly because the generated Makefile's rm lines use
-		// $(PWD), which make inherits from the environment, not from cmd.Dir.
-		cmd.Env = append(os.Environ(), "PWD="+dir, "GOFLAGS=-mod=mod -p=2", "GOGC=50")
+		cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod -p=2", "GOGC=50")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
 		}
@@ -1445,12 +1467,20 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 	run("go", "build", "./...")
 	// Rendered unit tests (errors, usecase with fakes, adapter translation,
 	// worker policy and settle): run them so they are proven, not just compiled.
-	pkgs := []string{"./pkg/...", "./internal/usecase/...", "./internal/adapter/..."}
+	pkgs := []string{
+		"./pkg/...",
+		"./internal/usecase/...",
+		"./internal/adapter/...",
+		"./internal/infrastructure/config/...",
+	}
 	if cfg.HasWorker() {
 		pkgs = append(pkgs, "./internal/transport/worker/...")
 	}
 	if cfg.HasGRPC() {
 		pkgs = append(pkgs, "./internal/transport/grpc/...")
+	}
+	if cfg.HasHTTP() {
+		pkgs = append(pkgs, "./internal/transport/http/...")
 	}
 	run("go", append([]string{"test"}, pkgs...)...)
 	if !cfg.HasDatabase() && (cfg.HasHTTP() || cfg.HasGRPC()) {
@@ -1460,6 +1490,8 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 	// hook and CI job that run it, so a fresh render must already be clean.
 	if _, err := exec.LookPath("golangci-lint"); err == nil {
 		run("golangci-lint", "run")
+	} else {
+		t.Log("golangci-lint not on PATH: lint step skipped")
 	}
 }
 
@@ -1600,7 +1632,10 @@ func assertHTTPParity(t *testing.T, dir, fw string) {
 		"trusted_proxies: []", "request_timeout:")
 	switch fw {
 	case "fiber":
-		mustContainAll(t, router, "EnableTrustedProxyCheck: true", "TrustedProxies:")
+		mustContainAll(t, router, "middleware.ClientIP(")
+		mustNotContain(t, router, "ProxyHeader:", "EnableTrustedProxyCheck")
+		mustContainAll(t, readFile(t, filepath.Join(mw, "clientip.go")), "func ClientIP(", "strings.Clone(")
+		mustContainAll(t, limiter, "RemoteIP(c)")
 	case "gin":
 		mustContainAll(t, router, "SetTrustedProxies(")
 	case "chi":
@@ -2014,7 +2049,8 @@ func TestDeployContract(t *testing.T) {
 func assertDeployContract(t *testing.T, dir, engine string) {
 	t.Helper()
 	cfgSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/config/config.go"))
-	mustContainAll(t, cfgSrc, "godotenv.Load(", "unknown APP_ENV", "DB_USER) is required", `"shutdown_timeout"`)
+	mustContainAll(t, cfgSrc, "godotenv.Read(", "unknown APP_ENV", "DB_USER) is required", `"shutdown_timeout"`,
+		"normalizeLists(&cfg)")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/base.yaml")),
 		"shutdown_timeout: 20s")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "cmd/root.go")), "SilenceUsage: true")
@@ -2049,7 +2085,19 @@ func assertImageAndCI(t *testing.T, dir, engine string) {
 	mustContainAll(t, ci, "golangci/golangci-lint-action@v8", "version: v2.11.4", "-trimpath")
 	mustNotContain(t, ci, "services:", "JWT_PUBLIC_KEY", "DB_HOST")
 	mk := readFile(t, filepath.Join(dir, "Makefile"))
-	mustContainAll(t, mk, "down $(n)", "n ?= 1")
+	mustContainAll(
+		t,
+		mk,
+		"down $(n)",
+		"n ?= 1",
+		"-database '$(migrate_url)'",
+		"sed -n 's/^MIGRATE_DATABASE_URL=//p' .env",
+	)
+	assertMakefileHygiene(t, mk)
+	assertEnvSourceable(t, dir)
+	for _, f := range []string{".gitignore", ".dockerignore"} {
+		mustContainAll(t, readFile(t, filepath.Join(dir, f)), "*.key", "jwt.pub")
+	}
 	if engine == "postgres" { // wire
 		mustContainAll(t, mk, "go tool wire ./internal/infrastructure/di")
 		mustContainAll(t, readFile(t, filepath.Join(dir, "go.mod")), "tool github.com/google/wire/cmd/wire")
@@ -2086,7 +2134,7 @@ func assertGRPCContract(t *testing.T, dir string, wire bool) {
 		"protoc-gen-go@v1.36.12", "protoc-gen-go-grpc@v1.6.2", "paths=source_relative")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "buf.yaml")), "path: api/proto", "STANDARD")
 	mk := readFile(t, filepath.Join(dir, "Makefile"))
-	mustContainAll(t, mk, "rm -rf $(PWD)/api/gen; buf generate", "&& buf lint", "&& buf format -w")
+	mustContainAll(t, mk, "rm -rf $(CURDIR)/api/gen; buf generate", "&& buf lint", "&& buf format -w")
 	if wire {
 		mustContainAll(t, mk, "gen: sqlc-gen proto-gen tidy wire-gen")
 	} else {
@@ -2103,13 +2151,17 @@ func assertGRPCTransport(t *testing.T, dir string, wire bool) {
 	srv := readFile(t, filepath.Join(dir, "internal/transport/grpc/server.go"))
 	mustContainAll(t, srv, "healthpb.RegisterHealthServer(", "reflection.Register(", "otelgrpc.NewServerHandler()",
 		"interceptor.RequestID(),", "interceptor.Locale(),", "interceptor.Logging(log),", "interceptor.Recovery(),",
-		"interceptor.Auth(tokenSvc, protected),")
+		"interceptor.Deadline(cfg.RequestTimeout),", "interceptor.Throttle(cfg.LoginRateLimit, throttled),",
+		"interceptor.Auth(tokenSvc, public),", "healthpb.Health_Check_FullMethodName")
 	handler := readFile(t, filepath.Join(dir, "internal/transport/grpc/user.go"))
-	mustContainAll(t, handler, "userv1.UnimplementedUserServiceServer", "func (*UserHandler) Protected()",
-		"userv1.UserService_GetUser_FullMethodName", "rpcstatus.FromError(ctx, err)")
+	mustContainAll(t, handler, "userv1.UnimplementedUserServiceServer", "func (*UserHandler) Public()",
+		"func (*UserHandler) Throttled()", "userv1.UserService_Login_FullMethodName", "rpcstatus.FromError(ctx, err)")
 	mustNotContain(t, handler, "TODO", "placeholder")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/user_test.go")),
-		"bufconn.Listen(", "func TestUserServiceEndToEnd(", "func TestHealthFollowsLifecycle(")
+		"bufconn.Listen(", "func TestUserServiceEndToEnd(", "func TestHealthFollowsLifecycle(",
+		"func TestEveryRPCIsProtectedUnlessPublic(")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/interceptor/interceptor_test.go")),
+		"func TestRecoveryAnswersLocalized(", "func TestThrottlePerPeer(", "func TestDeadlineBoundsCall(")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/rpcstatus/status.go")),
 		"codes.Unauthenticated", "codes.PermissionDenied", "codes.AlreadyExists", "errors.StashAppError(ctx, app)")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/grpc/interceptor/auth.go")),
@@ -2128,4 +2180,58 @@ func assertGRPCTransport(t *testing.T, dir string, wire bool) {
 	}
 	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx.go")),
 		"transportgrpc.New,", "grpcModule(),\n\t\tadapterModule(),\n\t\tusecaseModule(),\n\t\ttransportModule(),")
+}
+
+// TestRegenerateKeepsMigrationNames: `nova new --force` over an existing
+// project re-renders each migration under its existing timestamped name
+// instead of adding a second copy that a migration runner would apply again.
+func TestRegenerateKeepsMigrationNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for range 2 {
+		gen, err := New(workerMatrixConfig("postgres", "kafka", "wire"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gen.Out = io.Discard
+		if genErr := gen.Generate(dir); genErr != nil {
+			t.Fatal(genErr)
+		}
+		time.Sleep(1100 * time.Millisecond) // a later second would mint new names
+	}
+	ups, err := filepath.Glob(filepath.Join(dir, "sqlc/migrations/*.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ups) != 2 {
+		t.Errorf("migrations after a re-render = %v, want one users and one audit migration", ups)
+	}
+}
+
+// assertMakefileHygiene: every target is listed by `make help` (it greps the
+// "## " comments) and no recipe resolves paths against $(PWD), which is the
+// caller's directory under `make -C`.
+func assertMakefileHygiene(t *testing.T, mk string) {
+	t.Helper()
+	for _, line := range strings.Split(mk, "\n") {
+		name, _, isRule := strings.Cut(line, ":")
+		if !isRule || name == "" || strings.ContainsAny(name, " \t.$=#") {
+			continue
+		}
+		if !strings.Contains(line, "## ") {
+			t.Errorf("Makefile target %q has no ## description for make help", name)
+		}
+	}
+	mustNotContain(t, mk, "$(PWD)")
+}
+
+// assertEnvSourceable runs `. ./.env.example` under sh: the README and
+// docs/12 promise the file can be sourced as written.
+func assertEnvSourceable(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "set -a; . ./.env.example")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf(".env.example is not sourceable: %v\n%s", err, out)
+	}
 }

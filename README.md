@@ -88,7 +88,7 @@ Generates a complete project. With no flags it runs interactively; pass any flag
 | `--ci`             | `github`, `none`                         | `github`                  |
 | `--force`          | _(bool)_                                 | `false`                   |
 
-Because any flag skips the prompts, a flag-driven run **must** pass `--transport`. Every value is validated before a file is written: unimplemented choices (`cron`/`cli` transports, `nethttp`, `sqlite`/`mongodb`, `sqlx`/`gorm`, `raw` queries, `bigcache`, `nats`, `toml`/`env`) are rejected with a message naming the valid set, the project name must be safe for file names and Go source, and an existing non-empty target directory is refused unless you pass `--force`. [docs/01 — CLI options](docs/01-cli-options.md) has the details.
+Because any flag skips the prompts, a flag-driven run **must** pass `--transport`; a `worker` also needs `--queue` and a SQL `--database`. Every value is validated before a file is written: unimplemented choices (`cron`/`cli` transports, `nethttp`, `sqlite`/`mongodb`, `sqlx`/`gorm`, `raw` queries, `bigcache`, `nats`, `toml`/`env`) are rejected with a message naming the valid set, the project name must be safe for file names and Go source, and an existing non-empty target directory is refused unless you pass `--force`. [docs/01 — CLI options](docs/01-cli-options.md) has the details.
 
 Example — full non-interactive run:
 
@@ -126,7 +126,7 @@ Names must be Go identifiers (letters and digits, starting with a letter); `add`
 - `cmd/worker.go` + `internal/app/worker.go` — the `worker` subcommand and its bootstrap
 - and it registers `workerCommand()` in `cmd/root.go`
 
-The bootstrap boots through the project's **DI graph** (`di.InitializeWorker`), byte-identical to what `nova new --transport=worker` emits, so it is broker-agnostic. `add` also drops a minimal `WorkerApp` struct + `InitializeWorker` injector into `internal/infrastructure/di` (wire or fx, from `stack.di`) — each symbol only when that package doesn't already declare it, so a worker-enabled project is left untouched and re-runs never duplicate. This assumes a nova-new (or `nova.yaml`) layout; with no `di` package it prints a hint instead. Complete the injector with your provider sets, run `go mod tidy` and (for wire) `wire`, then `go run main.go worker`. Shared files are written only when **absent**, so a second `nova add worker payment` just appends its feature handler.
+The bootstrap boots through the project's **DI graph** (`di.InitializeWorker`), byte-identical to what `nova new --transport=worker` emits, so it is broker-agnostic. `add` also drops a minimal `WorkerApp` struct + `InitializeWorker` injector into `internal/infrastructure/di` (wire or fx, from `stack.di`) — each symbol only when that package doesn't already declare it, so a worker-enabled project is left untouched and re-runs never duplicate. This assumes a nova-new (or `nova.yaml`) layout with a message broker: a project whose `stack.message_queue` is neither `kafka` nor `rabbitmq` is refused, because the consumer is wired to its `infrastructure/pubsub` package; with no `di` package it prints a hint instead. Complete the injector with your provider sets, run `go mod tidy` and (for wire) `wire`, then `go run main.go worker`. Shared files are written only when **absent**, so a second `nova add worker payment` just appends its feature handler.
 
 #### sqlc-backed repositories
 
@@ -188,7 +188,7 @@ make run              # build and print the CLI help
 make clean            # remove bin/ and the generated test output
 make rebuild          # clean + build
 make test             # go test -short ./... (fast; skips the render-then-vet matrix)
-make test-all         # full suite: 36-case vet matrix + 8 real-toolchain bootstraps (~3.5 min; run it alone)
+make test-all         # full suite: 36-case vet matrix + 8 real-toolchain bootstraps (~4 min; run it alone)
 make lint             # golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...
@@ -202,7 +202,7 @@ make verify-gen       # gen-api + list every output file
 make diff-gen         # gen-api + print key generated files for review
 ```
 
-Output for the `gen-api` / `gen-worker` targets lands in `/tmp/nova-test-output`.
+Output for the `gen-api` / `gen-worker` / `gen-grpc` targets lands in `/tmp/nova-test-output`. CI (`.github/workflows/ci.yaml`) runs `go test -short ./...` and golangci-lint on every push and pull request; run `make test-all` locally before changing templates.
 
 ### Knowledge graph
 

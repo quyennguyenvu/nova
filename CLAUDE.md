@@ -28,7 +28,7 @@ make run              # build + print the CLI help
 make clean            # remove bin/ and /tmp/nova-test-output
 make rebuild          # clean + build
 make test             # go test -short ./... (fast; skips the render-then-vet matrix)
-make test-all         # full suite: 36-case vet matrix (2 at a time) + 8 real-toolchain bootstraps (~3.5 min warm cache; <2.5 GB)
+make test-all         # full suite: 36-case vet matrix (2 at a time) + 8 real-toolchain bootstraps (~4 min warm cache; <2.5 GB)
 make lint             # GOGC=50 golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...

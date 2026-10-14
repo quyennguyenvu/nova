@@ -40,17 +40,16 @@ func NewRouter(
     registrars []Registrar,
 ) *fiber.App {
     app := fiber.New(fiber.Config{
-        BodyLimit:               cfg.HTTP.BodyLimit,
-        ReadBufferSize:          cfg.HTTP.ReadBufferSize,
-        ReadTimeout:             cfg.HTTP.ReadTimeout,
-        WriteTimeout:            cfg.HTTP.WriteTimeout,
-        ErrorHandler:            httpwriter.HandleError,    // framework errors answer in the envelope
-        ProxyHeader:             fiber.HeaderXForwardedFor,
-        EnableTrustedProxyCheck: true,                      // X-Forwarded-For only from…
-        TrustedProxies:          cfg.HTTP.TrustedProxies,   // …the proxies listed in config
-        EnablePrintRoutes:       cfg.AppEnv == config.EnvLocal,
+        BodyLimit:         cfg.HTTP.BodyLimit,
+        ReadBufferSize:    cfg.HTTP.ReadBufferSize,
+        ReadTimeout:       cfg.HTTP.ReadTimeout,
+        WriteTimeout:      cfg.HTTP.WriteTimeout,
+        ErrorHandler:      httpwriter.HandleError,          // framework errors answer in the envelope
+        EnablePrintRoutes: cfg.AppEnv == config.EnvLocal,   // no proxy header: c.IP() is the TCP peer
     })
 
+    trusted, _ := cfg.HTTP.TrustedProxyNets()
+    app.Use(middleware.ClientIP(trusted))                 // X-Forwarded-For only from trusted proxies
     app.Use(otelfiber.Middleware(…))                      // server span; probes skipped
     app.Use(middleware.RequestID())
     app.Use(middleware.Logging(log))
@@ -81,7 +80,7 @@ func NewRouter(
 | 6        | `CORS`      | After the observability layers, before app logic                                           |
 | 7        | `Locale`    | Populates ctx language for `httpwriter.WriteError` to read back                            |
 
-chi installs one more middleware before all of these: `ClientIP`, which resolves the client address through `http.trusted_proxies` and rewrites `RemoteAddr` so the span, the access line and the login limiter read the same value. fiber, gin and echo do the same natively (`TrustedProxies`, `SetTrustedProxies`, `IPExtractor`); with no trusted proxies every framework ignores `X-Forwarded-For`.
+fiber and chi install one more middleware before all of these: `ClientIP`, which resolves the client address through `http.trusted_proxies` (the right-most `X-Forwarded-For` hop that is not itself a trusted proxy) so the access line and the login limiter read the same value; chi rewrites `RemoteAddr`, fiber stores a copied string read back with `middleware.RemoteIP`. fiber needs it because its own `c.IP()` returns the header verbatim, client-controlled left-most entry included, once any proxy is trusted. gin and echo resolve the same way natively (`SetTrustedProxies`, `IPExtractor`); with no trusted proxies every framework ignores `X-Forwarded-For`.
 
 Framework-raised errors take one path per framework into the same envelope: fiber's `ErrorHandler` and echo's `HTTPErrorHandler` are `httpwriter.HandleError`, gin's `NoRoute`/`NoMethod` (with `RedirectTrailingSlash` off, so `/api/v1/users` is served rather than redirected) and chi's `NotFound`/`MethodNotAllowed` call `httpwriter.WriteError` with `errors.FromStatus(code)`. A client never sees a framework's plain-text 404.
 
@@ -147,7 +146,7 @@ Two rules visible in that comment block:
 - **One DTO, every framework.** `dto.go` and `assembler.go` are the only files in the feature package with no framework variant — the dual `query:`/`form:` tags are what buy that.
 - **Validation here is shape, not policy.** Formats and enums (`email`, `min=8` on a password) belong to the wire contract. Magnitude (`per_page` caps) is usecase policy, so gRPC and CLI callers inherit the same limits ([06](06-usecase-layer.md#list--page-based-policy-clamped-in-the-usecase)).
 
-`LoginResponse` follows the RFC 6749 token-endpoint shape (`accessToken`, `tokenType`, `expiresIn`) so OAuth-aware clients consume it directly. `PublicUserResponse` is email + name only — the public list is unauthenticated.
+`LoginResponse` follows the RFC 6749 token-endpoint shape (`accessToken`, `tokenType`, `expiresIn`) so OAuth-aware clients consume it directly. `PublicUserResponse` is the name only — the public list is unauthenticated, so it exposes no email or id.
 
 ### assembler.go — the only place that maps
 
@@ -235,7 +234,7 @@ func (r *Registrar) Register(router fiber.Router) {
     router.Post("/login", middleware.LoginRateLimit(r.loginLimit), r.handler.Login)
 
     public := router.Group("/users")
-    public.Post("/", r.handler.Create)
+    public.Post("/", middleware.LoginRateLimit(r.loginLimit), r.handler.Create)
 
     pub := router.Group("/public")
     pub.Get("/users", r.handler.PublicList)
@@ -519,18 +518,18 @@ transport/grpc/
 ├── user.go              # UserHandler — user.v1.UserService over the api/gen stubs
 ├── user_test.go         # end to end over bufconn: codes, auth, health, locale
 ├── rpcstatus/status.go  # FromError: AppError → gRPC status, stashed for the access log
-└── interceptor/         # RequestID, Locale, Logging, Recovery, Auth
+└── interceptor/         # RequestID, Locale, Logging, Recovery, Deadline, Throttle, Auth
 ```
 
 The contract is `api/proto/user/v1/user.proto` (package `user.v1`, one RPC per HTTP endpoint: `CreateUser`, `Login`, `GetUser`, `UpdateUser`, `DeleteUser`, `ListUsers`, `ListPublicUsers`). `make gen` runs `buf generate`, which writes `api/gen/user/v1` through version-pinned `go run` plugins ([12](12-build-and-deploy.md#makefile)); the output is committed like `dbgen`.
 
-**`New` is the router.** `transport/grpc.New(cfg, log, tokenSvc, services)` builds the `*grpc.Server`, chains the unary interceptors in the HTTP middleware order (`RequestID → Locale → Logging → Recovery → Auth`), registers every `Registrar`, then the standard `grpc.health.v1` service and, when `grpc.reflection` is on (base `true`, production `false`), server reflection so `grpcurl` needs no proto files. `infrastructure/server.NewGRPCServer` wraps it for the listener and the graceful stop and flips health to NOT_SERVING before draining ([09](09-infrastructure-layer.md)). Health reports process liveness, not dependency readiness: there is no gRPC `/readyz`.
+**`New` is the router.** `transport/grpc.New(cfg, log, tokenSvc, services)` builds the `*grpc.Server`, chains the unary interceptors in the HTTP middleware order (`RequestID → Locale → Logging → Recovery → Deadline → Throttle → Auth`), registers every `Registrar`, then the standard `grpc.health.v1` service and, when `grpc.reflection` is on (base `true`, production `false`), server reflection so `grpcurl` needs no proto files. `infrastructure/server.NewGRPCServer` wraps it for the listener and the graceful stop, and flips health to NOT_SERVING as shutdown starts, immediately before the drain ([09](09-infrastructure-layer.md)); a balancer that polls health only sees it if the platform delays the stop signal (a Kubernetes `preStop` sleep). Health reports process liveness, not dependency readiness: there is no gRPC `/readyz`.
 
-**A feature is a `Registrar`.** Two methods: `Register(*grpc.Server)` mounts the generated service and `Protected() []string` names the full methods that need a bearer token, the per-method form of the HTTP registrar's `Auth` group. `UserHandler` protects `GetUser`, `UpdateUser`, `DeleteUser` and `ListUsers`; `CreateUser`, `Login` and `ListPublicUsers` stay public, the same split as the HTTP routes. DI collects the registrars in `provideGRPCServices` ([11](11-di-and-entrypoints.md)).
+**A feature is a `Registrar`.** Three methods: `Register(*grpc.Server)` mounts the generated service, `Public() []string` names the full methods callable without a bearer token, and `Throttled() []string` names the credential methods limited per peer. Auth is deny-by-default: an RPC added to the proto needs a token until it is listed in `Public()`, which `TestEveryRPCIsProtectedUnlessPublic` checks against the generated service descriptor. `UserHandler` lists `CreateUser`, `Login` and `ListPublicUsers` as public, the same split as the HTTP routes, and throttles `CreateUser` and `Login` like the HTTP login and registration routes. DI collects the registrars in `provideGRPCServices` ([11](11-di-and-entrypoints.md)).
 
 **Errors take one path.** A handler never builds a status itself: it returns `rpcstatus.FromError(ctx, err)`, which runs `errors.ToAppError`, stashes the `AppError` for the access log, translates the message into the call's language (`accept-language` metadata, read by the `Locale` interceptor) and maps the HTTP status `pkg/errors` assigned to the nearest gRPC code (400 → `InvalidArgument`, 401 → `Unauthenticated`, 403 → `PermissionDenied`, 404 → `NotFound`, 409 → `AlreadyExists`, 429 → `ResourceExhausted`, 503 → `Unavailable`, 504 → `DeadlineExceeded`, anything else `Internal`). A wrapped internal error therefore reaches the client as the generic localized message, never its text. Wire-shape validation reuses the HTTP DTO rules through small tagged structs and the shared `*validator.Validate`; the entity still owns its invariants ([05](05-domain-layer.md)).
 
-**Interceptors mirror middleware** ([04](04-placement-rationale.md#why-middleware-is-under-transporthttp-not-transport) explains why they cannot share a package). `RequestID` adopts a valid `x-request-id` or mints one and echoes it. `Locale` sets the language. `Logging` scopes the logger with `request_id`, `trace_id` and `method`, installs the `AppError` stash and emits one `rpc` line per call with `code` and `duration_ms`, using the stashed `AppError` (cause and frame trail) when there is one. `Recovery` turns a panic into `codes.Internal`. `Auth` verifies the bearer token from the `authorization` metadata on protected methods only and attaches the `identity.UserPrincipal`, so `requireSelf` in the usecase works unchanged. Only unary interceptors are installed; the first streaming RPC needs their stream counterparts.
+**Interceptors mirror middleware** ([04](04-placement-rationale.md#why-middleware-is-under-transporthttp-not-transport) explains why they cannot share a package). `RequestID` adopts a valid `x-request-id` or mints one and echoes it. `Locale` sets the language. `Logging` scopes the logger with `request_id`, `trace_id` and `method`, installs the `AppError` stash and emits one `rpc` line per call with `code` and `duration_ms`, using the stashed `AppError` (cause and frame trail) when there is one. `Recovery` turns a panic into `codes.Internal` with the localized internal-error message, through `rpcstatus` like any other failure. `Deadline` bounds every call by `grpc.request_timeout` (a sooner client deadline wins). `Throttle` applies a per-peer token bucket (`grpc.login_rate_limit`) to the throttled methods and answers `ResourceExhausted` with a `retry-after` header; it keys on the TCP peer, since gRPC has no `X-Forwarded-For` convention to trust. `Auth` verifies the bearer token from the `authorization` metadata on every method outside the public set (health `Check` is always public) and attaches the `identity.UserPrincipal`, so `requireSelf` in the usecase works unchanged. Only unary interceptors are installed; the first streaming RPC needs their stream counterparts.
 
 `user_test.go` runs the whole stack over `bufconn` with a real RS256 `TokenService` and an in-memory repository: a duplicate email is `AlreadyExists`, a bad email `InvalidArgument`, a missing token `Unauthenticated`, another user's id `PermissionDenied`, and health flips to NOT_SERVING on `Shutdown`. nova's bootstrap runs it in `grpc_postgres_wire` and `grpc_none_fx`.
 
@@ -604,7 +603,7 @@ The consumers map the three outcomes the same way; `consumer_test.go` pins it fo
 | Outcome | Kafka (`settle`) | RabbitMQ (`handle`) |
 | --- | --- | --- |
 | handled (`nil`) | `MarkMessage` | `Ack` |
-| parked (`ErrParked`) | copy to `<topic>.dlq` with `x-dead-letter-reason` and `x-dead-letter-source` headers, then `MarkMessage` | `Nack(requeue=false)`; the queue's `x-dead-letter-exchange` routes it to `<exchange>.dlx`, whose queue is `<queue>.dlq` |
+| parked (`ErrParked`) | copy to `<topic>.dlq` with `x-dead-letter-reason` and `x-dead-letter-source` headers, then `MarkMessage` | `Nack(requeue=false)`; the queue's `x-dead-letter-exchange` routes it to `<queue>.dlx`, whose queue is `<queue>.dlq` |
 | abandoned (`ctx.Err()`) | left unmarked; the next session redelivers | `Nack(requeue=true)` |
 
 `ConsumeClaim` therefore never returns because a handler failed — that used to end the session and rebalance the group on every poison message. It returns only on shutdown or when the dead-letter write itself fails (then the message stays unmarked and comes back). The RabbitMQ consumer declares the whole topology on start (exchange, dead-letter exchange and queue, work queue), sets `Qos(prefetch)` so a slow handler does not hold the entire backlog unacked, and watches `NotifyClose`. Both `Subscribe` loops return `ctx.Err()` on shutdown and `ErrConsumerClosed` when the broker side ends the subscription while ctx is live, which `RunWorker` turns into a non-zero exit ([11](11-di-and-entrypoints.md)) — a worker that lost its subscription must not idle as a zombie.

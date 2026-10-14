@@ -19,11 +19,11 @@ Templates should never omit these. **Adding a new HTTP framework variant means r
 | Error handling + i18n       | `pkg/errors` (AppError, status table) + `pkg/locale` (codes, translations)                                                          |
 | API versioning              | URL path — `transport/http/v1/v1.go` (`/api/v1`)                                                                                    |
 | CORS                        | `middleware/cors.go`, config-driven; an empty list installs nothing, never `*`                                                      |
-| Client IP / trusted proxies | `http.trusted_proxies`: fiber `TrustedProxies`, gin `SetTrustedProxies`, echo `IPExtractor`, chi `middleware/clientip.go`           |
+| Client IP / trusted proxies | `http.trusted_proxies`: gin `SetTrustedProxies`, echo `IPExtractor`, fiber and chi `middleware/clientip.go`                         |
 | Request deadline            | `middleware/timeout.go` — `http.request_timeout` on every ctx; `context.DeadlineExceeded` → 504                                     |
 | Body limit                  | fiber `BodyLimit`; `middleware/bodylimit.go` (gin, chi, echo) → 413 through `httpwriter.Bind`                                       |
 | Framework errors            | 404/405/413 in the envelope via `errors.FromStatus` (`httpwriter.HandleError`, `NoRoute`/`NoMethod`, `NotFound`/`MethodNotAllowed`) |
-| Login rate limiting         | `middleware/loginlimit.go`, applied to the auth route only                                                                          |
+| Login rate limiting         | `middleware/loginlimit.go`, applied to login and registration only                                                                  |
 | Request/response access log | `middleware/logging.go` — exactly one line per request                                                                              |
 | Panic recovery              | `middleware/recovery.go` — 500 in the standard envelope                                                                             |
 | Auth                        | `middleware/auth.go` + `infrastructure/jwt` (RS256)                                                                                 |
@@ -175,7 +175,7 @@ if err != nil {
 Being explicit about the gaps, so nobody assumes coverage that isn't there:
 
 - **No `/metrics`.** Add `prometheus/client_golang` and a route; the port-vs-impl split for it would mirror `pkg/observability.Logger`.
-- **No general rate limiter.** Only `/login` is throttled, and only per-process. Global shedding belongs upstream (CDN, ingress) where it can drop traffic before it costs you a goroutine.
+- **No general rate limiter.** Only login and registration are throttled (HTTP and gRPC), and only per-process. Global shedding belongs upstream (CDN, ingress) where it can drop traffic before it costs you a goroutine.
 - **No outbox.** Event publishing is best-effort-with-logging. If an event must not be lost, write it to a table in the same transaction as the aggregate and relay it separately.
 - **No refresh tokens.** `AccessTokenTTL` only; add a session id claim to `AccessTokenClaims` and `identity.UserPrincipal` together to build on.
 - **No authorization.** `middleware.Auth` establishes *who* the caller is; deciding *what* they may do is a domain concern with no scaffold.

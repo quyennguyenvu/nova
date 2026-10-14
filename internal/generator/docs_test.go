@@ -1,8 +1,10 @@
 package generator
 
 import (
+	"maps"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -30,18 +32,7 @@ func TestDocsClaims(t *testing.T) {
 	})
 	t.Run("docs/01 rejected values are rejected by Validate", func(t *testing.T) {
 		t.Parallel()
-		for _, c := range []struct{ field, value string }{
-			{"Transport", "cron"}, {"Transport", "cli"}, {"ConfigFormat", "toml"}, {"ConfigFormat", "env"},
-			{"QueryGen", "raw"}, {"QueryGen", "gorm"},
-		} {
-			cfg := httpMatrixConfig("fiber", "postgres", "wire")
-			reflect.ValueOf(cfg).Elem().FieldByName(c.field).SetString(c.value)
-			if err := cfg.Validate(); err == nil {
-				t.Errorf("%s=%q accepted; docs/01 says it is rejected", c.field, c.value)
-			}
-		}
-		mustContainAll(t, docFile(t, "01-cli-options.md"), "`cron` and `cli` transports", "`gorm`, `raw`",
-			"`toml` and `env`", "`--docker=false`", "`--type`", "`worker` also needs `--queue")
+		assertRejectedValues(t)
 	})
 	t.Run("docs/02 names every make gen output", func(t *testing.T) {
 		t.Parallel()
@@ -59,21 +50,52 @@ func TestDocsClaims(t *testing.T) {
 		t.Parallel()
 		mustContainAll(t, docFile(t, "08-adapter-layer.md"),
 			"`Register` runs its uniqueness check and insert inside `WithinTx`")
-		mustContainAll(t, readFile(t, filepath.Join(httpDir, "internal/usecase/user/service.go")), "s.tx.WithinTx(ctx,")
+		register := funcBody(t, readFile(t, filepath.Join(httpDir, "internal/usecase/user/service.go")), "Register")
+		mustContainAll(t, register, "s.tx.WithinTx(ctx,", "s.userRepo.Create(")
 	})
-	t.Run("docs/13 CORS and trace claims", func(t *testing.T) {
+	t.Run("docs/13 CORS never widens and tracing runs before the access log", func(t *testing.T) {
 		t.Parallel()
-		mustContainAll(t, docFile(t, "13-cross-cutting.md"), "never `*`", "`trace_id` on every log line")
-		mustContainAll(t, readFile(t, filepath.Join(httpDir, "internal/transport/http/middleware/cors.go")),
-			"len(cfg.AllowOrigins) == 0")
-		mustContainAll(t, readFile(t, filepath.Join(httpDir, "internal/transport/http/middleware/logging.go")),
-			`"trace_id"`)
+		assertCORSAndTraceOrder(t, httpDir)
+	})
+	t.Run("docs/13 throttles exactly login and registration", func(t *testing.T) {
+		t.Parallel()
+		mustContainAll(t, docFile(t, "13-cross-cutting.md"), "login and registration")
+		registrar := readFile(t, filepath.Join(httpDir, "internal/transport/http/v1/user/registrar.go"))
+		if n := strings.Count(registrar, "LoginRateLimit("); n != 2 {
+			t.Errorf("registrar throttles %d routes, docs/13 says login and registration", n)
+		}
+		mustContainAll(t, readFile(t, filepath.Join(grpcDir, "internal/transport/grpc/user.go")),
+			"func (*UserHandler) Throttled()")
+	})
+	t.Run("docs/12 limit defaults equal the compose file", func(t *testing.T) {
+		t.Parallel()
+		compose, err := templateFS.ReadFile("templates/docker-compose.yaml.tmpl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		inCompose := limitDefaults(string(compose), `\$\{(LIMIT_[A-Z_]+):-([^}]+)\}`)
+		inDocs := limitDefaults(docFile(t, "12-build-and-deploy.md"), "\\| `(LIMIT_[A-Z_]+)` +\\| `([^`]+)`")
+		if len(inCompose) < 10 {
+			t.Fatalf("found only %d LIMIT_* defaults in the compose template: the pattern is stale", len(inCompose))
+		}
+		if !maps.Equal(inCompose, inDocs) {
+			t.Errorf("docs/12 limit table %v, compose defaults %v", inDocs, inCompose)
+		}
+	})
+	t.Run("docs/12 every Makefile target is in make help and .env.example sources", func(t *testing.T) {
+		t.Parallel()
+		mustContainAll(t, docFile(t, "12-build-and-deploy.md"), "Every target is discoverable", "sourceable")
+		mysqlDir := renderProject(t, httpMatrixConfig("gin", "mysql", "fx"))
+		for _, dir := range []string{httpDir, grpcDir, mysqlDir} {
+			assertMakefileHygiene(t, readFile(t, filepath.Join(dir, "Makefile")))
+			assertEnvSourceable(t, dir)
+		}
 	})
 	t.Run("docs/07 and docs/13 describe the gRPC transport as real", func(t *testing.T) {
 		t.Parallel()
 		mustNotContain(t, docFile(t, "07-transport-layer.md"), "**Placeholder.**", "compiling stub")
 		mustNotContain(t, docFile(t, "13-cross-cutting.md"), "gRPC is a stub")
-		mustContainAll(t, docFile(t, "07-transport-layer.md"), "rpcstatus", "grpc.health.v1", "Protected()")
+		mustContainAll(t, docFile(t, "07-transport-layer.md"), "rpcstatus", "grpc.health.v1", "Public()")
 		mustNotContain(t, readFile(t, filepath.Join(grpcDir, "internal/transport/grpc/user.go")), "TODO")
 	})
 	t.Run("docs/12 make targets exist in the generated Makefile", func(t *testing.T) {
@@ -84,16 +106,7 @@ func TestDocsClaims(t *testing.T) {
 	})
 	t.Run("root README and CLAUDE.md list every nova make target", func(t *testing.T) {
 		t.Parallel()
-		readme, claude := repoFile(t, "README.md"), repoFile(t, "CLAUDE.md")
-		for _, line := range strings.Split(repoFile(t, "Makefile"), "\n") {
-			name, _, ok := strings.Cut(line, ":")
-			if !ok || !strings.Contains(line, "## ") || strings.ContainsAny(name, " \t$") {
-				continue
-			}
-			mustContainAll(t, readme, "make "+name)
-			mustContainAll(t, claude, "make "+name)
-		}
-		mustContainAll(t, readme, "`{cache}`")
+		assertNovaTargetsListed(t)
 	})
 }
 
@@ -107,4 +120,84 @@ func docFile(t *testing.T, name string) string {
 func repoFile(t *testing.T, rel string) string {
 	t.Helper()
 	return readFile(t, filepath.Join("..", "..", rel))
+}
+
+// funcBody returns the source of method name, from its declaration to the
+// next top-level func.
+func funcBody(t *testing.T, src, name string) string {
+	t.Helper()
+	start := strings.Index(src, ") "+name+"(")
+	if start < 0 {
+		t.Fatalf("no method %s", name)
+	}
+	end := strings.Index(src[start:], "\nfunc ")
+	if end < 0 {
+		return src[start:]
+	}
+	return src[start : start+end]
+}
+
+// limitDefaults maps each LIMIT_* variable to its default as pattern finds them.
+func limitDefaults(src, pattern string) map[string]string {
+	out := map[string]string{}
+	for _, m := range regexp.MustCompile(pattern).FindAllStringSubmatch(src, -1) {
+		out[m[1]] = m[2]
+	}
+	return out
+}
+
+func assertRejectedValues(t *testing.T) {
+	t.Helper()
+	for _, c := range []struct{ field, value string }{
+		{"Transport", "cron"}, {"Transport", "cli"}, {"ConfigFormat", "toml"}, {"ConfigFormat", "env"},
+		{"QueryGen", "raw"}, {"QueryGen", "gorm"},
+	} {
+		cfg := httpMatrixConfig("fiber", "postgres", "wire")
+		reflect.ValueOf(cfg).Elem().FieldByName(c.field).SetString(c.value)
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s=%q accepted; docs/01 says it is rejected", c.field, c.value)
+		}
+	}
+	mustContainAll(t, docFile(t, "01-cli-options.md"), "`cron` and `cli` transports", "`gorm`, `raw`",
+		"`toml` and `env`", "`--docker=false`", "`--type`", "`worker` also needs `--queue")
+}
+
+// assertCORSAndTraceOrder: no framework's CORS code allows "*", and every
+// router installs its OTel middleware before Logging, which is what puts
+// trace_id on the access line.
+func assertCORSAndTraceOrder(t *testing.T, fiberDir string) {
+	t.Helper()
+	mustContainAll(t, docFile(t, "13-cross-cutting.md"), "never `*`", "`trace_id` on every log line")
+	for _, fw := range []string{"fiber", "gin", "chi", "echo"} {
+		dir := fiberDir
+		if fw != "fiber" {
+			dir = renderProject(t, noDBMatrixConfig(fw, "fx"))
+		}
+		mw := filepath.Join(dir, "internal/transport/http/middleware")
+		for _, line := range strings.Split(readFile(t, filepath.Join(mw, "cors.go")), "\n") {
+			if code, _, _ := strings.Cut(line, "//"); strings.Contains(code, `"*"`) {
+				t.Errorf("%s cors.go allows \"*\": %s", fw, strings.TrimSpace(line))
+			}
+		}
+		router := readFile(t, filepath.Join(dir, "internal/transport/http/router.go"))
+		otel := strings.Index(router, "otel"+fw+".")
+		logging := strings.Index(router, "middleware.Logging(")
+		if otel < 0 || logging < 0 || otel > logging {
+			t.Errorf("%s: the OTel middleware must run before Logging so trace_id is set", fw)
+		}
+	}
+}
+
+func assertNovaTargetsListed(t *testing.T) {
+	t.Helper()
+	readme, claude := repoFile(t, "README.md"), repoFile(t, "CLAUDE.md")
+	for _, line := range strings.Split(repoFile(t, "Makefile"), "\n") {
+		name, _, ok := strings.Cut(line, ":")
+		if !ok || !strings.Contains(line, "## ") || strings.ContainsAny(name, " \t$") {
+			continue
+		}
+		mustContainAll(t, readme, "make "+name)
+		mustContainAll(t, claude, "make "+name)
+	}
+	mustContainAll(t, readme, "`{cache}`")
 }

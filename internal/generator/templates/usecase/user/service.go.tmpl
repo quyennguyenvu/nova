@@ -245,7 +245,7 @@ func (s *Service) List(ctx context.Context, input ListInput) (*ListOutput, error
 }
 
 // PublicList returns one cursor-paginated page of the public user directory
-// (email + name), for unauthenticated callers. It reads limit+1 rows so it can
+// (names only), for unauthenticated callers. It reads limit+1 rows so it can
 // report HasMore without a second query, trims the extra, and encodes the last
 // kept id as the next opaque cursor. Keyset paging (id > cursor) stays stable
 // under concurrent inserts and avoids deep-OFFSET scans.
@@ -271,7 +271,7 @@ func (s *Service) PublicList(ctx context.Context, input PublicListInput) (*Publi
 	}
 	items := make([]*PublicOutput, len(users))
 	for i, u := range users {
-		items[i] = &PublicOutput{Email: u.Email, Name: u.Name}
+		items[i] = &PublicOutput{Name: u.Name}
 	}
 	var next string
 	if hasMore && len(users) > 0 {

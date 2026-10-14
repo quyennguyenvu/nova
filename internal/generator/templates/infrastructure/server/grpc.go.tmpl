@@ -34,8 +34,8 @@ func NewGRPCServer(
 		defer cancel()
 
 		log.Info("shutting down gRPC server", "addr", addr)
-		// NOT_SERVING first, so a health-checking balancer stops routing new
-		// calls while the in-flight ones drain.
+		// NOT_SERVING first; a balancer that polls health only sees it when
+		// the platform delays the stop signal (a Kubernetes preStop sleep).
 		srv.Health.Shutdown()
 
 		done := make(chan struct{})

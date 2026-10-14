@@ -7,6 +7,8 @@ import (
 	"io/fs"
 {{- if .HasHTTP}}
 	"net"
+{{- end}}
+{{- if or .HasHTTP .HasRedis .HasElasticsearch (eq .MessageQueue "kafka")}}
 	"strings"
 {{- end}}
 	"os"
@@ -159,15 +161,6 @@ func (c HTTPConfig) TrustedProxyNets() ([]*net.IPNet, error) {
 	return nets, nil
 }
 
-// LoginRateLimitConfig throttles POST /login by remote IP. The limiter is a
-// token bucket with `RPS` refill rate (requests / second) and `Burst` peak
-// capacity. Zero or negative values fall back to a 5-per-minute default so
-// the brute-force surface is closed even when the YAML is misconfigured.
-type LoginRateLimitConfig struct {
-	RPS   float64 `{{.ConfigFormat}}:"rps"   env:"LOGIN_RATE_LIMIT_RPS"`
-	Burst int     `{{.ConfigFormat}}:"burst" env:"LOGIN_RATE_LIMIT_BURST"`
-}
-
 // CORSConfig is driven entirely from configuration — scaffolded code must not
 // default to "*". Each deployment enumerates its allowed origins explicitly.
 type CORSConfig struct {
@@ -176,15 +169,30 @@ type CORSConfig struct {
 	AllowHeaders []string `{{.ConfigFormat}}:"allow_headers" env:"CORS_ALLOW_HEADERS" env-separator:","`
 }
 {{- end}}
+{{- if or .HasHTTP .HasGRPC}}
+
+// LoginRateLimitConfig throttles the credential endpoints (login and
+// registration) per client. The limiter is a token bucket with `RPS` refill
+// rate (requests / second) and `Burst` peak capacity. Zero or negative values
+// fall back to a 5-per-minute default so the brute-force surface is closed
+// even when the YAML is misconfigured.
+type LoginRateLimitConfig struct {
+	RPS   float64 `{{.ConfigFormat}}:"rps"   env:"LOGIN_RATE_LIMIT_RPS"`
+	Burst int     `{{.ConfigFormat}}:"burst" env:"LOGIN_RATE_LIMIT_BURST"`
+}
+{{- end}}
 {{- if .HasGRPC}}
 
-// GRPCConfig holds gRPC server configuration. Reflection lets grpcurl and
-// friends discover the services without the proto files; production.yaml
-// turns it off.
+// GRPCConfig holds gRPC server configuration. RequestTimeout bounds every
+// call (the HTTP request_timeout's counterpart); LoginRateLimit throttles the
+// credential RPCs per peer. Reflection lets grpcurl and friends discover the
+// services without the proto files; production.yaml turns it off.
 type GRPCConfig struct {
-	Port            string        `{{.ConfigFormat}}:"port"             env:"GRPC_PORT"`
-	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"GRPC_SHUTDOWN_TIMEOUT"`
-	Reflection      bool          `{{.ConfigFormat}}:"reflection"       env:"GRPC_REFLECTION"`
+	Port            string               `{{.ConfigFormat}}:"port"             env:"GRPC_PORT"`
+	ShutdownTimeout time.Duration        `{{.ConfigFormat}}:"shutdown_timeout" env:"GRPC_SHUTDOWN_TIMEOUT"`
+	RequestTimeout  time.Duration        `{{.ConfigFormat}}:"request_timeout"  env:"GRPC_REQUEST_TIMEOUT"`
+	Reflection      bool                 `{{.ConfigFormat}}:"reflection"       env:"GRPC_REFLECTION"`
+	LoginRateLimit  LoginRateLimitConfig `{{.ConfigFormat}}:"login_rate_limit"`
 }
 {{- end}}
 {{- if .HasCron}}
@@ -344,6 +352,9 @@ func Load() (*Config, error) {
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
 		return nil, errors.Wrap(err, "config env vars")
 	}
+{{- if or .HasHTTP .HasRedis .HasElasticsearch (eq .MessageQueue "kafka")}}
+	normalizeLists(&cfg)
+{{- end}}
 {{- if .HasDatabase}}
 	// Without DB_USER the driver falls back to the OS user, which looks like a
 	// permissions bug on the database; fail with the real cause instead.
@@ -362,15 +373,61 @@ func Load() (*Config, error) {
 
 // loadDotEnv reads ./.env into the environment for host runs, so
 // `cp .env.example .env && go run main.go api` works. Variables already set
-// win (godotenv.Load never overrides), and a missing file is not an error:
-// containers inject their environment and ship no .env.
+// win, and a missing file is not an error: containers inject their
+// environment and ship no .env. An empty value is skipped, because `KEY=`
+// in .env means "keep the YAML default"; cleanenv would otherwise apply it
+// and, for a list, erase the YAML value.
 func loadDotEnv() error {
-	err := godotenv.Load()
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	vals, err := godotenv.Read()
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
 		return err
+	}
+	for k, v := range vals {
+		if _, set := os.LookupEnv(k); set || v == "" {
+			continue
+		}
+		if setErr := os.Setenv(k, v); setErr != nil {
+			return setErr
+		}
 	}
 	return nil
 }
+{{- if or .HasHTTP .HasRedis .HasElasticsearch (eq .MessageQueue "kafka")}}
+
+// normalizeLists trims list entries and drops empty ones: cleanenv splits an
+// env value on "," without trimming, so "a, b" would otherwise reach the
+// router or client as " b" and silently match nothing.
+func normalizeLists(cfg *Config) {
+{{- if .HasHTTP}}
+	cfg.HTTP.TrustedProxies = trimList(cfg.HTTP.TrustedProxies)
+	cfg.HTTP.CORS.AllowOrigins = trimList(cfg.HTTP.CORS.AllowOrigins)
+	cfg.HTTP.CORS.AllowMethods = trimList(cfg.HTTP.CORS.AllowMethods)
+	cfg.HTTP.CORS.AllowHeaders = trimList(cfg.HTTP.CORS.AllowHeaders)
+{{- end}}
+{{- if .HasRedis}}
+	cfg.Redis.Addrs = trimList(cfg.Redis.Addrs)
+{{- end}}
+{{- if .HasElasticsearch}}
+	cfg.Elasticsearch.Addresses = trimList(cfg.Elasticsearch.Addresses)
+{{- end}}
+{{- if eq .MessageQueue "kafka"}}
+	cfg.Kafka.Brokers = trimList(cfg.Kafka.Brokers)
+{{- end}}
+}
+
+func trimList(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+{{- end}}
 
 func readEmbedded(name string, cfg *Config) error {
 	data, err := configFS.ReadFile(name)

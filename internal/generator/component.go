@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"errors"
 	"fmt"
 	"go/format"
 	"io"
@@ -151,6 +152,12 @@ func (g *ComponentGenerator) GenerateWorker(name string) error {
 
 	lower := strings.ToLower(name)
 	broker := g.detectMessageQueue()
+	if broker != kafka && broker != rabbitmq {
+		// The DI scaffold binds the consumer to infrastructure/pubsub, which
+		// only a project with a broker has.
+		return errors.New("nova add worker needs a message broker: set stack.message_queue to kafka or " +
+			"rabbitmq in nova.yaml, in a project that has the matching infrastructure/pubsub package")
+	}
 	data := tmplData{
 		ModuleName:    g.manifest.Module,
 		Package:       res.Package,

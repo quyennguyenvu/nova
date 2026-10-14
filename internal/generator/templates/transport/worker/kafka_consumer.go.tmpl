@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/IBM/sarama"
 
@@ -17,6 +18,11 @@ const (
 	deadLetterSuffix       = ".dlq"
 	HeaderDeadLetterReason = "x-dead-letter-reason"
 	HeaderDeadLetterSource = "x-dead-letter-source" // "<topic>/<partition>/<offset>"
+
+	// A failed dead-letter write is retried from deadLetterRetryMin, doubling
+	// up to deadLetterRetryMax, for as long as the session lives.
+	deadLetterRetryMin = 100 * time.Millisecond
+	deadLetterRetryMax = 30 * time.Second
 )
 
 // kafkaConsumer adapts sarama.ConsumerGroup to the worker.Consumer port.
@@ -40,7 +46,7 @@ func NewKafkaConsumer(group sarama.ConsumerGroup, producer sarama.SyncProducer, 
 }
 
 func (c *kafkaConsumer) Subscribe(ctx context.Context, topics []string, dispatch DispatchFunc) error {
-	handler := &kafkaSessionHandler{dispatch: dispatch, deadLetter: c.deadLetter}
+	handler := &kafkaSessionHandler{dispatch: dispatch, park: c.park}
 
 	// sarama reports partition/offset/broker errors here only because
 	// Return.Errors is set (infrastructure/pubsub); undrained they are lost
@@ -104,14 +110,36 @@ func (c *kafkaConsumer) deadLetter(m *sarama.ConsumerMessage, cause error) error
 	return nil
 }
 
+// park copies m to its dead-letter topic, retrying with capped backoff until
+// the copy lands or the session ends. Returning an error from ConsumeClaim
+// instead would end the session for every partition and rejoin straight into
+// the same failure. It reports false when the session ended first: the
+// message then stays unmarked and the next session redelivers it.
+func (c *kafkaConsumer) park(ctx context.Context, m *sarama.ConsumerMessage, cause error) bool {
+	wait := deadLetterRetryMin
+	for {
+		err := c.deadLetter(m, cause)
+		if err == nil {
+			return true
+		}
+		c.log.Error("kafka: dead-letter write failed", "err", err, "retry_in_ms", wait.Milliseconds())
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, deadLetterRetryMax)
+	}
+}
+
 // kafkaSessionHandler is sarama's per-session callback bundle. Setup runs
 // once at session start, Cleanup once at session end, ConsumeClaim once per
 // claimed partition. Returning from ConsumeClaim ends the session and
-// triggers a rebalance, so it returns only on shutdown or when the
-// dead-letter write itself fails — never because a handler failed.
+// triggers a rebalance, so it returns only on shutdown — never because a
+// handler or a dead-letter write failed.
 type kafkaSessionHandler struct {
-	dispatch   DispatchFunc
-	deadLetter func(*sarama.ConsumerMessage, error) error
+	dispatch DispatchFunc
+	park     func(context.Context, *sarama.ConsumerMessage, error) bool
 }
 
 func (*kafkaSessionHandler) Setup(sarama.ConsumerGroupSession) error   { return nil }
@@ -127,9 +155,7 @@ func (h *kafkaSessionHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 			if !ok {
 				return nil
 			}
-			if err := h.settle(sess, m); err != nil {
-				return err
-			}
+			h.settle(sess, m)
 		case <-sess.Context().Done():
 			return nil
 		}
@@ -141,7 +167,7 @@ func (h *kafkaSessionHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 // done with: handled, or parked on the dead-letter topic. A message
 // abandoned because the session ended stays unmarked so the next session
 // redelivers it.
-func (h *kafkaSessionHandler) settle(sess sarama.ConsumerGroupSession, m *sarama.ConsumerMessage) error {
+func (h *kafkaSessionHandler) settle(sess sarama.ConsumerGroupSession, m *sarama.ConsumerMessage) {
 	err := h.dispatch(sess.Context(), Message{
 		Topic:     m.Topic,
 		Payload:   m.Value,
@@ -154,14 +180,12 @@ func (h *kafkaSessionHandler) settle(sess sarama.ConsumerGroupSession, m *sarama
 	case err == nil:
 		sess.MarkMessage(m, "")
 	case errors.Is(err, ErrParked):
-		if dlqErr := h.deadLetter(m, err); dlqErr != nil {
-			return dlqErr
+		if h.park(sess.Context(), m, err) {
+			sess.MarkMessage(m, "")
 		}
-		sess.MarkMessage(m, "")
 	}
 	// Any other error means the session ended mid-handling: the offset stays
 	// where it was so the next session redelivers the message.
-	return nil
 }
 
 func kafkaHeaders(hs []*sarama.RecordHeader) map[string]string {

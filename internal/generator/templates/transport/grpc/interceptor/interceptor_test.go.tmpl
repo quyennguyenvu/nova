@@ -1,0 +1,74 @@
+package interceptor
+
+import (
+	"context"
+	"net"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+var info = &grpc.UnaryServerInfo{FullMethod: "/user.v1.UserService/Login"}
+
+func ok(context.Context, any) (any, error) { return "ok", nil }
+
+// A panic answers with the same localized internal-error message an
+// unhandled error gets, never with Go's panic text.
+func TestRecoveryAnswersLocalized(t *testing.T) {
+	locale.NewMapping()
+	ctx := locale.WithLanguage(t.Context(), locale.LangVi)
+	_, err := Recovery()(ctx, nil, info, func(context.Context, any) (any, error) { panic("boom") })
+	st := status.Convert(err)
+	want := locale.Translate(locale.LangVi, locale.InternalError)
+	if st.Code() != codes.Internal || st.Message() != want {
+		t.Fatalf("got %s %q, want Internal %q", st.Code(), st.Message(), want)
+	}
+}
+
+// The credential RPCs are throttled per peer: the call past the burst is
+// ResourceExhausted, another peer still gets through, and other methods are
+// never throttled.
+func TestThrottlePerPeer(t *testing.T) {
+	locale.NewMapping()
+	throttle := Throttle(config.LoginRateLimitConfig{RPS: 0.001, Burst: 2},
+		map[string]struct{}{info.FullMethod: {}})
+	from := func(ip string) context.Context {
+		return peer.NewContext(t.Context(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: 40000}})
+	}
+	for i := range 2 {
+		if _, err := throttle(from("10.0.0.1"), nil, info, ok); err != nil {
+			t.Fatalf("call %d within the burst: %v", i+1, err)
+		}
+	}
+	if _, err := throttle(from("10.0.0.1"), nil, info, ok); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("call past the burst = %v, want ResourceExhausted", err)
+	}
+	if _, err := throttle(from("10.0.0.2"), nil, info, ok); err != nil {
+		t.Fatalf("another peer was throttled: %v", err)
+	}
+	other := &grpc.UnaryServerInfo{FullMethod: "/user.v1.UserService/GetUser"}
+	if _, err := throttle(from("10.0.0.1"), nil, other, ok); err != nil {
+		t.Fatalf("an unthrottled method was throttled: %v", err)
+	}
+}
+
+// Every call runs under the configured deadline.
+func TestDeadlineBoundsCall(t *testing.T) {
+	_, err := Deadline(time.Minute)(t.Context(), nil, info, func(ctx context.Context, _ any) (any, error) {
+		deadline, set := ctx.Deadline()
+		if !set || time.Until(deadline) > time.Minute {
+			t.Errorf("deadline = %v (set %v), want within a minute", deadline, set)
+		}
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

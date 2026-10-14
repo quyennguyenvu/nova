@@ -18,14 +18,14 @@ import (
 // Authorization header; gRPC metadata keys are lowercase.
 const authorizationMetadataKey = "authorization"
 
-// Auth verifies the bearer token on every method in protected (full method
-// names) and attaches the resolved *identity.UserPrincipal to ctx; other
-// methods pass through untouched, like the HTTP routes outside the Auth
-// group. A missing or rejected token is Unauthenticated with the localized
-// message the HTTP 401 carries.
-func Auth(tokenSvc *jwtsec.TokenService, protected map[string]struct{}) grpc.UnaryServerInterceptor {
+// Auth verifies the bearer token on every method except those in public
+// (full method names) and attaches the resolved *identity.UserPrincipal to
+// ctx. It is deny-by-default: an RPC added to the proto needs a token until
+// its Registrar lists it in Public(). A missing or rejected token is
+// Unauthenticated with the localized message the HTTP 401 carries.
+func Auth(tokenSvc *jwtsec.TokenService, public map[string]struct{}) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
-		if _, ok := protected[info.FullMethod]; !ok {
+		if _, ok := public[info.FullMethod]; ok {
 			return next(ctx, req)
 		}
 		token := bearerToken(ctx)

@@ -96,12 +96,12 @@ func retryAfter(d time.Duration) string {
 // endpoint (login, registration). Each call builds its own buckets, so the
 // routes do not share a budget. Apply only to those routes — global rate
 // limiting belongs upstream where it can shed traffic before reaching the
-// app. c.IP() honours X-Forwarded-For only from the configured trusted
-// proxies.
+// app. The key is the address ClientIP resolved, which honours
+// X-Forwarded-For only from the configured trusted proxies.
 func LoginRateLimit(cfg config.LoginRateLimitConfig) fiber.Handler {
 	l := newIPLimiter(cfg)
 	return func(c *fiber.Ctx) error {
-		ok, wait := l.allow(c.IP())
+		ok, wait := l.allow(RemoteIP(c))
 		if !ok {
 			c.Set(fiber.HeaderRetryAfter, retryAfter(wait))
 			return httpwriter.WriteError(

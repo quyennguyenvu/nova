@@ -20,7 +20,7 @@ What `nova new` asks, which flag maps to each answer, and how invalid or unimple
 | Include Docker setup? | `--docker`         | `true`; pass `--docker=false` to skip                |
 | Include CI/CD?        | `--ci`             | `github`, `none`                                     |
 
-Three flags have no prompt because only one value is implemented per engine: `--db-driver` (`pgx` for postgres, `database/sql` for mysql), `--query` (`sqlc`) and `--config` (`yaml`). Leave them unset; `Validate` fills them in. `--force` lets `nova new` render into a directory that already has files.
+Three flags have no prompt because only one value is implemented per engine: `--db-driver` (`pgx` for postgres, `database/sql` for mysql), `--query` (`sqlc`) and `--config` (`yaml`). Leave them unset; `Validate` fills them in. `--force` lets `nova new` render into a directory that already has files; migrations keep their existing timestamped names, so a re-render overwrites them instead of adding a second copy.
 
 The Makefile, the lint config and the git pre-commit hook are always emitted — there is no prompt for them.
 
@@ -33,7 +33,7 @@ One option carries a cost the generator cannot remove: `--search=elasticsearch` 
 Every value goes through `ProjectConfig.Validate()` ([internal/config/options.go](../internal/config/options.go)) before a single file is written, and `generator.New()` runs the same check so a config built in code cannot bypass it. The error lists every problem at once, for example `transport "cron" is not supported (valid: http, grpc, worker)`.
 
 - Rejected as not implemented: the `cron` and `cli` transports, `nethttp`, `sqlite`, `mongodb`, `sqlx`, `gorm`, `raw`, `bigcache`, `nats`, `toml` and `env`. The former `--type` and `--grpc-gateway` flags were removed.
-- `--transport` is required when any flag is given; a `worker` also needs `--queue kafka` or `rabbitmq`.
+- `--transport` is required when any flag is given; a `worker` also needs `--queue kafka` or `rabbitmq` and a SQL `--database` (its audit trail is stored there). `--http-framework` applies only to `http`, where it defaults to `fiber`; on another transport it is rejected rather than ignored.
 - Project names must match `[A-Za-z0-9][A-Za-z0-9._-]*` (no spaces, quotes or path separators) and `--module` must look like a Go module path, so the rendered Go, YAML and Makefile always parse.
 - `--database=none` blanks `--db-driver`/`--query` and renders an in-memory `UserRepository` (`internal/adapter/repository/memory/`) so the User CRUD, handlers and DI graph still build and run; data lives only for the lifetime of the process. The health probe has no dependency to check in that configuration and mirrors liveness.
 - A target directory that already contains files is refused unless `--force` is given.

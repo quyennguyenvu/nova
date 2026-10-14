@@ -17,7 +17,7 @@ make fmt             # golangci-lint fmt  [&& sqlfluff fix] [&& buf format -w]
 make vet             # go vet ./...
 
 make migrate-create name=add_orders    # [--database]
-make migrate-up                        # uses $MIGRATE_DATABASE_URL
+make migrate-up                        # $MIGRATE_DATABASE_URL, else the value in .env
 make migrate-down
 
 make gen             # sqlc-gen → proto-gen → tidy → wire-gen (whichever apply)
@@ -38,7 +38,8 @@ Notes on the ones with a decision behind them:
 - **`gen` is composed**, not a script: it expands to only the generators the project actually has, so a `--di=fx --query=none` project's `make gen` is a no-op rather than an error.
 - **`wire-gen` deletes `wire_gen.go` first.** A stale generated file that still compiles is worse than a missing one — wire would leave it in place on a failed run. It runs `go tool wire`: the `tool` directive in `go.mod` pins wire's version and `go` builds it from the module cache, so there is nothing to install.
 - **`migrate-down` rolls back `n` migrations, default 1** (`make migrate-down n=3`); a bare `migrate down` would unwind the whole schema.
-- **`migrate-*` read `$MIGRATE_DATABASE_URL`**, not the app config. Migration tooling runs outside the app (CI, a job, your shell), so it takes a URL from the environment; `.env.example` documents it as "used by Makefile (migrate) and sqlc — not read by the Go config".
+- **`migrate-*` read `$MIGRATE_DATABASE_URL`**, not the app config. Migration tooling runs outside the app (CI, a job, your shell), so it takes a URL from the environment, falling back to the `MIGRATE_DATABASE_URL` line in `.env` so the quick start (`cp .env.example .env`, then `make migrate-up`) needs no export. The Go config ignores it.
+- **Recipes resolve paths with `$(CURDIR)`**, the directory make runs in. `$(PWD)` would be the caller's directory under `make -C svc gen`, and the `rm` lines would delete there.
 
 There is deliberately **no `make build` or `make run`** target: the binary is built by `go build`/`docker build`, and running it means choosing a subcommand (`./{project} api`) — a `make run` would have to guess.
 
@@ -166,8 +167,16 @@ deploy:
 | `LIMIT_APP_CPUS`        | `2`     | app                                  |
 | `LIMIT_APP_MEMORY`      | `512M`  | app                                  |
 | `LIMIT_DB_CPUS`         | `2`     | postgres / mysql                     |
-| `LIMIT_DB_MEMORY`       | `512M`  | postgres / mysql                     |
+| `LIMIT_DB_MEMORY`       | `1G`    | postgres / mysql                     |
+| `LIMIT_REDIS_CPUS`      | `1`     | redis                                |
+| `LIMIT_REDIS_MEMORY`    | `256M`  | redis                                |
 | `LIMIT_REDIS_MAXMEMORY` | `192mb` | redis (`--maxmemory`, `allkeys-lru`) |
+| `LIMIT_KAFKA_CPUS`      | `2`     | kafka                                |
+| `LIMIT_KAFKA_MEMORY`    | `1G`    | kafka                                |
+| `LIMIT_RABBITMQ_CPUS`   | `1`     | rabbitmq                             |
+| `LIMIT_RABBITMQ_MEMORY` | `512M`  | rabbitmq                             |
+| `LIMIT_ES_CPUS`         | `2`     | elasticsearch                        |
+| `LIMIT_ES_MEMORY`       | `1536M` | elasticsearch                        |
 | `LIMIT_ES_HEAP`         | `512m`  | elasticsearch (`ES_JAVA_OPTS`)       |
 
 A sweep is a shell loop over one variable, and every run is reproducible because the ceiling is explicit rather than "whatever the host had free".
@@ -182,7 +191,7 @@ environment: # wins over env_file
   DB_PORT: "5432"
   REDIS_ADDRS: redis:6379
   ELASTICSEARCH_ADDRESSES: http://elasticsearch:9200
-  KAFKA_BROKERS: kafka:9092
+  KAFKA_BROKERS: kafka:29092
 ```
 
 `.env` points at `localhost` so host-side runs work; inside the network each dependency answers on its **service name**. `environment` overriding `env_file` is what lets one `.env` serve both.
@@ -197,9 +206,9 @@ depends_on:
 
 Every dependency declares a healthcheck (`pg_isready`, `mysqladmin ping`, `redis-cli ping`, an ES cluster-health probe), and the app waits on `service_healthy`. Without this the app dials a still-booting database, fails, and exits — the single most common "compose doesn't work" report.
 
-Host ports are published for each dependency so host tooling (`make migrate-up`, k6, the kafka CLI) works against the same stack. Kafka runs single-node KRaft with dual listeners (`kafka:9092` in-network, `localhost:29092` from the host) for exactly that reason.
+Host ports are published for each dependency so host tooling (`make migrate-up`, k6, the kafka CLI) works against the same stack. Kafka runs single-node KRaft with dual listeners (`kafka:29092` in-network, `localhost:9092` from the host) for exactly that reason: the host listener is the address `.env.example` and `base.yaml` already use, so `go run main.go api` reaches the broker without edits. The listeners bind with empty hosts (`PLAINTEXT://:29092`), because Kafka 3.9 refuses to start when a `0.0.0.0` listener would be advertised, and the healthcheck probes the in-network listener so a remapped host port (`19092:9092`) keeps the container healthy.
 
-Dead letters need a home the broker knows about. Compose enables Kafka topic auto-creation, so the worker's `<topic>.dlq` topics appear on first use; in production create them alongside the topics themselves. RabbitMQ declares its `<exchange>.dlx` exchange and `<queue>.dlq` queue at worker start, but queue arguments are fixed at creation: a work queue declared by an older build (without `x-dead-letter-exchange`) must be deleted once before the new worker can declare it.
+Dead letters need a home the broker knows about. Compose enables Kafka topic auto-creation, so the worker's `<topic>.dlq` topics appear on first use; in production create them alongside the topics themselves. RabbitMQ declares its `<queue>.dlx` exchange and `<queue>.dlq` queue at worker start. Queue arguments are fixed at creation, which is why the dead-letter exchange is named after the queue rather than the work exchange: pointing a worker at another exchange never changes them. A work queue declared by an older build with different arguments must be deleted once before the new worker can declare it.
 
 Data lives in named volumes, so `docker compose down` keeps it and `down -v` discards it.
 
@@ -246,9 +255,9 @@ The split is the same one described in [09](09-infrastructure-layer.md#config--o
 - **`CORS_ALLOW_ORIGINS`**, empty, with "production MUST set this. Never `*`".
 - **`SERVER_TRUSTED_PROXIES`**, empty: the load balancers whose `X-Forwarded-For` is believed; empty means forwarded headers are ignored and the TCP peer is the client.
 - **Discrete DB fields** (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) rather than a `DATABASE_URL` — the DSN is assembled escape-safely in code ([09](09-infrastructure-layer.md#database--connection-factory)).
-- **`MIGRATE_DATABASE_URL`** separately, flagged "used by Makefile (migrate) and sqlc — not read by the Go config".
+- **`MIGRATE_DATABASE_URL`** separately, flagged as read by `make migrate-up`/`migrate-down` and ignored by the Go config (quoted for MySQL, whose `tcp(...)` is shell syntax).
 
-Every value is sourceable as written: the database credentials default to the same values compose uses, the JWT keys are empty and marked required (they fail at startup until generated), and nothing is wrapped in `<angle brackets>`. The binary loads `./.env` itself on host runs ([09](09-infrastructure-layer.md#config--one-struct-three-layers-of-value)), so `cp .env.example .env`, generate the keys, and `go run main.go api` reaches "starting HTTP server" with only the compose dependencies up. nova's bootstrap proves that path on the no-database project: it builds the binary, writes a `.env` with a generated keypair and a free port, waits for `/healthz`, and sends SIGTERM. Building the image (`docker build`) was checked once by hand; `docker compose up` against live dependencies stays a manual step.
+Every value is sourceable as written: the database credentials default to the same values compose uses, the JWT keys are empty and marked required (they fail at startup until generated), and nothing is wrapped in `<angle brackets>`. The binary loads `./.env` itself on host runs ([09](09-infrastructure-layer.md#config--one-struct-three-layers-of-value)), so `cp .env.example .env`, generate the keys, and `go run main.go api` reaches "starting HTTP server" with only the compose dependencies up. nova's bootstrap proves that path on the no-database projects: it builds the binary, writes a `.env` with a generated keypair and a free port, waits for the port, and sends SIGTERM; `TestDeployContract` sources `.env.example` under `sh`. The image build, the compose healthcheck and the README worker demo were run by hand on 2026-10-14; they stay manual steps.
 
 `APP_ENV=local` by default, which loads `base.yaml` only; any value other than `local`, `development` or `production` is rejected at startup.
 

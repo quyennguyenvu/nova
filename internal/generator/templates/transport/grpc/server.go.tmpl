@@ -19,11 +19,13 @@ import (
 )
 
 // Registrar is one feature's gRPC surface: it registers its generated
-// service on the server and names the full methods that need a bearer
-// token (the HTTP Registrar's Auth group, expressed per method).
+// service on the server, names the full methods callable without a bearer
+// token (auth is deny-by-default, so a new RPC is protected until listed),
+// and names the credential methods to throttle per peer.
 type Registrar interface {
 	Register(s *grpc.Server)
-	Protected() []string
+	Public() []string
+	Throttled() []string
 }
 
 // Server bundles the gRPC server with its health service so the lifecycle
@@ -34,20 +36,25 @@ type Server struct {
 }
 
 // New builds the server. Interceptor order mirrors the HTTP middleware
-// chain: request id → locale → access log → recovery → auth, so an auth
-// failure is logged and a panic anywhere inside is recovered. Only unary
-// interceptors are installed; add stream counterparts with the first
-// streaming RPC.
+// chain: request id → locale → access log → recovery → deadline → throttle
+// → auth, so a throttled or unauthenticated call is logged and a panic
+// anywhere inside is recovered. Only unary interceptors are installed (the
+// health Watch and reflection streams need none); add stream counterparts
+// with the first streaming RPC.
 func New(
 	cfg config.GRPCConfig,
 	log observability.Logger,
 	tokenSvc *jwtsec.TokenService,
 	services []Registrar,
 ) *Server {
-	protected := map[string]struct{}{}
+	public := map[string]struct{}{healthpb.Health_Check_FullMethodName: {}}
+	throttled := map[string]struct{}{}
 	for _, svc := range services {
-		for _, m := range svc.Protected() {
-			protected[m] = struct{}{}
+		for _, m := range svc.Public() {
+			public[m] = struct{}{}
+		}
+		for _, m := range svc.Throttled() {
+			throttled[m] = struct{}{}
 		}
 	}
 	s := grpc.NewServer(
@@ -57,15 +64,17 @@ func New(
 			interceptor.Locale(),
 			interceptor.Logging(log),
 			interceptor.Recovery(),
-			interceptor.Auth(tokenSvc, protected),
+			interceptor.Deadline(cfg.RequestTimeout),
+			interceptor.Throttle(cfg.LoginRateLimit, throttled),
+			interceptor.Auth(tokenSvc, public),
 		),
 	)
 	for _, svc := range services {
 		svc.Register(s)
 	}
 	// Health starts SERVING; infrastructure/server flips it to NOT_SERVING
-	// at shutdown so a health-checking balancer stops routing before the
-	// drain. It reports process liveness, not dependency readiness.
+	// as shutdown starts. It reports process liveness, not dependency
+	// readiness.
 	h := health.NewServer()
 	healthpb.RegisterHealthServer(s, h)
 	if cfg.Reflection {

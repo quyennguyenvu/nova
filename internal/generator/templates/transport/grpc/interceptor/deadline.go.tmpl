@@ -1,0 +1,22 @@
+package interceptor
+
+import (
+	"context"
+	"time"
+
+	"google.golang.org/grpc"
+)
+
+// Deadline bounds every call by timeout, the gRPC counterpart of the HTTP
+// request_timeout, so a stalled dependency fails the call instead of holding
+// a handler goroutine. A sooner client deadline still wins; zero disables it.
+func Deadline(timeout time.Duration) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		if timeout <= 0 {
+			return next(ctx, req)
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return next(ctx, req)
+	}
+}

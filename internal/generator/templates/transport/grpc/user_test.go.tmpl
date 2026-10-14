@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	userv1 "{{.ModuleName}}/api/gen/user/v1"
 	"{{.ModuleName}}/internal/domain"
@@ -189,8 +190,17 @@ func newTokenService(t *testing.T) *jwtsec.TokenService {
 
 type testEnv struct {
 	srv    *Server
+	conn   *grpc.ClientConn
 	client userv1.UserServiceClient
 	health healthpb.HealthClient
+}
+
+// testConfig never throttles the end-to-end flow; the interceptor tests
+// cover the limiter itself.
+var testConfig = config.GRPCConfig{
+	Reflection:     true,
+	RequestTimeout: 5 * time.Second,
+	LoginRateLimit: config.LoginRateLimitConfig{RPS: 100, Burst: 100},
 }
 
 // newTestEnv serves the full transport (interceptors, auth, health) over an
@@ -201,7 +211,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	tokenSvc := newTokenService(t)
 	svc := usersvc.NewService(newFakeRepo(), fakeHasher{}, tokenSvc, noopTx{}{{if .HasMessageQueue}}, fakePublisher{}{{end}})
 	handler := NewUserHandler(svc, validator.New(validator.WithRequiredStructEnabled()))
-	srv := New(config.GRPCConfig{Reflection: true}, observability.Nop(), tokenSvc, []Registrar{handler})
+	srv := New(testConfig, observability.Nop(), tokenSvc, []Registrar{handler})
 
 	lis := bufconn.Listen(1 << 20)
 	go func() { _ = srv.GRPC.Serve(lis) }()
@@ -215,7 +225,12 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return &testEnv{srv: srv, client: userv1.NewUserServiceClient(conn), health: healthpb.NewHealthClient(conn)}
+	return &testEnv{
+		srv:    srv,
+		conn:   conn,
+		client: userv1.NewUserServiceClient(conn),
+		health: healthpb.NewHealthClient(conn),
+	}
 }
 
 func withToken(ctx context.Context, token string) context.Context {
@@ -321,3 +336,24 @@ func TestAcceptLanguageTranslates(t *testing.T) {
 		t.Fatalf("got %s %q, want Unauthenticated %q", st.Code(), st.Message(), want)
 	}
 }
+
+// TestEveryRPCIsProtectedUnlessPublic: auth is deny-by-default, so an RPC
+// added to the proto needs a token until UserHandler lists it in Public().
+func TestEveryRPCIsProtectedUnlessPublic(t *testing.T) {
+	env := newTestEnv(t)
+	public := map[string]bool{}
+	for _, m := range (*UserHandler)(nil).Public() {
+		public[m] = true
+	}
+	for _, m := range userv1.UserService_ServiceDesc.Methods {
+		full := "/" + userv1.UserService_ServiceDesc.ServiceName + "/" + m.MethodName
+		if public[full] {
+			continue
+		}
+		err := env.conn.Invoke(t.Context(), full, &emptypb.Empty{}, &emptypb.Empty{})
+		if status.Code(err) != codes.Unauthenticated {
+			t.Errorf("%s without a token = %v, want Unauthenticated", full, err)
+		}
+	}
+}
+

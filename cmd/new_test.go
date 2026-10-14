@@ -43,6 +43,32 @@ func TestNextStepsPerTransport(t *testing.T) {
 	}
 }
 
+// TestNewFlagDefaults runs `nova new` as a user would with only the required
+// flag: the module path comes from the project name, HTTP gets fiber, and
+// MySQL gets its driver without --db-driver.
+func TestNewFlagDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cmd := newCommand()
+	cmd.SetArgs([]string{"shop", "--transport=http", "--database=mysql", "--ci=none"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("nova new: %v", err)
+	}
+	gomod, err := os.ReadFile(filepath.Join("shop", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(gomod), "module github.com/myorg/shop\n") {
+		t.Errorf("go.mod starts %q, want module github.com/myorg/shop", strings.SplitN(string(gomod), "\n", 2)[0])
+	}
+	router, err := os.ReadFile(filepath.Join("shop", "internal", "transport", "http", "router.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(router), "github.com/gofiber/fiber/v2") {
+		t.Error("default http framework is not fiber")
+	}
+}
+
 // parseNewFlags builds the `new` command and parses args as a user would type
 // them, so applyFlags sees real pflag state (Changed, defaults, values).
 func parseNewFlags(t *testing.T, args ...string) *config.ProjectConfig {

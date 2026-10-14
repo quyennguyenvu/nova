@@ -57,16 +57,17 @@ func NewRouter(
 		ReadTimeout:    cfg.HTTP.ReadTimeout,
 		WriteTimeout:   cfg.HTTP.WriteTimeout,
 		ErrorHandler:   httpwriter.HandleError,
-		// X-Forwarded-For is honoured only from the proxies listed in config;
-		// with none configured c.IP() is the TCP peer, so a client cannot
-		// spoof its address. Entries are validated by config.Load.
-		ProxyHeader:             fiber.HeaderXForwardedFor,
-		EnableTrustedProxyCheck: true,
-		TrustedProxies:          cfg.HTTP.TrustedProxies,
-		EnablePrintRoutes:       cfg.AppEnv == config.EnvLocal, // Only print routes in local environment for easier debugging
+		// No proxy header is configured, so c.IP() stays the TCP peer;
+		// middleware.ClientIP resolves X-Forwarded-For against the trusted
+		// proxies itself.
+		EnablePrintRoutes: cfg.AppEnv == config.EnvLocal, // Only print routes in local environment for easier debugging
 	})
 
-	// Tracing first so RequestID and Logging see the server span (trace_id).
+	// ClientIP runs first so the access line and the login limiter read the
+	// same resolved address.
+	trusted, _ := cfg.HTTP.TrustedProxyNets() // entries are validated by config.Load
+	app.Use(middleware.ClientIP(trusted))
+	// Tracing next so RequestID and Logging see the server span (trace_id).
 	app.Use(otelfiber.Middleware(otelfiber.WithNext(func(c *fiber.Ctx) bool { return isProbe(c.Path()) })))
 	app.Use(middleware.RequestID())
 	app.Use(middleware.Logging(log))

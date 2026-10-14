@@ -114,15 +114,16 @@ func (c *ProjectConfig) UseFx() bool {
 	return c.DI == "fx"
 }
 
-// DefaultConfig returns a sensible default configuration (Quick Start).
+// DefaultConfig returns a sensible default configuration (Quick Start). The
+// module path, driver and HTTP framework stay empty: the CLI derives the
+// module from the project name, and Validate picks the engine's driver and
+// fiber for HTTP, so a flag that overrides one never fights a pre-filled value.
 func DefaultConfig() *ProjectConfig {
 	v := runtime.Version()
 	return &ProjectConfig{
 		ProjectName:   "myproject",
-		ModuleName:    "github.com/myorg/myproject",
 		GoVersion:     v[2:], // Strip "go" prefix from version string
 		Database:      "postgres",
-		DBDriver:      "pgx",
 		QueryGen:      "sqlc",
 		Cache:         "redis",
 		Search:        noneStr,

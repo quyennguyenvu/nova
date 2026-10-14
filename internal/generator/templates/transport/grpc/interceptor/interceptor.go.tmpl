@@ -5,6 +5,7 @@ package interceptor
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"{{.ModuleName}}/internal/transport/grpc/rpcstatus"
 	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
 	"{{.ModuleName}}/pkg/logctx"
 	"{{.ModuleName}}/pkg/observability"
 	"{{.ModuleName}}/pkg/requestid"
@@ -79,9 +82,10 @@ func Logging(base observability.Logger) grpc.UnaryServerInterceptor {
 	}
 }
 
-// Recovery converts a handler panic into codes.Internal and logs the stack, so
-// one bad request cannot take the process down. The call runs in a closure
-// so the deferred recover can replace the result without named returns.
+// Recovery converts a handler panic into codes.Internal with the localized
+// internal-error message and logs the stack, so one bad request cannot take
+// the process down. The call runs in a closure so the deferred recover can
+// replace the result without named returns.
 func Recovery() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
 		var (
@@ -96,7 +100,8 @@ func Recovery() grpc.UnaryServerInterceptor {
 						"panic", r,
 						"stack", string(debug.Stack()),
 					)
-					resp, err = nil, status.Error(codes.Internal, "internal error")
+					panicErr := errors.L(locale.InternalError).WithCause(fmt.Errorf("panic: %v", r))
+					resp, err = nil, rpcstatus.FromError(ctx, panicErr)
 				}
 			}()
 			resp, err = next(ctx, req)

@@ -34,14 +34,23 @@ func NewUserHandler(userService *usersvc.Service, validate *validator.Validate) 
 // Register mounts the generated service on s.
 func (h *UserHandler) Register(s *grpc.Server) { userv1.RegisterUserServiceServer(s, h) }
 
-// Protected lists the RPCs that need a bearer token: the same split as the
-// HTTP registrar (CreateUser, Login and the public directory stay open).
-func (*UserHandler) Protected() []string {
+// Public lists the RPCs callable without a bearer token: the same split as
+// the HTTP registrar. Every other RPC, including one added later, needs a
+// token.
+func (*UserHandler) Public() []string {
 	return []string{
-		userv1.UserService_GetUser_FullMethodName,
-		userv1.UserService_UpdateUser_FullMethodName,
-		userv1.UserService_DeleteUser_FullMethodName,
-		userv1.UserService_ListUsers_FullMethodName,
+		userv1.UserService_CreateUser_FullMethodName,
+		userv1.UserService_Login_FullMethodName,
+		userv1.UserService_ListPublicUsers_FullMethodName,
+	}
+}
+
+// Throttled lists the credential RPCs limited per peer, like the HTTP login
+// and registration routes.
+func (*UserHandler) Throttled() []string {
+	return []string{
+		userv1.UserService_CreateUser_FullMethodName,
+		userv1.UserService_Login_FullMethodName,
 	}
 }
 
@@ -177,7 +186,7 @@ func (h *UserHandler) ListPublicUsers(
 	}
 	users := make([]*userv1.PublicUser, len(out.Items))
 	for i, item := range out.Items {
-		users[i] = &userv1.PublicUser{Email: item.Email, Name: item.Name}
+		users[i] = &userv1.PublicUser{Name: item.Name}
 	}
 	return &userv1.ListPublicUsersResponse{Users: users, HasMore: out.HasMore, NextCursor: out.NextCursor}, nil
 }

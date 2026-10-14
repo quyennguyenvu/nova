@@ -29,12 +29,18 @@ func TestValidateRejectsUnimplemented(t *testing.T) {
 		"cache bigcache":       func(c *ProjectConfig) { c.Cache = "bigcache" },
 		"queue nats":           func(c *ProjectConfig) { c.MessageQueue = "nats" },
 		"worker without queue": func(c *ProjectConfig) { c.Transport = "worker"; c.MessageQueue = "none" },
-		"config toml":          func(c *ProjectConfig) { c.ConfigFormat = "toml" },
-		"di manual":            func(c *ProjectConfig) { c.DI = "manual" },
-		"name with space":      func(c *ProjectConfig) { c.ProjectName = "bad name" },
-		"name traversal":       func(c *ProjectConfig) { c.ProjectName = "../escaped" },
-		"name quote":           func(c *ProjectConfig) { c.ProjectName = `bad"x` },
-		"module with space":    func(c *ProjectConfig) { c.ModuleName = "foo bar" },
+		"worker without database": func(c *ProjectConfig) {
+			c.Transport = "worker"
+			c.MessageQueue = "kafka"
+			c.Database = "none"
+		},
+		"framework on grpc": func(c *ProjectConfig) { c.Transport = "grpc" },
+		"config toml":       func(c *ProjectConfig) { c.ConfigFormat = "toml" },
+		"di manual":         func(c *ProjectConfig) { c.DI = "manual" },
+		"name with space":   func(c *ProjectConfig) { c.ProjectName = "bad name" },
+		"name traversal":    func(c *ProjectConfig) { c.ProjectName = "../escaped" },
+		"name quote":        func(c *ProjectConfig) { c.ProjectName = `bad"x` },
+		"module with space": func(c *ProjectConfig) { c.ModuleName = "foo bar" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -84,6 +90,35 @@ func TestValidateNormalizes(t *testing.T) {
 	worker.MessageQueue = "kafka"
 	if err := worker.Validate(); err != nil {
 		t.Fatalf("Validate worker: %v", err)
+	}
+}
+
+// TestValidateFillsDefaults pins what a flag-driven run gets without the
+// optional flags, as the README's flag table promises: the engine's driver,
+// fiber for HTTP, and a module path left for the CLI to derive from the name.
+func TestValidateFillsDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	if cfg.ModuleName != "" || cfg.DBDriver != "" || cfg.HTTPFramework != "" {
+		t.Fatalf("DefaultConfig pre-fills module/driver/framework: %q/%q/%q",
+			cfg.ModuleName, cfg.DBDriver, cfg.HTTPFramework)
+	}
+	cfg.Transport = "http"
+	cfg.Database = "mysql"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if cfg.DBDriver != "database/sql" || cfg.HTTPFramework != "fiber" {
+		t.Errorf("defaults = %q/%q, want database/sql/fiber", cfg.DBDriver, cfg.HTTPFramework)
+	}
+
+	grpc := DefaultConfig()
+	grpc.Transport = "grpc"
+	if err := grpc.Validate(); err != nil {
+		t.Fatalf("Validate grpc: %v", err)
+	}
+	if grpc.HTTPFramework != "" {
+		t.Errorf("grpc kept http-framework %q", grpc.HTTPFramework)
 	}
 }
 

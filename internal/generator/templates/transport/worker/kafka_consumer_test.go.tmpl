@@ -70,8 +70,8 @@ func TestKafkaSettle(t *testing.T) {
 			}
 			c := &kafkaConsumer{producer: producer, log: observability.Nop()}
 			h := &kafkaSessionHandler{
-				dispatch:   func(context.Context, Message) error { return tc.dispatchErr },
-				deadLetter: c.deadLetter,
+				dispatch: func(context.Context, Message) error { return tc.dispatchErr },
+				park:     c.park,
 			}
 			sess := &fakeSession{ctx: t.Context()}
 			reqID := &sarama.RecordHeader{Key: []byte("x-request-id"), Value: []byte("r1")}
@@ -79,9 +79,7 @@ func TestKafkaSettle(t *testing.T) {
 				Topic: "user.created", Partition: 2, Offset: 7, Key: []byte("1"), Value: []byte(`{}`),
 				Headers: []*sarama.RecordHeader{reqID},
 			}
-			if err := h.settle(sess, m); err != nil {
-				t.Fatalf("settle: %v", err)
-			}
+			h.settle(sess, m)
 			if marked := len(sess.marked) == 1; marked != tc.wantMarked {
 				t.Errorf("marked = %v, want %v", marked, tc.wantMarked)
 			}
@@ -92,20 +90,43 @@ func TestKafkaSettle(t *testing.T) {
 	}
 }
 
-func TestKafkaSettleKeepsMessageWhenDeadLetterFails(t *testing.T) {
+// TestKafkaParkRetriesDeadLetter: a failed dead-letter write is retried
+// inside the claim, so the session (and every other partition) keeps going
+// and the message is marked once the copy lands.
+func TestKafkaParkRetriesDeadLetter(t *testing.T) {
+	producer := mocks.NewSyncProducer(t, nil)
+	producer.ExpectSendMessageAndFail(errBroker)
+	producer.ExpectSendMessageAndSucceed()
+	c := &kafkaConsumer{producer: producer, log: observability.Nop()}
+	h := &kafkaSessionHandler{
+		dispatch: func(context.Context, Message) error { return ErrParked },
+		park:     c.park,
+	}
+	sess := &fakeSession{ctx: t.Context()}
+	h.settle(sess, &sarama.ConsumerMessage{Topic: "user.created", Value: []byte(`{}`)})
+	if len(sess.marked) != 1 {
+		t.Fatal("message not marked after the dead-letter write succeeded on retry")
+	}
+	if err := producer.Close(); err != nil {
+		t.Errorf("dead-letter expectations: %v", err)
+	}
+}
+
+// TestKafkaParkStopsWithSession: when the session ends while the dead-letter
+// topic is unwritable, the message stays unmarked for the next session.
+func TestKafkaParkStopsWithSession(t *testing.T) {
 	producer := mocks.NewSyncProducer(t, nil)
 	producer.ExpectSendMessageAndFail(errBroker)
 	c := &kafkaConsumer{producer: producer, log: observability.Nop()}
 	h := &kafkaSessionHandler{
-		dispatch:   func(context.Context, Message) error { return ErrParked },
-		deadLetter: c.deadLetter,
+		dispatch: func(context.Context, Message) error { return ErrParked },
+		park:     c.park,
 	}
-	sess := &fakeSession{ctx: t.Context()}
-	err := h.settle(sess, &sarama.ConsumerMessage{Topic: "user.created", Value: []byte(`{}`)})
-	if !errors.Is(err, errBroker) {
-		t.Fatalf("settle error = %v, want the producer error", err)
-	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	sess := &fakeSession{ctx: ctx}
+	h.settle(sess, &sarama.ConsumerMessage{Topic: "user.created", Value: []byte(`{}`)})
 	if len(sess.marked) != 0 {
-		t.Error("message was marked although the dead-letter write failed")
+		t.Error("message was marked although the dead-letter write never succeeded")
 	}
 }

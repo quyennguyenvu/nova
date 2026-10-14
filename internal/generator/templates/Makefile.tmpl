@@ -13,20 +13,20 @@ setup: ## Set up git hooks for local development
 
 # Testing
 .PHONY: test test-coverage
-test:
+test: ## Run tests with the race detector and coverage
 	go test -v -race -cover ./...
 
-test-coverage:
+test-coverage: ## Write coverage.out and coverage.html
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 
 # Linting
 .PHONY: lint
-lint:
+lint: ## Run golangci-lint{{if eq .QueryGen "sqlc"}}, sqlfluff{{end}}{{if .HasGRPC}}, buf lint{{end}}
 	GOGC=50 golangci-lint run{{if eq .QueryGen "sqlc"}} && sqlfluff lint --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}{{if .HasGRPC}} && buf lint{{end}}
 
 .PHONY: fmt
-fmt:
+fmt: ## Format Go{{if eq .QueryGen "sqlc"}}, SQL{{end}}{{if .HasGRPC}} and protos{{end}}
 	golangci-lint fmt{{if eq .QueryGen "sqlc"}} && sqlfluff fix --config .sqlfluff --dialect {{.Database}} ./sqlc/{{end}}{{if .HasGRPC}} && buf format -w{{end}}
 
 .PHONY: vet
@@ -36,42 +36,46 @@ vet: ## Run go vet
 {{- if .HasDatabase}}
 {{- $migrationsDir := "migrations" }}{{- if eq .QueryGen "sqlc"}}{{- $migrationsDir = "sqlc/migrations" }}{{- end}}
 # Database
+# The migrate URL comes from the environment, else from .env (the file the
+# binary reads too), so `cp .env.example .env && make migrate-up` works.
+migrate_url = $(or $(MIGRATE_DATABASE_URL),$(shell sed -n 's/^MIGRATE_DATABASE_URL=//p' .env 2>/dev/null | tr -d '"'))
+unexport migrate_url
+
 .PHONY: migrate-create migrate-up migrate-down
-migrate-create:
+migrate-create: ## New migration pair: make migrate-create name=add_orders
 	migrate create -ext sql -dir {{$migrationsDir}} $(name)
 
-migrate-up:
-	migrate -path {{$migrationsDir}} -database '${MIGRATE_DATABASE_URL}' up
+migrate-up: ## Apply every pending migration
+	migrate -path {{$migrationsDir}} -database '$(migrate_url)' up
 
-# Roll back n migrations (default 1); `make migrate-down n=3`.
 n ?= 1
-migrate-down:
-	migrate -path {{$migrationsDir}} -database '${MIGRATE_DATABASE_URL}' down $(n)
+migrate-down: ## Roll back n migrations (default 1): make migrate-down n=3
+	migrate -path {{$migrationsDir}} -database '$(migrate_url)' down $(n)
 {{- end}}
 
 # Code generation
 {{- if .UseWire}}
 .PHONY: wire-gen
-wire-gen:
-	rm -f $(PWD)/internal/infrastructure/di/wire_gen.go; go tool wire ./internal/infrastructure/di
+wire-gen: ## Regenerate wire_gen.go
+	rm -f $(CURDIR)/internal/infrastructure/di/wire_gen.go; go tool wire ./internal/infrastructure/di
 {{- end}}
 
 {{- if eq .QueryGen "sqlc"}}
 .PHONY: sqlc-gen
-sqlc-gen:
-	rm -rf $(PWD)/internal/adapter/repository/{{.Database}}/dbgen; cd sqlc && sqlc generate
+sqlc-gen: ## Regenerate the sqlc dbgen package
+	rm -rf $(CURDIR)/internal/adapter/repository/{{.Database}}/dbgen; cd sqlc && sqlc generate
 {{- end}}
 
 {{- if .HasGRPC}}
 # buf drives version-pinned `go run` plugins (buf.gen.yaml); stale output is
 # removed first so a renamed message cannot linger as a compiling leftover.
 .PHONY: proto-gen
-proto-gen:
-	rm -rf $(PWD)/api/gen; buf generate
+proto-gen: ## Regenerate api/gen from the protos
+	rm -rf $(CURDIR)/api/gen; buf generate
 {{- end}}
 
 .PHONY: tidy
-tidy:
+tidy: ## Run go mod tidy
 	go mod tidy
 
 {{- if or (eq .QueryGen "sqlc") .HasGRPC}}
@@ -79,19 +83,19 @@ tidy:
 # the imports{{if .UseWire}}, and wire needs a tidied module to type-check the injector{{end}}.
 {{- end}}
 .PHONY: gen
-gen:{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}}{{if .HasGRPC}} proto-gen{{end}} tidy{{if .UseWire}} wire-gen{{end}}
+gen:{{if eq .QueryGen "sqlc"}} sqlc-gen{{end}}{{if .HasGRPC}} proto-gen{{end}} tidy{{if .UseWire}} wire-gen{{end}} ## Run every code generator in the order that works
 
 {{- if .IncludeDocker}}
 # Docker
 .PHONY: docker-build docker-up docker-down
-docker-build:
+docker-build: ## Build the app image ({{.ProjectName}}:local)
 	docker build -t {{.ProjectName}}:local .
 
 # Compose V2 — `deploy.resources.limits` in docker-compose.yaml is ignored by
 # the legacy docker-compose binary outside swarm.
-docker-up:
+docker-up: ## Build and start the whole stack, app included
 	docker compose up -d --build
 
-docker-down:
+docker-down: ## Stop the stack
 	docker compose down
 {{- end}}

@@ -82,7 +82,7 @@ func Load() (*Config, error) {
 }
 ```
 
-Precedence, lowest to highest: **`base.yaml` → `<APP_ENV>.yaml` → `./.env` → environment variables**. `loadDotEnv` reads `./.env` with `godotenv.Load`, which never overrides a variable that is already set and treats a missing file as fine — so `cp .env.example .env && go run main.go api` works on the host, while a container keeps injecting its environment and ships no `.env`.
+Precedence, lowest to highest: **`base.yaml` → `<APP_ENV>.yaml` → `./.env` → environment variables**. `loadDotEnv` reads `./.env` with `godotenv.Read` and sets only the keys that are not already in the environment and have a value, treating a missing file as fine — so `cp .env.example .env && go run main.go api` works on the host, while a container keeps injecting its environment and ships no `.env`. An empty `KEY=` line means "keep the YAML default": cleanenv would otherwise apply the empty string and, for a list such as `CORS_ALLOW_ORIGINS`, erase the development origins. After the environment is applied, `normalizeLists` trims every list entry and drops empty ones, because cleanenv splits on `,` without trimming and `"a, b"` would otherwise reach the router as `" b"`.
 
 Four consequences worth understanding before you change this:
 
@@ -194,7 +194,7 @@ saramaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
 
 The factory hands the group to `transport/worker.kafkaConsumer`, which owns `Consume()`/`Close()` — the factory does no consuming, which is what keeps it infrastructure.
 
-`NewRabbitMQConnection` dials and returns the cleanup that closes the connection (and with it every channel); `NewRabbitMQChannel` opens the worker's consuming channel with its own cleanup. `RabbitMQConfig` carries `exchange`, shared by the publisher and the worker so what one publishes the other can bind, plus `queue` and `prefetch`, read only in worker mode. Kafka topic names are not configuration: they are wire contracts owned by the handlers and the publisher. The `worker` section (`handler_timeout`, `max_attempts`, `retry_backoff`) is projected onto `transport/worker.Policy` by `provideWorkerPolicy` ([07](07-transport-layer.md#one-policy-three-outcomes)).
+`NewRabbitMQConnection` dials and returns the cleanup that closes the connection (and with it every channel); `NewRabbitMQChannel` opens the worker's consuming channel with its own cleanup. `RabbitMQConfig` carries `exchange`, shared by the publisher and the worker so what one publishes the other can bind (the default, `events`, is the same in every nova project, so a publisher and a worker generated separately meet without edits), plus `queue` and `prefetch`, read only in worker mode. Kafka topic names are not configuration: they are wire contracts owned by the handlers and the publisher. The `worker` section (`handler_timeout`, `max_attempts`, `retry_backoff`) is projected onto `transport/worker.Policy` by `provideWorkerPolicy` ([07](07-transport-layer.md#one-policy-three-outcomes)).
 
 ## server/ — lifecycle only
 

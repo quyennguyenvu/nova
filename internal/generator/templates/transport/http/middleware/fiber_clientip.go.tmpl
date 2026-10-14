@@ -1,0 +1,66 @@
+package middleware
+
+import (
+	"net"
+	"strings"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+type clientIPKey struct{}
+
+// ClientIP resolves the client address once per request and stores it for
+// RemoteIP, so the access log and the login limiter read one consistent
+// value. X-Forwarded-For is honoured only when the TCP peer is one of the
+// trusted proxies; the client is then the right-most entry that is not
+// itself a trusted proxy. With no trusted proxies the header is ignored, so
+// a client cannot spoof its address. (fiber's own c.IP() would return the
+// header verbatim, left-most entry included, once a proxy is trusted.)
+func ClientIP(trusted []*net.IPNet) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		ip := clientIP(c.Context().RemoteIP().String(), c.Get(fiber.HeaderXForwardedFor), trusted)
+		// strings.Clone: c.Get aliases fasthttp's request buffer, which is
+		// reused after the request; the limiter keeps this value as a map key.
+		c.Locals(clientIPKey{}, strings.Clone(ip))
+		return c.Next()
+	}
+}
+
+// RemoteIP returns the address ClientIP resolved, or the TCP peer when the
+// middleware did not run.
+func RemoteIP(c *fiber.Ctx) string {
+	if ip, ok := c.Locals(clientIPKey{}).(string); ok {
+		return ip
+	}
+	return c.Context().RemoteIP().String()
+}
+
+func clientIP(peer, xff string, trusted []*net.IPNet) string {
+	if len(trusted) == 0 || !inNets(peer, trusted) || xff == "" {
+		return peer
+	}
+	hops := strings.Split(xff, ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		ip := strings.TrimSpace(hops[i])
+		if net.ParseIP(ip) == nil {
+			return peer // malformed header: fall back to the peer
+		}
+		if i == 0 || !inNets(ip, trusted) {
+			return ip
+		}
+	}
+	return peer
+}
+
+func inNets(ip string, nets []*net.IPNet) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}

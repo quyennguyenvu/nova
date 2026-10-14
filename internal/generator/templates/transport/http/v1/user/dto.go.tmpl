@@ -33,11 +33,10 @@ type PublicListQuery struct {
 	Limit  int    `query:"limit"  form:"limit"`
 }
 
-// PublicUserResponse is the public projection of a user — email + name only.
-// The public list is unauthenticated, so it exposes nothing else.
+// PublicUserResponse is the public projection of a user — the name only.
+// The public list is unauthenticated, so it exposes no email or id.
 type PublicUserResponse struct {
-	Email string `json:"email"`
-	Name  string `json:"name"`
+	Name string `json:"name"`
 }
 
 // LoginRequest is the credential payload for POST /api/v1/login.

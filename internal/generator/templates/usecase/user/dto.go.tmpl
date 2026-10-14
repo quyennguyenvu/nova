@@ -55,12 +55,11 @@ type PublicListOutput struct {
 	HasMore    bool
 }
 
-// PublicOutput is the public projection of a user — email + name only. The
-// public list deliberately omits id/timestamps so an unauthenticated caller
-// learns nothing beyond the directory fields.
+// PublicOutput is the public projection of a user — the display name only.
+// The public list is unauthenticated, so it omits the email (an anonymous
+// caller could otherwise harvest every address) as well as id/timestamps.
 type PublicOutput struct {
-	Email string
-	Name  string
+	Name string
 }
 
 // Output is the use-case's return shape — the transport layer projects it

@@ -34,11 +34,11 @@ func ToUserListMeta(out *usersvc.ListOutput) httputil.PageMeta {
 }
 
 // ToPublicUserListResponse projects the items of a public list into the
-// email+name wire shape — the envelope's `data` payload.
+// name-only wire shape — the envelope's `data` payload.
 func ToPublicUserListResponse(out *usersvc.PublicListOutput) []*PublicUserResponse {
 	responses := make([]*PublicUserResponse, len(out.Items))
 	for i, item := range out.Items {
-		responses[i] = &PublicUserResponse{Email: item.Email, Name: item.Name}
+		responses[i] = &PublicUserResponse{Name: item.Name}
 	}
 	return responses
 }

@@ -67,7 +67,12 @@ http:
 grpc:
   port: "9090"
   shutdown_timeout: 10s
+  request_timeout: 10s # deadline on every call; a sooner client deadline wins
   reflection: true # service discovery for grpcurl; production.yaml turns it off
+  login_rate_limit:
+    # Login and CreateUser, per peer: 5 per minute, burst 5.
+    rps: 0.0833
+    burst: 5
 {{- end}}
 
 {{- if .HasCron}}
@@ -152,8 +157,10 @@ kafka:
 rabbitmq:
   url: "amqp://guest:guest@localhost:5672/" # override via RABBITMQ_URL in production
   # The publisher and the worker share this topic exchange: a message is
-  # routed by its topic name to the worker's queue.
-  exchange: "{{.ProjectName}}.events"
+  # routed by its topic name to the worker's queue. The default is the same
+  # in every nova project, so a publisher and a worker generated separately
+  # meet here; change it on both sides together.
+  exchange: "events"
   # Worker mode only: one durable queue bound to every handled topic so
   # replicas share it; "<queue>.dlq" collects parked messages.
   queue: "{{.ProjectName}}.worker"

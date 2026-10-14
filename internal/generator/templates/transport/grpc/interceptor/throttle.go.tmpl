@@ -1,0 +1,114 @@
+package interceptor
+
+import (
+	"context"
+	"math"
+	"net"
+	"strconv"
+	"sync"
+	"time"
+
+	"golang.org/x/time/rate"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/transport/grpc/rpcstatus"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+const (
+	visitorTTL = 10 * time.Minute
+	sweepEvery = time.Minute
+)
+
+// Throttle applies a per-peer token bucket to methods (the credential RPCs),
+// the gRPC counterpart of the HTTP LoginRateLimit. It keys on the TCP peer:
+// gRPC has no X-Forwarded-For convention to trust, so behind an L7 proxy all
+// callers share its bucket and global limits belong at that proxy. A call
+// past the limit is ResourceExhausted with a retry-after header.
+func Throttle(cfg config.LoginRateLimitConfig, methods map[string]struct{}) grpc.UnaryServerInterceptor {
+	l := newPeerLimiter(cfg)
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
+		if _, ok := methods[info.FullMethod]; !ok {
+			return next(ctx, req)
+		}
+		if ok, wait := l.allow(peerHost(ctx)); !ok {
+			secs := max(1, int(math.Ceil(wait.Seconds())))
+			_ = grpc.SetHeader(ctx, metadata.Pairs("retry-after", strconv.Itoa(secs)))
+			limited := errors.L(locale.TooManyRequests).WithCause(errors.New("login rate limit exceeded"))
+			return nil, rpcstatus.FromError(ctx, limited)
+		}
+		return next(ctx, req)
+	}
+}
+
+func peerHost(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(p.Addr.String()); err == nil {
+		return host
+	}
+	return p.Addr.String()
+}
+
+// peerLimiter holds one token bucket per peer. Buckets idle for longer than
+// visitorTTL are dropped by the first call after each sweepEvery interval,
+// so memory is bounded by the peers seen recently. It is per-process: N
+// replicas allow N× the limit.
+type peerLimiter struct {
+	mu        sync.Mutex
+	visitors  map[string]*visitor
+	rps       rate.Limit
+	burst     int
+	lastSweep time.Time
+}
+
+type visitor struct {
+	lim      *rate.Limiter
+	lastSeen time.Time
+}
+
+func newPeerLimiter(cfg config.LoginRateLimitConfig) *peerLimiter {
+	rps := rate.Limit(cfg.RPS)
+	if rps <= 0 {
+		rps = rate.Limit(5.0 / 60.0) // 5 per minute
+	}
+	burst := cfg.Burst
+	if burst <= 0 {
+		burst = 5
+	}
+	return &peerLimiter{visitors: make(map[string]*visitor), rps: rps, burst: burst, lastSweep: time.Now()}
+}
+
+// allow reports whether key may proceed now and, when it may not, how long
+// until its bucket has a token again.
+func (l *peerLimiter) allow(key string) (bool, time.Duration) {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if now.Sub(l.lastSweep) >= sweepEvery {
+		for k, v := range l.visitors {
+			if now.Sub(v.lastSeen) > visitorTTL {
+				delete(l.visitors, k)
+			}
+		}
+		l.lastSweep = now
+	}
+	v, ok := l.visitors[key]
+	if !ok {
+		v = &visitor{lim: rate.NewLimiter(l.rps, l.burst)}
+		l.visitors[key] = v
+	}
+	v.lastSeen = now
+	res := v.lim.ReserveN(now, 1)
+	if delay := res.DelayFrom(now); delay > 0 {
+		res.CancelAt(now)
+		return false, delay
+	}
+	return true, 0
+}

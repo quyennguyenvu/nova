@@ -1,0 +1,47 @@
+package config
+
+import (
+	"os"
+	"slices"
+	"testing"
+)
+
+// TestLoadDotEnv pins how ./.env combines with the YAML: an empty value keeps
+// the YAML default instead of erasing it, a real environment variable wins
+// over the file, and list entries are trimmed.
+func TestLoadDotEnv(t *testing.T) {
+	t.Chdir(t.TempDir())
+	env := "APP_ENV=development\n" +
+		"CORS_ALLOW_ORIGINS=\n" +
+		"SERVER_TRUSTED_PROXIES=\"10.0.0.1, 10.0.0.2\"\n" +
+		"LOG_LEVEL=error\n"
+{{- if .HasDatabase}}
+	env += "DB_USER=app\n"
+{{- end}}
+	if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Variables loadDotEnv sets stay in the process; register them for
+	// restore so other tests see a clean environment.
+	for _, k := range []string{"APP_ENV", "CORS_ALLOW_ORIGINS", "SERVER_TRUSTED_PROXIES"{{if .HasDatabase}}, "DB_USER"{{end}}} {
+		t.Setenv(k, "")
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("LOG_LEVEL", "warn")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !slices.Contains(cfg.HTTP.CORS.AllowOrigins, "http://localhost:5173") {
+		t.Errorf("empty CORS_ALLOW_ORIGINS erased the development origins: %v", cfg.HTTP.CORS.AllowOrigins)
+	}
+	if got := cfg.HTTP.TrustedProxies; !slices.Equal(got, []string{"10.0.0.1", "10.0.0.2"}) {
+		t.Errorf("trusted proxies = %q, want trimmed entries", got)
+	}
+	if cfg.Log.Level != "warn" {
+		t.Errorf("log level = %q, want the real environment's warn over .env", cfg.Log.Level)
+	}
+}

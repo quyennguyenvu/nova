@@ -257,8 +257,30 @@ func TestGenerateHandlerUnsupportedFramework(t *testing.T) {
 	}
 }
 
+// kafkaManifest is the default layout for a project with a Kafka broker;
+// `nova add worker` needs one.
+func kafkaManifest() *manifest.Manifest {
+	m := manifest.Default()
+	m.Stack.MessageQueue = "kafka"
+	return m
+}
+
+// TestGenerateWorkerNeedsBroker: a project without a broker has no
+// infrastructure/pubsub to wire a consumer to, so add worker refuses
+// instead of writing DI that references a missing package.
+func TestGenerateWorkerNeedsBroker(t *testing.T) {
+	gen, dir := newComponentGen(t, manifest.Default()) // message_queue: none
+	err := gen.GenerateWorker("Order")
+	if err == nil || !strings.Contains(err.Error(), "needs a message broker") {
+		t.Fatalf("GenerateWorker error = %v, want a missing-broker refusal", err)
+	}
+	if fileExists(filepath.Join(dir, "internal/transport/worker/worker.go")) {
+		t.Error("files were written before the refusal")
+	}
+}
+
 func TestGenerateWorkerFullTransport(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default()) // MessageQueue "none" → kafka consumer
+	gen, dir := newComponentGen(t, kafkaManifest())
 	if err := gen.GenerateWorker("Order"); err != nil {
 		t.Fatalf("GenerateWorker: %v", err)
 	}
@@ -282,7 +304,7 @@ func TestGenerateWorkerFullTransport(t *testing.T) {
 }
 
 func TestGenerateWorkerRegistersRootCommand(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default())
+	gen, dir := newComponentGen(t, kafkaManifest())
 	// A minimal existing root.go (as an HTTP project would have).
 	rootSrc := "package cmd\n\nfunc Execute() {\n\troot.AddCommand(\n\t\tapiCommand(),\n\t)\n}\n"
 	if err := os.MkdirAll(filepath.Join(dir, "cmd"), 0o750); err != nil {
@@ -319,7 +341,7 @@ func TestGenerateWorkerRabbitMQConsumer(t *testing.T) {
 }
 
 func TestGenerateWorkerSkipsExistingTransport(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default())
+	gen, dir := newComponentGen(t, kafkaManifest())
 	if err := gen.GenerateWorker("Order"); err != nil {
 		t.Fatalf("first GenerateWorker: %v", err)
 	}
@@ -352,7 +374,7 @@ func writeDIPkg(t *testing.T, dir string, files map[string]string) {
 }
 
 func TestGenerateWorkerScaffoldsWireDI(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default()) // DI defaults to wire
+	gen, dir := newComponentGen(t, kafkaManifest()) // DI defaults to wire
 	// HTTP-only di package (nova-new layout): the worker DI symbols aren't present
 	// yet, so the scaffold must merge WorkerApp into app.go, workerInfraSet +
 	// InitializeWorker into wire.go, and provideWorkerHandlers into provider.go.
@@ -401,7 +423,7 @@ func TestGenerateWorkerScaffoldsWireDI(t *testing.T) {
 }
 
 func TestGenerateWorkerScaffoldsFxDI(t *testing.T) {
-	m := manifest.Default()
+	m := kafkaManifest()
 	m.Stack.DI = "fx"
 	gen, dir := newComponentGen(t, m)
 	// fx layout: app.go holds the App bundles, fx.go the Initialize* injectors.
@@ -438,7 +460,7 @@ func TestGenerateWorkerScaffoldsFxDI(t *testing.T) {
 // scaffold degrades to standalone worker_app.go / worker_wire.go /
 // worker_provider.go files.
 func TestGenerateWorkerDIFallsBackToStandalone(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default())
+	gen, dir := newComponentGen(t, kafkaManifest())
 	// di package exists but holds none of the canonical files.
 	writeDIPkg(t, dir, map[string]string{
 		"di.go": "package di\n",
@@ -455,7 +477,7 @@ func TestGenerateWorkerDIFallsBackToStandalone(t *testing.T) {
 }
 
 func TestGenerateWorkerSkipsExistingWorkerDI(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default())
+	gen, dir := newComponentGen(t, kafkaManifest())
 	// Project already generated WITH the worker — WorkerApp, InitializeWorker,
 	// and provideWorkerHandlers all exist. Scaffolding must not duplicate any.
 	writeDIPkg(t, dir, map[string]string{
@@ -577,7 +599,7 @@ func assertFileContains(t *testing.T, path, want string) {
 // the user's to edit after generation: a re-run must stop, and --force must
 // be the only way through.
 func TestGenerateEntityRefusesOverwriteWithoutForce(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default())
+	gen, dir := newComponentGen(t, kafkaManifest())
 	if err := gen.GenerateEntity("Order"); err != nil {
 		t.Fatalf("GenerateEntity: %v", err)
 	}
@@ -614,7 +636,7 @@ func TestOutPathRefusesEscape(t *testing.T) {
 // repository with --force refreshes impl/mapper/query but does not add a
 // second create-table migration.
 func TestGenerateRepositorySkipsExistingMigration(t *testing.T) {
-	gen, dir := newComponentGen(t, manifest.Default())
+	gen, dir := newComponentGen(t, kafkaManifest())
 	if err := gen.GenerateEntity("Order"); err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +656,7 @@ func TestGenerateRepositorySkipsExistingMigration(t *testing.T) {
 // TestGenerateRepositoryRejectsForeignEngine pins that --type cannot silently
 // drop a mysql repository (and mysql DDL) into a postgres project.
 func TestGenerateRepositoryRejectsForeignEngine(t *testing.T) {
-	gen, _ := newComponentGen(t, manifest.Default()) // stack: postgres
+	gen, _ := newComponentGen(t, kafkaManifest()) // stack: postgres
 	if err := gen.GenerateEntity("Order"); err != nil {
 		t.Fatal(err)
 	}

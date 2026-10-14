@@ -30,7 +30,7 @@ type RabbitMQOptions struct {
 // durable queue bound to every handled topic,
 // so replicas share it and the broker round-robins delivery. Parked messages
 // are nacked without requeue and the queue's x-dead-letter-exchange routes
-// them to <exchange>.dlx, whose only queue is <queue>.dlq.
+// them to <queue>.dlx, whose only queue is <queue>.dlq.
 type rabbitmqConsumer struct {
 	ch       *amqp.Channel
 	exchange string
@@ -91,7 +91,7 @@ func (c *rabbitmqConsumer) Subscribe(ctx context.Context, topics []string, dispa
 // publisher has not run yet: the shared exchange, the dead-letter exchange
 // and queue, and the work queue that dead-letters into them.
 func (c *rabbitmqConsumer) declare(topics []string) error {
-	dlx := c.exchange + deadLetterExchangeSuffix
+	dlx := c.queue + deadLetterExchangeSuffix
 	dlq := c.queue + deadLetterQueueSuffix
 	if err := c.ch.ExchangeDeclare(c.exchange, amqp.ExchangeTopic, true, false, false, false, nil); err != nil {
 		return fmt.Errorf("rabbitmq: declare exchange %q: %w", c.exchange, err)
@@ -105,9 +105,10 @@ func (c *rabbitmqConsumer) declare(topics []string) error {
 	if err := c.ch.QueueBind(dlq, "", dlx, false, nil); err != nil {
 		return fmt.Errorf("rabbitmq: bind %q→%q: %w", dlq, dlx, err)
 	}
-	// Queue arguments are fixed at creation: a queue declared before this
-	// argument existed must be deleted once so the dead-letter exchange
-	// takes effect.
+	// Queue arguments are fixed at creation, so the dead-letter exchange is
+	// named after the queue, not the work exchange: pointing the worker at
+	// another exchange never changes them. A queue declared by an older
+	// build with different arguments must be deleted once.
 	args := amqp.Table{"x-dead-letter-exchange": dlx}
 	if _, err := c.ch.QueueDeclare(c.queue, true, false, false, false, args); err != nil {
 		return fmt.Errorf("rabbitmq: declare queue %q: %w", c.queue, err)

@@ -127,7 +127,7 @@ The second read shape, for unauthenticated callers. It exists separately because
 - Reads `limit+1` rows to learn `HasMore` without a second query, then trims the extra.
 - Encodes the last kept id as the next cursor: `base64.RawURLEncoding(strconv.FormatInt(id))`. Opaque, not encrypted — clients can't hand-craft offsets, but it is not a secret.
 - Keyset (`id > cursor`) stays stable under concurrent inserts and avoids deep-`OFFSET` scans.
-- Projects to `PublicOutput` — **email + name only**. No id, no timestamps: an anonymous caller learns nothing beyond the directory fields.
+- Projects to `PublicOutput` — **the name only**. No email, no id, no timestamps: an anonymous caller cannot harvest addresses or learn anything beyond the display name.
 - A malformed cursor is `errors.L(locale.InvalidRequest)` (400), not a 500 — the client sent back a token we issued, so a bad one is a bad request.
 
 ### Login — uniform failure, uniform timing

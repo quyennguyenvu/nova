@@ -1,0 +1,184 @@
+package http_test
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
+
+	"{{.ModuleName}}/internal/infrastructure/config"
+	"{{.ModuleName}}/internal/infrastructure/logger"
+	transporthttp "{{.ModuleName}}/internal/transport/http"
+	"{{.ModuleName}}/internal/transport/http/httpwriter"
+	"{{.ModuleName}}/internal/transport/http/middleware"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/locale"
+)
+
+// peerIP is the TCP peer httptest.NewRequest reports (192.0.2.1:1234).
+const peerIP = "192.0.2.1"
+
+// probe is the feature these tests mount: an always-OK route, a throttled
+// credential route, a body-binding route and a route that waits out its
+// request deadline.
+type probe struct{}
+
+func (probe) Prefix() string { return "/t" }
+
+func (probe) Register(r chi.Router) {
+	limit := config.LoginRateLimitConfig{RPS: 0.001, Burst: 2}
+	r.Get("/ok", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	r.With(middleware.LoginRateLimit(limit)).Post("/login", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	r.Post("/bind", func(w http.ResponseWriter, req *http.Request) {
+		if _, appErr := httpwriter.Bind[struct{ Name string }](req, validator.New()); appErr != nil {
+			httpwriter.WriteError(w, req, appErr)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	r.Get("/slow", func(w http.ResponseWriter, req *http.Request) {
+		<-req.Context().Done()
+		httpwriter.WriteError(w, req, errors.ToAppError(req.Context().Err()))
+	})
+}
+
+type harness struct {
+	router http.Handler
+	log    *bytes.Buffer
+}
+
+// newHarness builds the real router (middleware order, error handling,
+// client-IP resolution) around probe, logging to a buffer.
+func newHarness(t *testing.T, trusted []string, timeout time.Duration) *harness {
+	t.Helper()
+	locale.NewMapping()
+	cfg := &config.Config{AppName: "test", HTTP: config.HTTPConfig{
+		RequestTimeout: timeout,
+		BodyLimit:      1024,
+		TrustedProxies: trusted,
+	}}
+	var buf bytes.Buffer
+	registrars := []transporthttp.Registrar{probe{}}
+	router := transporthttp.NewRouter(cfg, logger.NewWithWriter(cfg, &buf), nil, registrars)
+	return &harness{router: router, log: &buf}
+}
+
+func (h *harness) do(t *testing.T, req *http.Request) *http.Response {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.router.ServeHTTP(rec, req)
+	resp := rec.Result()
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
+}
+
+// logins posts to the throttled route once per X-Forwarded-For value and
+// returns the status codes.
+func (h *harness) logins(t *testing.T, xffs ...string) []int {
+	t.Helper()
+	codes := make([]int, len(xffs))
+	for i, xff := range xffs {
+		req := httptest.NewRequest(http.MethodPost, "/t/login", nil)
+		req.Header.Set("X-Forwarded-For", xff)
+		codes[i] = h.do(t, req).StatusCode
+	}
+	return codes
+}
+
+// accessLine returns the last JSON line the router logged.
+func (h *harness) accessLine(t *testing.T) map[string]any {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(h.log.String()), "\n")
+	var line map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &line); err != nil {
+		t.Fatalf("access line %q: %v", lines[len(lines)-1], err)
+	}
+	return line
+}
+
+func TestUnknownRouteAndMethodAnswerInTheEnvelope(t *testing.T) {
+	h := newHarness(t, nil, 5*time.Second)
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, "/nope", http.StatusNotFound},
+		{http.MethodPost, "/t/ok", http.StatusMethodNotAllowed},
+	} {
+		resp := h.do(t, httptest.NewRequest(tc.method, tc.path, nil))
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, resp.StatusCode, tc.want)
+			continue
+		}
+		var body struct {
+			Success   bool   `json:"success"`
+			RequestID string `json:"requestId"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Success || body.RequestID == "" {
+			t.Errorf("%s %s envelope = %+v (decode err %v)", tc.method, tc.path, body, err)
+		}
+	}
+}
+
+func TestOversizedBodyIs413(t *testing.T) {
+	h := newHarness(t, nil, 5*time.Second)
+	body := strings.NewReader(`{"name":"` + strings.Repeat("x", 4096) + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/t/bind", body)
+	req.Header.Set("Content-Type", "application/json")
+	if code := h.do(t, req).StatusCode; code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body = %d, want 413", code)
+	}
+}
+
+func TestRequestDeadlineIs504(t *testing.T) {
+	h := newHarness(t, nil, 50*time.Millisecond)
+	code := h.do(t, httptest.NewRequest(http.MethodGet, "/t/slow", nil)).StatusCode
+	if code != http.StatusGatewayTimeout {
+		t.Errorf("handler past its deadline = %d, want 504", code)
+	}
+}
+
+// Without trusted proxies X-Forwarded-For is ignored: rotating it does not
+// buy a fresh login bucket.
+func TestForwardedForIgnoredWithoutTrustedProxies(t *testing.T) {
+	h := newHarness(t, nil, 5*time.Second)
+	codes := h.logins(t, "198.51.100.1", "198.51.100.2", "198.51.100.3")
+	if codes[2] != http.StatusTooManyRequests {
+		t.Errorf("logins with rotated X-Forwarded-For = %v, want the third throttled", codes)
+	}
+}
+
+// With the peer trusted, the client is the right-most untrusted hop: a forged
+// left-most entry shares the real client's bucket, another client keeps its own.
+func TestForwardedForResolvedPastTrustedProxy(t *testing.T) {
+	h := newHarness(t, []string{peerIP}, 5*time.Second)
+	got := h.logins(t, "203.0.113.7", "203.0.113.7", "198.51.100.9, 203.0.113.7", "203.0.113.8")
+	want := []int{http.StatusNoContent, http.StatusNoContent, http.StatusTooManyRequests, http.StatusNoContent}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("logins = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestAccessLine(t *testing.T) {
+	h := newHarness(t, []string{peerIP}, 5*time.Second)
+	req := httptest.NewRequest(http.MethodGet, "/t/ok", nil)
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+	h.do(t, req)
+	line := h.accessLine(t)
+	id, _ := line["request_id"].(string)
+	route, _ := line["route"].(string)
+	if line["message"] != "request" || line["status"] != float64(http.StatusOK) || id == "" || route == "" ||
+		line["client_ip"] != "203.0.113.7" {
+		t.Errorf("access line = %v", line)
+	}
+}

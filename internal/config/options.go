@@ -61,9 +61,7 @@ func (c *ProjectConfig) Validate() error {
 		errs = append(errs, fmt.Errorf("module %q is not a valid Go module path", c.ModuleName))
 	}
 	errs = append(errs, oneOf("transport", c.Transport, Transports))
-	if c.HasHTTP() {
-		errs = append(errs, oneOf("http-framework", c.HTTPFramework, HTTPFrameworks))
-	}
+	errs = append(errs, c.validateHTTPFramework())
 	errs = append(errs, oneOf("database", c.Database, Databases))
 	errs = append(errs, c.validateSQL()...)
 	errs = append(errs, oneOf("cache", c.Cache, Caches))
@@ -72,9 +70,31 @@ func (c *ProjectConfig) Validate() error {
 	if c.HasWorker() && !c.HasMessageQueue() {
 		errs = append(errs, errors.New("transport worker needs --queue kafka or rabbitmq"))
 	}
+	if c.HasWorker() && !c.HasSQL() {
+		errs = append(
+			errs,
+			errors.New("transport worker needs --database postgres or mysql (its audit trail is stored there)"),
+		)
+	}
 	errs = append(errs, oneOf("config", c.ConfigFormat, ConfigFormats))
 	errs = append(errs, oneOf("di", c.DI, DIs))
 	return errors.Join(errs...)
+}
+
+// validateHTTPFramework defaults an HTTP project to fiber and refuses a
+// framework on a transport that serves no HTTP rather than ignoring it.
+func (c *ProjectConfig) validateHTTPFramework() error {
+	switch {
+	case c.HasHTTP() && c.HTTPFramework == "":
+		c.HTTPFramework = HTTPFrameworks[0]
+		return nil
+	case c.HasHTTP():
+		return oneOf("http-framework", c.HTTPFramework, HTTPFrameworks)
+	case c.HTTPFramework != "":
+		return fmt.Errorf("http-framework %q applies only to --transport=http", c.HTTPFramework)
+	default:
+		return nil
+	}
 }
 
 // validateSQL checks the engine-dependent fields and fills their defaults.

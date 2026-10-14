@@ -40,7 +40,7 @@ services:
       ELASTICSEARCH_ADDRESSES: http://elasticsearch:9200
 {{- end}}
 {{- if eq .MessageQueue "kafka"}}
-      KAFKA_BROKERS: kafka:9092
+      KAFKA_BROKERS: kafka:29092
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
@@ -158,14 +158,17 @@ services:
 
   kafka:
     image: apache/kafka:3.9.0
-    # Single-node KRaft (no ZooKeeper). Two listeners: PLAINTEXT for in-network
-    # clients (the app) and PLAINTEXT_HOST for host tooling on localhost:29092.
+    # Single-node KRaft (no ZooKeeper). Two listeners: PLAINTEXT on kafka:29092
+    # for in-network clients (the app container) and PLAINTEXT_HOST on
+    # localhost:9092 for host runs, the address .env.example and base.yaml use.
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      # Empty hosts bind every interface; 0.0.0.0 would also be advertised for
+      # the controller listener, which Kafka 3.9 refuses at startup.
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,PLAINTEXT_HOST://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -177,11 +180,13 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_LOG_DIRS: /var/lib/kafka/data
     ports:
-      - "29092:29092"
+      - "9092:9092"
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      # Probe the in-network listener: the host one advertises the published
+      # port, so remapping it (e.g. 19092:9092) must not break the check.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 12

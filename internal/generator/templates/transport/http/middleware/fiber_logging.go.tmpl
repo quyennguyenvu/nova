@@ -102,7 +102,7 @@ func logAccess(ctx context.Context, scoped observability.Logger, c *fiber.Ctx, e
 		"route", c.Route().Path,
 		"duration_ms", time.Since(start).Milliseconds(),
 		"err", errMsg(err),
-		"client_ip", c.IP(),
+		"client_ip", RemoteIP(c),
 		"user_agent", string(c.Request().Header.UserAgent()),
 	}
 	if p := principalFromSlot(ctx); p != nil {

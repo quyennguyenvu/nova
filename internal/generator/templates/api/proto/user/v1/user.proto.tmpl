@@ -9,8 +9,8 @@ import "google/protobuf/timestamp.proto";
 option go_package = "{{.ModuleName}}/api/gen/user/v1;userv1";
 
 // UserService mirrors the HTTP user feature, one RPC per endpoint. CreateUser,
-// Login and ListPublicUsers are public; the rest need a bearer token in the
-// `authorization` metadata (UserHandler.Protected names them).
+// Login and ListPublicUsers are public (UserHandler.Public names them); every
+// other RPC needs a bearer token in the `authorization` metadata.
 service UserService {
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
   rpc Login(LoginRequest) returns (LoginResponse);
@@ -29,10 +29,10 @@ message User {
   google.protobuf.Timestamp updated_at = 5;
 }
 
-// PublicUser is the unauthenticated projection: directory fields only.
+// PublicUser is the unauthenticated projection: the display name only, so
+// the directory cannot be harvested for addresses.
 message PublicUser {
-  string email = 1;
-  string name = 2;
+  string name = 1;
 }
 
 message CreateUserRequest {

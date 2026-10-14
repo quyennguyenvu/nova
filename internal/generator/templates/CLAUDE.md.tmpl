@@ -21,7 +21,7 @@ Stack:
 {{end}}{{- if .HasGRPC}}- gRPC transport (contract in `api/proto`, stubs in `api/gen` via buf)
 {{end}}{{- if .HasWorker}}- Worker transport: consumes from {{.MessageQueue}}
 {{end}}{{- if .HasSQL}}- Database: {{.Database}} (driver: {{.DBDriver}}{{if eq .QueryGen "sqlc"}}, queries: sqlc{{end}})
-{{end}}{{- if .HasRedis}}- Cache: Redis (cache-aside over the repository)
+{{end}}{{- if .HasRedis}}- Cache: Redis client wired; the cache-aside decorator over the repository ships unwired (see `README.md`)
 {{end}}{{- if and .HasMessageQueue (not .HasWorker)}}- Message queue: {{.MessageQueue}} (publisher)
 {{end}}- Dependency injection: {{if .UseWire}}Google Wire (compile-time, `wire_gen.go`){{else}}Uber fx (runtime){{end}}
 
@@ -47,8 +47,8 @@ make migrate-down   # Roll back the last migration
 make migrate-create name=<x>  # Scaffold a new migration pair
 {{- end}}
 {{- if .IncludeDocker}}
-make docker-up      # Start infrastructure (database, cache, broker)
-make docker-down    # Stop infrastructure
+make docker-up      # Build and start the whole stack, app included
+make docker-down    # Stop the stack
 {{- end}}
 ```
 
@@ -76,12 +76,12 @@ Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers
 - **Usecase imports use the `svc` alias.** Import a usecase as `usersvc "{{.ModuleName}}/internal/usecase/user"` — never the bare `user` (it collides with the domain/transport `user` packages). The service type is `Service`, its constructor `NewService`.
 - **DI wiring (`internal/infrastructure/di`).** After adding a constructor, register it in the provider set{{if .UseWire}} and run `make gen` to regenerate `wire_gen.go`{{else}} and add it to the fx module{{end}}.{{if .HasHTTP}} A new HTTP feature also adds its `*Registrar` to `provideRegistrars`.{{end}}{{if .HasGRPC}} A new gRPC service adds its handler to `provideGRPCServices`.{{end}}{{if .HasWorker}} A new worker message handler adds itself to `provideWorkerHandlers`.{{end}}
   {{- if .HasGRPC}}
-- **Adding an RPC.** Edit `api/proto/user/v1/user.proto`, run `make gen` (buf rewrites `api/gen`), implement the method on `transport/grpc.UserHandler`, list it in `Protected()` when it needs a bearer token, and return errors through `rpcstatus.FromError` so the code and message match the HTTP classification. A new service implements `transport/grpc.Registrar` and is added to `provideGRPCServices`.
+- **Adding an RPC.** Edit `api/proto/user/v1/user.proto`, run `make gen` (buf rewrites `api/gen`), implement the method on `transport/grpc.UserHandler`, add it to `Public()` only if it must work without a bearer token (auth is deny-by-default), and return errors through `rpcstatus.FromError` so the code and message match the HTTP classification. A new service implements `transport/grpc.Registrar` and is added to `provideGRPCServices`.
   {{- end}}
   {{- if .HasHTTP}}
 - **Adding a route.** Each feature owns a `Registrar` (implements `transport/http.Registrar`: `Prefix()` + `Register`) in its own package and embeds `v1.Prefixed` to inherit the `/api/v1` prefix — don't restate the prefix per feature. See `README.md` § _Adding routes, sections, and versions_.
   {{- end}}
-- **Config.** Secrets and per-deploy endpoints live in `.env` (see `.env.example`); everything else in `internal/infrastructure/config`. The DB config is discrete typed fields, not a single connection-string blob.
+- **Config.** Secrets and per-deploy endpoints live in `.env` (see `.env.example`); everything else in `internal/infrastructure/config`.{{if .HasDatabase}} The DB config is discrete typed fields, not a single connection-string blob.{{end}}
 - **Adding a feature** = copy the `user` vertical slice: entity → domain port → usecase → adapter repo{{if .HasHTTP}} → transport handler + registrar{{else if .HasWorker}} → worker handler + DTO{{end}}, then wire it in `di`. The layout matches Nova's canonical manifest, so `nova add <entity|usecase|handler|repository> <name>` scaffolds one component if Nova is installed.
 - **Formatting & lint.** `make fmt` (goimports + golines, max line 120) before committing; lint config is strict.
 - **Commits.** Don't add a `Co-Authored-By: Claude` trailer (or any Claude/Anthropic co-author attribution) to commit messages.

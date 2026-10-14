@@ -19,6 +19,7 @@
 | 6 | Layers and domain correctness | Usecase depends on concrete JWT type, dead transaction manager, duplicate email returns 500, typed-nil `Wrap`, anemic entity; medium severity, touches shared code so it goes after the transport phases stabilize |
 | 7 | Infrastructure and deploy hygiene | `.env` never loaded on host, unknown `APP_ENV` accepted, Dockerfile gaps, MySQL infra lags Postgres, RabbitMQ never closed |
 | 8 | gRPC decision and docs honesty | Decide stub vs real transport, then the final docs sweep once behavior is settled |
+| 9 | Close-out | The [2026-10-14 review](../reviews/2026-10-14-remediation-review.md) found phases marked done with exit criteria unmet and new High defects; fix them and replace grep-only proofs with behavior tests |
 
 Phases 4 and 5 are independent of each other. Phases 2 and 3 are independent of each other but both depend on phase 1's harness.
 
@@ -169,7 +170,7 @@ Plan shape: `cleanenv.ReadConfig(".env", &cfg)` when present; `SilenceUsage: tru
 
 Exit criteria: fresh project `cp .env.example .env && go run main.go api` reaches "listening" with only the compose dependencies up; Dockerfile builds and `docker compose up` passes healthchecks (manual, documented in the plan).
 
-## Phase 8: gRPC decision and docs honesty
+## Phase 8: gRPC decision and docs honesty (done 2026-10-14, commit `8b1a33f`)
 
 Detailed plan: [2026-10-14-phase8-grpc-docs-honesty.md](2026-10-14-phase8-grpc-docs-honesty.md).
 
@@ -183,3 +184,9 @@ Findings:
 Plan shape: decide between (a) real proto + `buf.gen.yaml` + health + reflection + recovery/logging interceptors + `RunE`, or (b) label gRPC experimental in CLI help, README, and CLAUDE.md and fix `make gen`; then a single docs sweep after phases 2–7 so the docs describe final behavior, verified by a `TestDocsClaims` that greps the ten checkable claims against rendered output.
 
 Exit criteria: every doc claim listed in the review is confirmed against rendered code; markdownlint clean.
+
+## Phase 9: close-out
+
+Detailed plan: [2026-10-14-phase9-close-out.md](2026-10-14-phase9-close-out.md). Source: the [2026-10-14 remediation review](../reviews/2026-10-14-remediation-review.md), which found five phases marked done with exit criteria unmet, four new High defects and twelve Medium ones.
+
+Exit criteria: every High and Medium defect from the review is fixed with a test that failed first; each HTTP framework's rendered router test runs in the bootstrap; the README worker demo on RabbitMQ and a Kafka host boot pass by hand; `make test-all` is green; nova's CI runs `make test` and lint.
