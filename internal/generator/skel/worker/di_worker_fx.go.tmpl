@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
 
+	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/infrastructure/logger"
 	"{{.ModuleName}}/internal/transport/worker"
 )
@@ -15,28 +16,29 @@ import (
 // WorkerApp fields but provides no modules yet — add the modules the worker
 // needs (infraModule(), workerModule(), adapterModule(), usecaseModule()) to
 // fx.New so fx can construct *worker.Worker. Until then fxApp.Start reports the
-// missing dependencies. stopTimeout is shared with the other Initialize* entry
-// points in fx.go.
+// missing dependencies. The stop budget is the app's shutdown_timeout, like
+// the other Initialize* entry points in fx.go.
 func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 	var (
 		log    *logger.Logger
 		w      *worker.Worker
 		tracer trace.Tracer
+		cfg    *config.Config
 	)
 	fxApp := fx.New(
 		fx.NopLogger,
 		fx.Provide(func() context.Context { return ctx }),
 		// TODO: add infraModule(), workerModule(), adapterModule(), usecaseModule()
-		fx.Populate(&log, &w, &tracer),
+		fx.Populate(&log, &w, &tracer, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start worker app: %w", err)
 	}
 	cleanup := func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
-			log.Error("fx: stop", "err", stopErr)
+			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
 	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil

@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/riandyrn/otelchi"
 
+	"{{.ModuleName}}/api/openapi"
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
@@ -82,6 +83,10 @@ func NewRouter(
 			code = http.StatusServiceUnavailable
 		}
 		writeJSON(w, code, status)
+	})
+	router.Get("/openapi.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml")
+		_, _ = w.Write(openapi.Spec)
 	})
 
 	// chi.Router.Route panics if the same pattern is mounted twice, so group

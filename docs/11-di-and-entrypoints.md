@@ -284,9 +284,11 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
         return nil, nil, fmt.Errorf("fx: start http app: %w", err)
     }
     cleanup := func() {
-        stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+        stopCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
         defer cancel()
-        _ = fxApp.Stop(stopCtx)
+        if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
+            log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
+        }
     }
     return &HTTPApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
 }
@@ -296,11 +298,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 
 `fx_provider.go` adapts each `(instance, cleanup, error)` constructor into an fx provider with an `OnStop` hook, which is how the two engines converge on the same cleanup semantics.
 
-```go
-// stopTimeout bounds how long fx waits for every OnStop hook to finish during
-// cleanup. Each underlying cleanup also enforces its own deadline, so this is a
-// process-wide backstop, not the per-resource budget.
-```
+The stop budget is the app's `shutdown_timeout` (config, default 20s), populated alongside the logger: an operator can widen it when a dependency close is slow, and a stop that overruns it is logged with the budget, so the hooks fx skipped are visible rather than silently dropped. Each underlying cleanup still enforces its own deadline; this is the process-wide backstop, not the per-resource budget.
 
 ### Wire vs fx
 

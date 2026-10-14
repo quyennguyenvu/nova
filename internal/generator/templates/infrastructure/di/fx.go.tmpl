@@ -3,7 +3,6 @@ package di
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
@@ -44,11 +43,6 @@ import (
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 {{- end}}
 )
-
-// stopTimeout bounds how long fx waits for every OnStop hook to finish during
-// cleanup. Each underlying cleanup also enforces its own deadline, so this is a
-// process-wide backstop, not the per-resource budget.
-const stopTimeout = 15 * time.Second
 
 // This file is the Uber fx counterpart to Wire's wire.go. It produces the same
 // Initialize* entry points with identical (*App, func(), error) signatures, so
@@ -208,6 +202,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 		log    *logger.Logger
 		srv    *server.HTTPServer
 		tracer trace.Tracer
+		cfg    *config.Config
 	)
 	fxApp := fx.New(
 		fx.NopLogger,
@@ -217,16 +212,19 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 		adapterModule(),
 		usecaseModule(),
 		transportModule(),
-		fx.Populate(&log, &srv, &tracer),
+		fx.Populate(&log, &srv, &tracer, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start http app: %w", err)
 	}
 	cleanup := func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		// The budget is config so an operator can widen it when a dependency
+		// close is slow; a stop that overruns it is logged with the budget so
+		// the skipped hooks are visible, not silently dropped.
+		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
-			log.Error("fx: stop", "err", stopErr)
+			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
 	return &HTTPApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
@@ -243,22 +241,26 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 		log    *logger.Logger
 		srv    *server.GRPCServer
 		tracer trace.Tracer
+		cfg    *config.Config
 	)
 	fxApp := fx.New(
 		fx.NopLogger,
 		fx.Provide(func() context.Context { return ctx }),
 		infraModule(),
 		grpcModule(),
-		fx.Populate(&log, &srv, &tracer),
+		fx.Populate(&log, &srv, &tracer, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start grpc app: %w", err)
 	}
 	cleanup := func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		// The budget is config so an operator can widen it when a dependency
+		// close is slow; a stop that overruns it is logged with the budget so
+		// the skipped hooks are visible, not silently dropped.
+		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
-			log.Error("fx: stop", "err", stopErr)
+			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
 	return &GRPCApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
@@ -276,6 +278,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 		log    *logger.Logger
 		w      *worker.Worker
 		tracer trace.Tracer
+		cfg    *config.Config
 	)
 	fxApp := fx.New(
 		fx.NopLogger,
@@ -284,16 +287,19 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 		workerModule(),
 		adapterModule(),
 		usecaseModule(),
-		fx.Populate(&log, &w, &tracer),
+		fx.Populate(&log, &w, &tracer, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start worker app: %w", err)
 	}
 	cleanup := func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		// The budget is config so an operator can widen it when a dependency
+		// close is slow; a stop that overruns it is logged with the budget so
+		// the skipped hooks are visible, not silently dropped.
+		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
-			log.Error("fx: stop", "err", stopErr)
+			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
 	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil

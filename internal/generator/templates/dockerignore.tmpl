@@ -1,0 +1,14 @@
+# Keep the build context to what the image needs: no secrets, no local
+# state, no git history.
+.git
+.env
+.env.*
+bin/
+tmp/
+*.test
+coverage.*
+.idea/
+.vscode/
+docker-compose.yaml
+Dockerfile
+.dockerignore

@@ -24,6 +24,8 @@ Three flags have no prompt because only one value is implemented per engine: `--
 
 The Makefile, the lint config and the git pre-commit hook are always emitted — there is no prompt for them.
 
+One option carries a cost the generator cannot remove: `--search=elasticsearch` imports the typed `go-elasticsearch` client, whose thousands of generated types make `golangci-lint run` take minutes on the rendered project (measured at 6–8 minutes against 19 seconds without it). The project still lints clean; budget for it, or switch the adapter to the low-level `esapi` client if lint time matters more than the typed API. nova's own bootstrap keeps Search off for exactly this reason.
+
 ## Validation
 
 Every value goes through `ProjectConfig.Validate()` ([internal/config/options.go](../internal/config/options.go)) before a single file is written, and `generator.New()` runs the same check so a config built in code cannot bypass it. The error lists every problem at once, for example `transport "cron" is not supported (valid: http, grpc, worker)`.

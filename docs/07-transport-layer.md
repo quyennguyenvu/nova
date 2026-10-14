@@ -87,7 +87,7 @@ Framework-raised errors take one path per framework into the same envelope: fibe
 
 `registrars` is a **slice, not a map**, so mount order is deterministic — map iteration order would make route shadowing nondeterministic between restarts.
 
-`/healthz` and `/readyz` are mounted _inside_ the middleware stack so a panic during a readiness check still returns the envelope; `Logging` skips emitting a line for them (see below).
+`/healthz` and `/readyz` are mounted _inside_ the middleware stack so a panic during a readiness check still returns the envelope; `Logging` skips emitting a line for them (see below). `GET /openapi.yaml` sits next to them and serves the document embedded by `api/openapi` (`openapi.Spec`), so the contract is fetched from the binary that implements it.
 
 ## internal/transport/http/v1/v1.go — the shared prefix
 

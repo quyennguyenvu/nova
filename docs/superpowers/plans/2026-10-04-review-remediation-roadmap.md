@@ -132,7 +132,7 @@ Plan shape: exchange/topic/queue names flow from config into both publisher and 
 
 Exit criteria: a broker-less unit test suite for the worker (fake consumer) proves ack/nack/retry/park semantics are identical for kafka and rabbitmq; a manual run against docker-compose shows the README demo delivering to `user_audit_log`.
 
-## Phase 6: layers and domain correctness
+## Phase 6: layers and domain correctness (done 2026-10-14, commit `5bf2c7a`)
 
 Detailed plan: [2026-10-14-phase6-layers-domain-correctness.md](2026-10-14-phase6-layers-domain-correctness.md).
 
@@ -151,6 +151,8 @@ Plan shape: `security.TokenIssuer` port in `domain/security`, bound in DI; `TxMa
 Exit criteria: dependency-rule grep (`TestDependencyRule`) shows zero outward imports from `usecase`; `TestRegisterDuplicateEmailIs409` with a fake repo returning the driver error; `TestWrapNilIsNil`.
 
 ## Phase 7: infrastructure and deploy hygiene
+
+Detailed plan: [2026-10-14-phase7-infra-deploy-hygiene.md](2026-10-14-phase7-infra-deploy-hygiene.md).
 
 Findings:
 

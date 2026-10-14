@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,6 +26,9 @@ type Client struct {
 
 // New is the single factory entry-point — picks mode from config.
 func New(cfg config.RedisConfig, log *logger.Logger) (*Client, func(), error) {
+	if len(cfg.Addrs) == 0 {
+		return nil, nil, errors.New("redis: addrs is empty")
+	}
 	var uc redis.UniversalClient
 
 	switch cfg.Mode {

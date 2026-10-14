@@ -16,20 +16,21 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/api .
+# -trimpath drops the build host's paths from the binary (reproducible, no
+# leaked directories in panics); -w -s strips DWARF and the symbol table.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-w -s" -o /out/api .
 
 # ── Runtime stage ────────────────────────────────────────────────────────
-FROM alpine:3.19
+FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S app && adduser -S app -G app
 
 WORKDIR /app
 
+# The YAML config is embedded in the binary; only the migrations ride along
+# for a migrate job that runs from this image.
 COPY --from=builder /out/api /app/api
-{{- if eq .ConfigFormat "yaml"}}
-COPY --from=builder /src/internal/infrastructure/config /app/config
-{{- end}}
 {{- if .HasSQL}}
 {{- if eq .QueryGen "sqlc"}}
 COPY --from=builder /src/sqlc/migrations /app/migrations
@@ -40,16 +41,24 @@ COPY --from=builder /src/migrations /app/migrations
 
 USER app
 {{- if .HasHTTP}}
-EXPOSE 8080
+
+# One knob for the port: the build arg sets the env var the app reads
+# (SERVER_PORT), the EXPOSE metadata and the healthcheck target.
+ARG SERVER_PORT=8080
+ENV SERVER_PORT=${SERVER_PORT}
+EXPOSE ${SERVER_PORT}
 
 # Probes the readiness endpoint, not the liveness one, so the container is
 # only "healthy" once DB/cache are reachable. start-period=10s gives the app
 # time to dial dependencies on cold boot.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8080/readyz >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:${SERVER_PORT}/readyz >/dev/null 2>&1 || exit 1
 {{- end}}
 {{- if .HasGRPC}}
-EXPOSE 9090
+
+ARG GRPC_PORT=9090
+ENV GRPC_PORT=${GRPC_PORT}
+EXPOSE ${GRPC_PORT}
 {{- end}}
 
 ENTRYPOINT ["/app/api"]

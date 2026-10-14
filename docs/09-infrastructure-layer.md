@@ -50,36 +50,46 @@ The other consistent choice: **constructors verify connectivity**. Postgres ping
 var configFS embed.FS
 
 // Load resolves configuration from the embedded base.yaml, overlays the
-// per-APP_ENV file (if present), and applies env-var overrides. Embedding
-// removes the runtime dependency on cwd — the binary is self-contained.
+// per-APP_ENV file, and applies env-var overrides (a ./.env file first, then
+// the real environment). Embedding removes the runtime dependency on cwd for
+// the YAML — the binary is self-contained.
 func Load() (*Config, error) {
-    var cfg Config
+    if err := loadDotEnv(); err != nil {
+        return nil, errors.Wrap(err, "config .env")
+    }
 
+    var cfg Config
     if err := readEmbedded("base.yaml", &cfg); err != nil {
         return nil, errors.Wrap(err, "config base")
     }
 
-    if env := os.Getenv("APP_ENV"); env == EnvDev || env == EnvProd {
-        envFile := env + ".yaml"
-        if err := readEmbedded(envFile, &cfg); err != nil {
-            return nil, errors.Wrapf(err, "config env %s", envFile)
-        }
+    switch env := os.Getenv("APP_ENV"); env {
+    case "", EnvLocal:
+    case EnvDev, EnvProd:
+        …  // overlay <APP_ENV>.yaml
+    default:
+        return nil, fmt.Errorf("unknown APP_ENV %q (valid: %s, %s, %s)", env, EnvLocal, EnvDev, EnvProd)
     }
 
     if err := cleanenv.ReadEnv(&cfg); err != nil {
         return nil, errors.Wrap(err, "config env vars")
     }
-
+    if cfg.Database.User == "" {   // [--database]
+        return nil, errors.New("config database.user (DB_USER) is required")
+    }
+    …
     return &cfg, nil
 }
 ```
 
-Precedence, lowest to highest: **`base.yaml` → `<APP_ENV>.yaml` → environment variables**.
+Precedence, lowest to highest: **`base.yaml` → `<APP_ENV>.yaml` → `./.env` → environment variables**. `loadDotEnv` reads `./.env` with `godotenv.Load`, which never overrides a variable that is already set and treats a missing file as fine — so `cp .env.example .env && go run main.go api` works on the host, while a container keeps injecting its environment and ships no `.env`.
 
 Four consequences worth understanding before you change this:
 
 - **`Load()` takes no path.** The YAML is `//go:embed`-ed, so the binary has no runtime dependency on the working directory — the same image runs from `/`, from a scratch container, from a Kubernetes job. The cost is that a config change is a rebuild, which is the intended trade for a service image.
-- **`APP_ENV` is validated against a whitelist** (`EnvDev`, `EnvProd` from `constant.go`; `local` is the third constant and loads base only). A typo'd `APP_ENV=prod` silently gets base defaults rather than a missing-file error — check `constant.go` when an override doesn't apply.
+- **`APP_ENV` is validated against a whitelist** (`EnvLocal`, `EnvDev`, `EnvProd` from `constant.go`; `local` or unset loads base only). A typo'd `APP_ENV=prod` is an error at startup, because the alternative — silently running base defaults such as `ssl_mode: disable` in what the operator believes is production — is the worse failure.
+- **`DB_USER` is required.** With it empty the driver falls back to the OS user, which surfaces as a permissions error on the database; `Load` fails with the real cause instead.
+- **`shutdown_timeout` at the top level** budgets the whole cleanup chain; the fx engine stops its hooks within it and logs the budget when a stop overruns ([11](11-di-and-entrypoints.md#how-cleanup-works)).
 - **The split between YAML and `.env` is by _nature_, not convenience.** Operational tuning (timeouts, pool sizes, bcrypt cost, sample ratio) lives in YAML and is reviewed in code review. Secrets and per-deployment endpoints live in the environment. That's why `JWTConfig.PrivateKey` and `PublicKey` carry **only** an `env:` tag and no YAML tag — they cannot be committed by accident.
 - **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ`, `Worker` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure.
 
@@ -143,7 +153,7 @@ u := url.URL{
 
 **Config carries discrete typed fields** (`Host`, `Port`, `User`, `Password`, `Name`, `SSLMode`), not a single `DATABASE_URL`, and the DSN is assembled escape-safely. `net.JoinHostPort` handles IPv6 literals; `url.UserPassword` percent-encodes the credentials. The mysql variant uses `mysql.Config.FormatDSN()` for the same reason. A `fmt.Sprintf` DSN is the single most common way a generated project breaks on a rotated password.
 
-Pool limits (`MaxConns`, `MinConns`, `MaxConnLifetime`, `MaxConnIdleTime`) come from config, and the factory pings under `cfg.ConnectTimeout` before returning.
+Pool limits (`MaxConns`, `MinConns`, `MaxConnLifetime`, `MaxConnIdleTime`) come from config, and the factory pings under `cfg.ConnectTimeout` before returning. The mysql variant has the same surface: `tls` (`false` | `true` | `skip-verify` | `preferred`; `skip-verify` is the counterpart of `sslmode=require` and is what `production.yaml` sets), `max_conn_lifetime`, `max_conn_idle_time`, and `connect_timeout`, which bounds both the driver's dial and the startup ping.
 
 ## cache/ and search/ — thin wrappers, deliberately
 
@@ -164,7 +174,7 @@ The wrapper type is what makes single/sentinel/cluster mode a **config** choice 
 
 ## pubsub/ — producer and consumer group
 
-`NewKafkaProducer` returns a `sarama.SyncProducer` with `RequiredAcks: WaitForAll` and `Return.Successes: true` — a synchronous, fully-acknowledged producer, because the publish path is best-effort-with-logging in the usecase and a silently-dropped ack would defeat that ([06](06-usecase-layer.md#register--check-hash-create-publish)).
+`NewKafkaProducer` returns a `sarama.SyncProducer` with `RequiredAcks: WaitForAll` and `Return.Successes: true` — a synchronous, fully-acknowledged producer, because the publish path is best-effort-with-logging in the usecase and a silently-dropped ack would defeat that ([06](06-usecase-layer.md#register--check-hash-create-publish)). It dials the brokers at startup on purpose, unlike Redis: a publisher that cannot reach its broker is a misconfiguration, not a degraded mode, and the compose file waits on the broker's healthcheck before starting the app. Make it lazy only if you accept that every publish until the broker is up is a logged failure.
 
 `NewKafkaConsumerGroup` is worker-only and **fails fast** on missing config:
 

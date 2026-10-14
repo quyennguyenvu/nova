@@ -642,6 +642,7 @@ func (g *Generator) toolingFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{
 		{"templates/Dockerfile.tmpl", "Dockerfile", cfg.IncludeDocker},
+		{"templates/dockerignore.tmpl", ".dockerignore", cfg.IncludeDocker},
 		// docker-compose.yaml runs the app + its dependencies with per-service
 		// CPU/memory limits, so a benchmark is reproducible.
 		{"templates/docker-compose.yaml.tmpl", "docker-compose.yaml", cfg.IncludeDocker},
@@ -650,6 +651,8 @@ func (g *Generator) toolingFiles() []templateFile {
 		{"templates/ci/github-ci.yaml.tmpl", ".github/workflows/ci.yaml", cfg.IncludeCI},
 		{"templates/github/pull_request_template.md.tmpl", ".github/pull_request_template.md", cfg.IncludeCI},
 		{"templates/api/openapi/openapi.yaml.tmpl", "api/openapi/openapi.yaml", cfg.HasHTTP()},
+		// Embeds the document so the service serves it at /openapi.yaml.
+		{"templates/api/openapi/openapi.go.tmpl", "api/openapi/openapi.go", cfg.HasHTTP()},
 		{"templates/sqlfluff.tmpl", ".sqlfluff", true},
 		// Activated by `make setup` (git config core.hooksPath .githooks).
 		// Rendered with the exec bit — see outFileMode.

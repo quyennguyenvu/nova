@@ -1,0 +1,11 @@
+// Package openapi embeds the API description so the running service can
+// serve it (GET /openapi.yaml) and tooling can fetch the contract from the
+// same binary that implements it.
+package openapi
+
+import _ "embed"
+
+// Spec is the OpenAPI 3 document for this service.
+//
+//go:embed openapi.yaml
+var Spec []byte

@@ -90,6 +90,17 @@ internal/
 ### Prerequisites
 
 - Go {{.GoVersion}}+
+- golangci-lint v2.11.4 (`make lint`; CI pins the same version)
+{{- if eq .QueryGen "sqlc"}}
+- sqlc v1.30.0 — `go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0`
+- sqlfluff 4.2.2 — `pipx install sqlfluff==4.2.2` (SQL lint in `make lint`)
+{{- end}}
+{{- if .HasDatabase}}
+- migrate v4.19.0 — `go install -tags 'postgres mysql' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.0`
+{{- end}}
+{{- if .UseWire}}
+- wire: no install, `make gen` runs it through `go tool` at the version in `go.mod`
+{{- end}}
   {{- if eq .Database "postgres"}}
 - PostgreSQL 16+
   {{- end}}
@@ -113,7 +124,8 @@ internal/
 git clone {{.ModuleName}}
 cd {{.ProjectName}}
 
-# Copy environment variables
+# Copy environment variables; the binary loads ./.env on host runs
+# (real environment variables win over it).
 cp .env.example .env
 
 # Generate an RS256 keypair and add the base64-encoded PEMs to .env.

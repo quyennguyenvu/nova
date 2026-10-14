@@ -18,6 +18,8 @@ func Execute() {
 	root := &cobra.Command{
 		Use:   "{{.ProjectName}}",
 		Short: "Project description",
+		// A boot failure prints the error, not the usage text.
+		SilenceUsage: true,
 	}
 
 	root.AddCommand(

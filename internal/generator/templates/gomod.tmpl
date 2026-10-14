@@ -1,3 +1,9 @@
 module {{.ModuleName}}
 
 go {{.GoVersion}}
+{{- if .UseWire}}
+
+// wire is a build-time tool dependency: `go tool wire` builds it from the
+// module cache at the version pinned here, so no separate install.
+tool github.com/google/wire/cmd/wire
+{{- end}}

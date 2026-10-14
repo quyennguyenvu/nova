@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"io/fs"
 {{- if .HasHTTP}}
 	"net"
 	"strings"
@@ -14,6 +15,7 @@ import (
 {{- end}}
 
 	"github.com/ilyakaznacheev/cleanenv"
+	"github.com/joho/godotenv"
 
 	"{{.ModuleName}}/pkg/errors"
 )
@@ -33,6 +35,9 @@ type Config struct {
 	AppName    string         `{{.ConfigFormat}}:"app_name"    env:"APP_NAME"`
 	AppVersion string         `{{.ConfigFormat}}:"app_version" env:"APP_VERSION"`
 	AppEnv     string         `{{.ConfigFormat}}:"app_env"     env:"APP_ENV"`
+	// ShutdownTimeout bounds the whole cleanup chain (fx's Stop budget); keep
+	// it above the server's shutdown_timeout plus the dependency closes.
+	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"APP_SHUTDOWN_TIMEOUT"`
 	Log        LogConfig      `{{.ConfigFormat}}:"log"`
 	Tracing    TracingConfig  `{{.ConfigFormat}}:"tracing"`
 	JWT        JWTConfig      `{{.ConfigFormat}}:"jwt"`
@@ -211,10 +216,19 @@ type DatabaseConfig struct {
 	Name     string `{{.ConfigFormat}}:"name" env:"DB_NAME"`
 	User     string `env:"DB_USER"`
 	Password string `env:"DB_PASSWORD"`
+	// TLS is the driver's tls mode: false | true | skip-verify | preferred.
+	// "skip-verify" encrypts without authenticating the server (the
+	// counterpart of Postgres sslmode=require); register a tls.Config with
+	// the CA and use "true" to also authenticate it.
+	TLS string `{{.ConfigFormat}}:"tls" env:"DB_TLS"`
 
-	// Pool / connection tuning.
-	MaxOpenConns int `{{.ConfigFormat}}:"max_open_conns" env:"DB_MAX_OPEN_CONNS"`
-	MaxIdleConns int `{{.ConfigFormat}}:"max_idle_conns" env:"DB_MAX_IDLE_CONNS"`
+	// Pool / connection tuning. ConnectTimeout bounds both the dial and the
+	// startup ping.
+	MaxOpenConns    int           `{{.ConfigFormat}}:"max_open_conns"     env:"DB_MAX_OPEN_CONNS"`
+	MaxIdleConns    int           `{{.ConfigFormat}}:"max_idle_conns"     env:"DB_MAX_IDLE_CONNS"`
+	MaxConnLifetime time.Duration `{{.ConfigFormat}}:"max_conn_lifetime"  env:"DB_MAX_CONN_LIFETIME"`
+	MaxConnIdleTime time.Duration `{{.ConfigFormat}}:"max_conn_idle_time" env:"DB_MAX_CONN_IDLE_TIME"`
+	ConnectTimeout  time.Duration `{{.ConfigFormat}}:"connect_timeout"    env:"DB_CONNECT_TIMEOUT"`
 {{- end}}
 }
 {{- end}}
@@ -298,25 +312,42 @@ type WorkerConfig struct {
 {{- end}}
 
 // Load resolves configuration from the embedded base.{{.ConfigFormat}}, overlays the
-// per-APP_ENV file (if present), and applies env-var overrides. Embedding
-// removes the runtime dependency on cwd — the binary is self-contained.
+// per-APP_ENV file, and applies env-var overrides (a ./.env file first, then
+// the real environment). Embedding removes the runtime dependency on cwd for
+// the YAML — the binary is self-contained.
 func Load() (*Config, error) {
-	var cfg Config
+	if err := loadDotEnv(); err != nil {
+		return nil, errors.Wrap(err, "config .env")
+	}
 
+	var cfg Config
 	if err := readEmbedded("base.{{.ConfigFormat}}", &cfg); err != nil {
 		return nil, errors.Wrap(err, "config base")
 	}
 
-	if env := os.Getenv("APP_ENV"); env == EnvDev || env == EnvProd {
+	switch env := os.Getenv("APP_ENV"); env {
+	case "", EnvLocal:
+	case EnvDev, EnvProd:
 		envFile := env + ".{{.ConfigFormat}}"
 		if err := readEmbedded(envFile, &cfg); err != nil {
 			return nil, errors.Wrapf(err, "config env %s", envFile)
 		}
+	default:
+		// A typo must not silently run with base defaults (ssl_mode: disable,
+		// debug-friendly limits) in what the operator believes is production.
+		return nil, fmt.Errorf("unknown APP_ENV %q (valid: %s, %s, %s)", env, EnvLocal, EnvDev, EnvProd)
 	}
 
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
 		return nil, errors.Wrap(err, "config env vars")
 	}
+{{- if .HasDatabase}}
+	// Without DB_USER the driver falls back to the OS user, which looks like a
+	// permissions bug on the database; fail with the real cause instead.
+	if cfg.Database.User == "" {
+		return nil, errors.New("config database.user (DB_USER) is required")
+	}
+{{- end}}
 {{- if .HasHTTP}}
 	if _, err := cfg.HTTP.TrustedProxyNets(); err != nil {
 		return nil, errors.Wrap(err, "config http.trusted_proxies")
@@ -324,6 +355,18 @@ func Load() (*Config, error) {
 {{- end}}
 
 	return &cfg, nil
+}
+
+// loadDotEnv reads ./.env into the environment for host runs, so
+// `cp .env.example .env && go run main.go api` works. Variables already set
+// win (godotenv.Load never overrides), and a missing file is not an error:
+// containers inject their environment and ship no .env.
+func loadDotEnv() error {
+	err := godotenv.Load()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func readEmbedded(name string, cfg *Config) error {
@@ -355,6 +398,9 @@ func (c *Config) Summary() []any {
 {{- end}}
 {{- if eq .Database "postgres"}}
 	fields = append(fields, "db_ssl_mode", c.Database.SSLMode)
+{{- end}}
+{{- if eq .Database "mysql"}}
+	fields = append(fields, "db_tls", c.Database.TLS)
 {{- end}}
 {{- if .HasRedis}}
 	fields = append(fields, "redis_mode", c.Redis.Mode, "redis_addrs", c.Redis.Addrs)

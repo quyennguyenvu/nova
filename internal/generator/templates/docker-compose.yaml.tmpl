@@ -47,11 +47,11 @@ services:
 {{- end}}
 {{- if .HasHTTP}}
     ports:
-      - "${APP_HOST_PORT:-8080}:8080"
+      - "${APP_HOST_PORT:-8080}:${SERVER_PORT:-8080}"
 {{- end}}
 {{- if .HasGRPC}}
     ports:
-      - "${APP_HOST_PORT:-9090}:9090"
+      - "${APP_HOST_PORT:-9090}:${GRPC_PORT:-9090}"
 {{- end}}
 {{- if or .HasDatabase .HasRedis .HasElasticsearch (eq .MessageQueue "kafka") (eq .MessageQueue "rabbitmq")}}
     # Wait for dependencies to pass their healthcheck, not just to start —

@@ -12,6 +12,7 @@ import (
 	// the contrib package until this project moves to v5.
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho" //nolint:staticcheck // SA1019: echo v4
 
+	"{{.ModuleName}}/api/openapi"
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
@@ -74,6 +75,9 @@ func NewRouter(
 			code = http.StatusServiceUnavailable
 		}
 		return c.JSON(code, status)
+	})
+	e.GET("/openapi.yaml", func(c echo.Context) error {
+		return c.Blob(http.StatusOK, "application/yaml", openapi.Spec)
 	})
 
 	for _, r := range registrars {

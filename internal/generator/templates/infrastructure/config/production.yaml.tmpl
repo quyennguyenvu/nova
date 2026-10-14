@@ -21,8 +21,11 @@ database:
   max_conn_idle_time: 5m
 {{- end}}
 {{- if eq .Database "mysql"}}
+  tls: "skip-verify" # encrypt in transit; use "true" with a registered CA to also authenticate the server
   max_open_conns: 50
   max_idle_conns: 10
+  max_conn_lifetime: 30m
+  max_conn_idle_time: 5m
 {{- end}}
 {{- end}}
 

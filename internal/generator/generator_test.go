@@ -2,18 +2,27 @@ package generator
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"go/format"
 	"go/parser"
 	"go/token"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	// Aliased: the package-level const `yaml` (generator.go) shadows the
 	// import name.
@@ -1406,6 +1415,9 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 		pkgs = append(pkgs, "./internal/transport/worker/...")
 	}
 	run("go", append([]string{"test"}, pkgs...)...)
+	if !cfg.HasDatabase() && cfg.HasHTTP() {
+		smokeBoot(t, dir)
+	}
 	// The generated project ships a strict golangci config plus a pre-commit
 	// hook and CI job that run it, so a fresh render must already be clean.
 	if _, err := exec.LookPath("golangci-lint"); err == nil {
@@ -1846,4 +1858,147 @@ func assertStorageSeams(t *testing.T, dir, engine string) {
 		return
 	}
 	mustContainAll(t, query, "UPDATE users SET name = ?, updated_at = ?")
+}
+
+// smokeBoot proves the host boot path on the no-dependency project: build the
+// binary, start it with a generated keypair and a free port the way the
+// README does (.env in cwd), wait for /healthz, then SIGTERM it and expect a
+// clean exit. It runs only for the no-database bootstrap, so no compose
+// dependency is needed.
+func smokeBoot(t *testing.T, dir string) {
+	t.Helper()
+	bin := filepath.Join(dir, "smoke-bin")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = dir
+	build.Env = append(os.Environ(), "GOFLAGS=-mod=mod -p=2")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	pub, priv := testKeyPair(t)
+	port := freePort(t)
+	envFile := "APP_ENV=local\nSERVER_PORT=" + port + "\nJWT_PUBLIC_KEY=" + pub + "\nJWT_PRIVATE_KEY=" + priv + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(envFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "api")
+	cmd.Dir = dir
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	healthy := false
+	for i := 0; i < 50 && !healthy; i++ {
+		time.Sleep(100 * time.Millisecond)
+		resp, err := http.Get("http://127.0.0.1:" + port + "/healthz")
+		if err == nil {
+			healthy = resp.StatusCode == http.StatusOK
+			_ = resp.Body.Close()
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	waitErr := cmd.Wait()
+	if !healthy {
+		t.Fatalf("/healthz never answered 200\n%s", output.String())
+	}
+	if waitErr != nil {
+		t.Fatalf("exit after SIGTERM: %v\n%s", waitErr, output.String())
+	}
+	mustContainAll(t, output.String(), "starting HTTP server", "shutdown complete")
+}
+
+func testKeyPair(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	return base64.StdEncoding.EncodeToString(pubPEM), base64.StdEncoding.EncodeToString(privPEM)
+}
+
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	_, port, _ := net.SplitHostPort(l.Addr().String())
+	return port
+}
+
+// TestDeployContract pins the phase 7 hygiene: host runs load .env, APP_ENV is
+// whitelisted, MySQL is configured like Postgres, the image is reproducible
+// and port-driven, CI is pinned and hermetic, shutdown budgets are config,
+// and the OpenAPI document is served.
+func TestDeployContract(t *testing.T) {
+	t.Parallel()
+	t.Run("postgres_wire", func(t *testing.T) {
+		t.Parallel()
+		cfg := httpMatrixConfig("fiber", "postgres", "wire")
+		cfg.MessageQueue = "kafka"
+		cfg.IncludeCI = true
+		assertDeployContract(t, renderProject(t, cfg), "postgres")
+	})
+	t.Run("mysql_fx", func(t *testing.T) {
+		t.Parallel()
+		cfg := httpMatrixConfig("gin", "mysql", "fx")
+		cfg.IncludeCI = true
+		assertDeployContract(t, renderProject(t, cfg), "mysql")
+	})
+}
+
+func assertDeployContract(t *testing.T, dir, engine string) {
+	t.Helper()
+	cfgSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/config/config.go"))
+	mustContainAll(t, cfgSrc, "godotenv.Load(", "unknown APP_ENV", "DB_USER) is required", `"shutdown_timeout"`)
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/base.yaml")),
+		"shutdown_timeout: 20s")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "cmd/root.go")), "SilenceUsage: true")
+	env := readFile(t, filepath.Join(dir, ".env.example"))
+	mustNotContain(t, env, "<set-me", "<user>", "<password>")
+	mustContainAll(t, env, "DB_USER=matrixtest", "JWT_PUBLIC_KEY=")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/cache/redis.go")), "addrs is empty")
+	if engine == "mysql" {
+		mustContainAll(t, cfgSrc, `"tls"`, `"max_conn_lifetime"`, `"max_conn_idle_time"`, `"connect_timeout"`)
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/database/mysql.go")),
+			"TLSConfig", "SetConnMaxLifetime(", "SetConnMaxIdleTime(", "cfg.ConnectTimeout")
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/production.yaml")),
+			`tls: "skip-verify"`)
+	}
+	assertImageAndCI(t, dir, engine)
+	mustContainAll(t, readFile(t, filepath.Join(dir, "api/openapi/openapi.go")),
+		"//go:embed openapi.yaml", "var Spec []byte")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/http/router.go")),
+		`"/openapi.yaml"`, "openapi.Spec")
+	mustContainAll(t, readFile(t, filepath.Join(dir, "README.md")), "sqlc v1.30.0", "migrate v4.19.0", "sqlfluff 4.2.2")
+}
+
+// assertImageAndCI: the Dockerfile, the dockerignore, CI, the Makefile and
+// the DI engine's shutdown budget.
+func assertImageAndCI(t *testing.T, dir, engine string) {
+	t.Helper()
+	docker := readFile(t, filepath.Join(dir, "Dockerfile"))
+	mustContainAll(t, docker, "alpine:3.22", "-trimpath", "ARG SERVER_PORT=8080", "${SERVER_PORT}/readyz")
+	mustNotContain(t, docker, "/app/config", "alpine:3.19")
+	mustContainAll(t, readFile(t, filepath.Join(dir, ".dockerignore")), ".env", ".git", "bin/")
+	ci := readFile(t, filepath.Join(dir, ".github/workflows/ci.yaml"))
+	mustContainAll(t, ci, "golangci/golangci-lint-action@v8", "version: v2.11.4", "-trimpath")
+	mustNotContain(t, ci, "services:", "JWT_PUBLIC_KEY", "DB_HOST")
+	mk := readFile(t, filepath.Join(dir, "Makefile"))
+	mustContainAll(t, mk, "down $(n)", "n ?= 1")
+	if engine == "postgres" { // wire
+		mustContainAll(t, mk, "go tool wire ./internal/infrastructure/di")
+		mustContainAll(t, readFile(t, filepath.Join(dir, "go.mod")), "tool github.com/google/wire/cmd/wire")
+		return
+	}
+	fxSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/di/fx.go"))
+	mustContainAll(t, fxSrc, "cfg.ShutdownTimeout", `"timeout_ms"`)
+	mustNotContain(t, fxSrc, "stopTimeout")
 }

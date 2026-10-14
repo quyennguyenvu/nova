@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"time"
 
 	"github.com/go-sql-driver/mysql"
 
@@ -14,11 +13,7 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
-// pingTimeout bounds the startup connectivity check so a down database fails
-// fast instead of hanging boot.
-const pingTimeout = 5 * time.Second
-
-// NewMySQLDB creates a new MySQL database connection.
+// NewMySQLDB creates a new MySQL database connection pool.
 func NewMySQLDB(cfg config.DatabaseConfig, log *logger.Logger) (*sql.DB, func(), error) {
 	// NewConfig() seeds the driver defaults (AllowNativePasswords, UTC loc, …)
 	// and FormatDSN() escapes every field — a raw fmt.Sprintf corrupts the DSN
@@ -30,6 +25,10 @@ func NewMySQLDB(cfg config.DatabaseConfig, log *logger.Logger) (*sql.DB, func(),
 	mysqlCfg.Addr = net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	mysqlCfg.DBName = cfg.Name
 	mysqlCfg.ParseTime = true
+	mysqlCfg.Timeout = cfg.ConnectTimeout
+	if cfg.TLS != "" {
+		mysqlCfg.TLSConfig = cfg.TLS
+	}
 
 	db, err := sql.Open("mysql", mysqlCfg.FormatDSN())
 	if err != nil {
@@ -38,8 +37,12 @@ func NewMySQLDB(cfg config.DatabaseConfig, log *logger.Logger) (*sql.DB, func(),
 
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetConnMaxLifetime(cfg.MaxConnLifetime)
+	db.SetConnMaxIdleTime(cfg.MaxConnIdleTime)
 
-	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	// The startup ping shares the dial budget so a down database fails fast
+	// instead of hanging boot.
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
 	defer cancel()
 
 	if pingErr := db.PingContext(ctx); pingErr != nil {

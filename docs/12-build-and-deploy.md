@@ -35,7 +35,8 @@ Notes on the ones with a decision behind them:
 - **`test` runs `-race`.** Slower, but the alternative is discovering a data race in production. Nova's own suite uses the same flag.
 - **`lint` chains sqlfluff** for sqlc projects (`--dialect postgres|mysql`), so hand-written SQL is held to the same bar as Go. `fmt` chains `sqlfluff fix`.
 - **`gen` is composed**, not a script: it expands to only the generators the project actually has, so a `--di=fx --query=none` project's `make gen` is a no-op rather than an error.
-- **`wire-gen` deletes `wire_gen.go` first.** A stale generated file that still compiles is worse than a missing one — wire would leave it in place on a failed run.
+- **`wire-gen` deletes `wire_gen.go` first.** A stale generated file that still compiles is worse than a missing one — wire would leave it in place on a failed run. It runs `go tool wire`: the `tool` directive in `go.mod` pins wire's version and `go` builds it from the module cache, so there is nothing to install.
+- **`migrate-down` rolls back `n` migrations, default 1** (`make migrate-down n=3`); a bare `migrate down` would unwind the whole schema.
 - **`migrate-*` read `$MIGRATE_DATABASE_URL`**, not the app config. Migration tooling runs outside the app (CI, a job, your shell), so it takes a URL from the environment; `.env.example` documents it as "used by Makefile (migrate) and sqlc — not read by the Go config".
 
 There is deliberately **no `make build` or `make run`** target: the binary is built by `go build`/`docker build`, and running it means choosing a subcommand (`./{project} api`) — a `make run` would have to guess.
@@ -78,23 +79,23 @@ FROM golang:{goversion}-alpine AS builder
 COPY go.mod go.sum ./
 RUN go mod download          # cached layer — deps change less often than code
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /out/api .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-w -s" -o /out/api .
 
 # ── Runtime stage ──
-FROM alpine:3.19
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S app && adduser -S app -G app
 COPY --from=builder /out/api /app/api
-COPY --from=builder /src/internal/infrastructure/config /app/config   # [--config=yaml]
 COPY --from=builder /src/sqlc/migrations /app/migrations              # [--query=sqlc]
 USER app
 ```
 
-Five choices worth keeping:
+Six choices worth keeping:
 
-- **`go.mod`/`go.sum` copied before the source** so `go mod download` is a cached layer.
+- **`go.mod`/`go.sum` copied before the source** so `go mod download` is a cached layer, and a `.dockerignore` keeps `.git`, `.env*`, `bin/` and local state out of the context — the image can never contain a secret that was lying in the working tree.
 - **`CGO_ENABLED=0`** → a static binary that runs on `alpine` (or `scratch`) without libc.
-- **`-ldflags="-w -s"`** strips DWARF and the symbol table.
+- **`-trimpath -ldflags="-w -s"`** drops the build host's paths and strips DWARF and the symbol table: reproducible, and no leaked directories in a panic.
+- **Nothing but the binary and the migrations is copied.** The YAML config is embedded in the binary, so there is no config directory to ship.
 - **`USER app`** — a non-root, no-login user. Running as root in a container is the default and the wrong default.
 - **`ca-certificates` + `tzdata`** installed explicitly: a static Go binary has neither, and their absence shows up as TLS failures and UTC-only timestamps.
 
@@ -111,21 +112,25 @@ Generated code is **committed**, not generated in the image. That keeps the buil
 ### Entrypoint, port, healthcheck
 
 ```dockerfile
-EXPOSE 8080                                        # [HTTP]
+ARG SERVER_PORT=8080                               # [HTTP] one knob: env var, EXPOSE, healthcheck
+ENV SERVER_PORT=${SERVER_PORT}
+EXPOSE ${SERVER_PORT}
 
 # Probes the readiness endpoint, not the liveness one, so the container is
 # only "healthy" once DB/cache are reachable. start-period=10s gives the app
 # time to dial dependencies on cold boot.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8080/readyz >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:${SERVER_PORT}/readyz >/dev/null 2>&1 || exit 1
 
-EXPOSE 9090                                        # [gRPC]
+ARG GRPC_PORT=9090                                 # [gRPC]
+ENV GRPC_PORT=${GRPC_PORT}
+EXPOSE ${GRPC_PORT}
 
 ENTRYPOINT ["/app/api"]
 CMD ["api"]     # or "grpc" / "worker", per --transport
 ```
 
-Splitting `ENTRYPOINT` from `CMD` means `docker run img worker` overrides the subcommand without re-specifying the binary. `EXPOSE` and the healthcheck are transport-gated, so a worker image declares neither — there's no port to probe.
+Splitting `ENTRYPOINT` from `CMD` means `docker run img worker` overrides the subcommand without re-specifying the binary. `EXPOSE` and the healthcheck are transport-gated, so a worker image declares neither — there's no port to probe. The port is a build arg that becomes the `SERVER_PORT` env var the app reads, so `docker build --build-arg SERVER_PORT=9000` moves the listener, the metadata and the probe together; compose maps `${SERVER_PORT:-8080}` for the same reason.
 
 `/readyz` rather than `/healthz` in the healthcheck is the deliberate half: a container that is up but can't reach its database should not be routed traffic ([07](07-transport-layer.md#internaltransporthttphealthcheckergo)).
 
@@ -207,10 +212,10 @@ test ─┘
 
 | Job     | What it does                                                             |
 | ------- | ------------------------------------------------------------------------ |
-| `lint`  | `golangci-lint-action`                                                   |
+| `lint`  | `golangci-lint-action@v8` pinned to golangci-lint `v2.11.4`              |
 | `tidy`  | `go mod tidy` then `git diff --exit-code go.mod go.sum`                  |
-| `test`  | `go test -v -race -coverprofile=coverage.out ./...` + service containers |
-| `build` | `go build -ldflags="-w -s"` — `needs: [lint, tidy, test]`                |
+| `test`  | `go test -v -race -coverprofile=coverage.out ./...`, hermetic            |
+| `build` | `go build -trimpath -ldflags="-w -s"` — `needs: [lint, tidy, test]`      |
 
 ```yaml
 # Catches forgotten dep updates: re-running tidy should be a no-op on
@@ -219,17 +224,9 @@ test ─┘
 
 The `tidy` job is the one people leave out and then regret: an untidy `go.mod` breaks other people's builds in ways that look unrelated to the PR that caused it.
 
-`test` brings up postgres/mysql/redis as **service containers** with health options, mirroring what compose provides locally, and injects the same env vars the app reads (`DB_HOST`, `REDIS_ADDRS`, …).
+`test` runs with no service containers and no environment: the rendered tests are hermetic (fakes for every port, driver errors built by hand, the worker's fake consumer). Add a service and its env vars only when an integration test needs them. The lint action's major (`v8`) is the one that drives golangci-lint v2 — the earlier `v6` only ran v1 against a v2 config — and the version is pinned so a lint release cannot change a PR's verdict.
 
-The JWT keys are committed fixtures, labelled as such:
-
-```yaml
-# JWT_PUBLIC_KEY / JWT_PRIVATE_KEY are throwaway CI-only base64 PEM
-# fixtures so config.Load passes key parsing in NewTokenService. Real
-# deployments inject rotating keys via a secrets manager / mounted volume.
-```
-
-They exist because `NewTokenService` parses keys at startup and would fail the whole test binary without them ([09](09-infrastructure-layer.md#jwt--rs256-signer-and-verifier)). They are deliberately worthless.
+The external tools are pinned in the README's prerequisites (`golangci-lint v2.11.4`, `sqlc v1.30.0`, `migrate v4.19.0`, `sqlfluff 4.2.2`); wire needs no install because `go tool` builds it at the version in `go.mod`.
 
 `permissions: contents: read` scopes the token to the minimum — the default is broader than any of these jobs needs.
 
@@ -250,7 +247,9 @@ The split is the same one described in [09](09-infrastructure-layer.md#config--o
 - **Discrete DB fields** (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) rather than a `DATABASE_URL` — the DSN is assembled escape-safely in code ([09](09-infrastructure-layer.md#database--connection-factory)).
 - **`MIGRATE_DATABASE_URL`** separately, flagged "used by Makefile (migrate) and sqlc — not read by the Go config".
 
-`APP_ENV=local` by default, which loads `base.yaml` only.
+Every value is sourceable as written: the database credentials default to the same values compose uses, the JWT keys are empty and marked required (they fail at startup until generated), and nothing is wrapped in `<angle brackets>`. The binary loads `./.env` itself on host runs ([09](09-infrastructure-layer.md#config--one-struct-three-layers-of-value)), so `cp .env.example .env`, generate the keys, and `go run main.go api` reaches "starting HTTP server" with only the compose dependencies up. nova's bootstrap proves that path on the no-database project: it builds the binary, writes a `.env` with a generated keypair and a free port, waits for `/healthz`, and sends SIGTERM. Building the image (`docker build`) was checked once by hand; `docker compose up` against live dependencies stays a manual step.
+
+`APP_ENV=local` by default, which loads `base.yaml` only; any value other than `local`, `development` or `production` is rejected at startup.
 
 ## Lint configuration
 

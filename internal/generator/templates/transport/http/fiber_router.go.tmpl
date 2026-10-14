@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/contrib/otelfiber/v2"
 	"github.com/gofiber/fiber/v2"
 
+	"{{.ModuleName}}/api/openapi"
 	"{{.ModuleName}}/internal/infrastructure/config"
 	"{{.ModuleName}}/internal/transport/http/health"
 	"{{.ModuleName}}/internal/transport/http/httpwriter"
@@ -87,6 +88,10 @@ func NewRouter(
 			code = fiber.StatusServiceUnavailable
 		}
 		return c.Status(code).JSON(status)
+	})
+	app.Get("/openapi.yaml", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderContentType, "application/yaml")
+		return c.Send(openapi.Spec)
 	})
 
 	for _, r := range registrars {

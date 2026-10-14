@@ -1,6 +1,5 @@
 .SILENT:
 GOPATH = $(shell go env GOPATH)
-WIRE_PATH ?= $(shell go env GOPATH)/bin/wire
 export
 
 .PHONY: help
@@ -44,15 +43,17 @@ migrate-create:
 migrate-up:
 	migrate -path {{$migrationsDir}} -database '${MIGRATE_DATABASE_URL}' up
 
+# Roll back n migrations (default 1); `make migrate-down n=3`.
+n ?= 1
 migrate-down:
-	migrate -path {{$migrationsDir}} -database '${MIGRATE_DATABASE_URL}' down
+	migrate -path {{$migrationsDir}} -database '${MIGRATE_DATABASE_URL}' down $(n)
 {{- end}}
 
 # Code generation
 {{- if .UseWire}}
 .PHONY: wire-gen
 wire-gen:
-	rm -f $(PWD)/internal/infrastructure/di/wire_gen.go; $(WIRE_PATH) ./internal/infrastructure/di
+	rm -f $(PWD)/internal/infrastructure/di/wire_gen.go; go tool wire ./internal/infrastructure/di
 {{- end}}
 
 {{- if eq .QueryGen "sqlc"}}
