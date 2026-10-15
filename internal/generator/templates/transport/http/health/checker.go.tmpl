@@ -3,7 +3,7 @@
 // downstream dependency the process needs to serve traffic — DB pool, Redis
 // — and returns 503 if any is unreachable.
 //
-// Each check runs under a 1-second deadline so a hung dependency cannot
+// All checks share one 1-second deadline so a hung dependency cannot
 // cause /readyz itself to back up.
 package health
 

@@ -17,11 +17,13 @@ import (
 // HTTPApp bundles every dependency the HTTP entry point needs from DI. The
 // Logger is the single instance wired into every service. Tracer is held here
 // so DI emits the tracing provider's cleanup hook (flush spans on shutdown)
-// even when no service consumes the tracer constructor argument directly.
+// even when no service consumes the tracer constructor argument directly. It
+// comes before Server so DI builds it first and, cleaning up in reverse,
+// flushes the last spans only after the server has drained.
 type HTTPApp struct {
 	Logger *logger.Logger
-	Server *server.HTTPServer
 	Tracer trace.Tracer
+	Server *server.HTTPServer
 }
 {{- end}}
 
@@ -30,8 +32,8 @@ type HTTPApp struct {
 // GRPCApp bundles every dependency the gRPC entry point needs from DI.
 type GRPCApp struct {
 	Logger *logger.Logger
-	Server *server.GRPCServer
 	Tracer trace.Tracer
+	Server *server.GRPCServer
 }
 {{- end}}
 
@@ -42,7 +44,7 @@ type GRPCApp struct {
 // handler dispatch map.
 type WorkerApp struct {
 	Logger *logger.Logger
-	Worker *worker.Worker
 	Tracer trace.Tracer
+	Worker *worker.Worker
 }
 {{- end}}

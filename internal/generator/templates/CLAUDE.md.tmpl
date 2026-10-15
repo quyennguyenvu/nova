@@ -22,12 +22,13 @@ Stack:
 {{end}}{{- if .HasWorker}}- Worker transport: consumes from {{.MessageQueue}}
 {{end}}{{- if .HasSQL}}- Database: {{.Database}} (driver: {{.DBDriver}}{{if eq .QueryGen "sqlc"}}, queries: sqlc{{end}})
 {{end}}{{- if .HasRedis}}- Cache: Redis client wired; the cache-aside decorator over the repository ships unwired (see `README.md`)
+{{end}}{{- if .HasElasticsearch}}- Search: Elasticsearch client wired; the user index adapter ships unwired (see `README.md`)
 {{end}}{{- if and .HasMessageQueue (not .HasWorker)}}- Message queue: {{.MessageQueue}} (publisher)
 {{end}}- Dependency injection: {{if .UseWire}}Google Wire (compile-time, `wire_gen.go`){{else}}Uber fx (runtime){{end}}
 
 - Config: cleanenv ({{.ConfigFormat}} + `.env`)
 
-Ships a working **User CRUD** wired across every layer as the reference feature — copy that vertical slice when adding a new aggregate.
+{{if .HasWorker}}Ships the User aggregate (entity, usecase, repository) plus a `user.created` audit consumer as the reference feature — copy that slice when adding a new event.{{else}}Ships a working **User CRUD** wired across every layer as the reference feature — copy that vertical slice when adding a new aggregate.{{end}}
 
 ## Commands
 
@@ -35,8 +36,8 @@ Ships a working **User CRUD** wired across every layer as the reference feature 
 make help           # List all targets
 make test           # go test -race -cover ./...
 make test-coverage  # Coverage report → coverage.html
-make lint           # golangci-lint{{if eq .QueryGen "sqlc"}} + sqlfluff lint{{end}}
-make fmt            # golangci-lint fmt (goimports + golines){{if eq .QueryGen "sqlc"}} + sqlfluff fix{{end}}
+make lint           # golangci-lint{{if eq .QueryGen "sqlc"}} + sqlfluff lint{{end}}{{if .HasGRPC}} + buf lint{{end}}
+make fmt            # golangci-lint fmt (goimports + golines){{if eq .QueryGen "sqlc"}} + sqlfluff fix{{end}}{{if .HasGRPC}} + buf format{{end}}
 make vet            # go vet ./...
 {{- if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
 make gen            # Regenerate {{if .UseWire}}wire_gen{{if or (eq .QueryGen "sqlc") .HasGRPC}} + {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc dbgen{{if .HasGRPC}} + {{end}}{{end}}{{if .HasGRPC}}proto stubs{{end}}
@@ -60,8 +61,8 @@ Clean Architecture's **dependency rule**: source dependencies point inward only 
 
 - **`internal/domain`** (innermost) — entities, repository/security **ports** (interfaces), and value objects. Pure Go, zero dependencies on outer layers or third-party frameworks.
 - **`internal/usecase`** — application business rules. Orchestrates domain ports; one package per aggregate (e.g. `usecase/user`). Knows nothing about HTTP, SQL, or the broker.
-- **`internal/adapter`** — implements domain ports against concrete tech: `repository/{{if .HasDatabase}}{{.Database}}{{else}}memory{{end}}` ({{if .HasDatabase}}the DB{{else}}in-memory, process lifetime{{end}}){{if .HasRedis}}, `repository/redis` (cache-aside){{end}}{{if .HasMessageQueue}}, `pubsub` (the broker){{end}}.
-- **`internal/infrastructure`** (outermost) — frameworks & drivers: config, {{if .HasSQL}}database pool, {{end}}{{if .HasRedis}}cache client, {{end}}logger, jwt, tracing, server lifecycle, and the `di` wiring graph.
+- **`internal/adapter`** — implements domain ports against concrete tech: `repository/{{if .HasDatabase}}{{.Database}}{{else}}memory{{end}}` ({{if .HasDatabase}}the DB{{else}}in-memory, process lifetime{{end}}){{if .HasRedis}}, `repository/redis` (cache-aside){{end}}{{if .HasElasticsearch}}, `repository/elasticsearch` (search index){{end}}{{if .HasMessageQueue}}, `pubsub` (the broker){{end}}.
+- **`internal/infrastructure`** (outermost) — frameworks & drivers: config, {{if .HasSQL}}database pool, {{end}}{{if .HasRedis}}cache client, {{end}}{{if .HasElasticsearch}}search client, {{end}}{{if .HasMessageQueue}}broker clients, {{end}}logger, jwt, tracing, {{if or .HasHTTP .HasGRPC}}server lifecycle, {{end}}and the `di` wiring graph.
 
 Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers/router/middleware{{else if .HasWorker}}worker consumer + handlers{{else if .HasGRPC}}gRPC server factory, interceptors and services{{end}}), `internal/app` (entry-point glue that boots a transport through the DI graph), `cmd` (cobra commands), and `pkg` (cross-cutting libs: `errors`, `locale`, `observability`, `logctx`{{if .HasHTTP}}, `httputil`{{end}}). See `README.md` for the full tree.
 
@@ -74,7 +75,7 @@ Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers
 - **Structured logging — never reuse a reserved field key.** The logger (`observability.Logger`, backed by zerolog) takes the human-readable text as the **first** argument; everything after is `key, value` pairs — e.g. `logctx.From(ctx).Error("publish user.created failed", "user_id", id, "err", err.Error())`. zerolog auto-populates `message` (the first arg), `time`, `level`, and `caller`, so passing any of those names as a field key emits a **duplicate** key in the JSON line. Put your text in the message argument — never in a `"message"` field — and name extra fields distinctly (`detail`, `reason`, `err`, …).
 - **Localization (`pkg/locale`).** User-facing messages are `locale.Locale` codes, never literals. The `*L` error constructors carry the code + args; the transport boundary translates into the request's language.
 - **Usecase imports use the `svc` alias.** Import a usecase as `usersvc "{{.ModuleName}}/internal/usecase/user"` — never the bare `user` (it collides with the domain/transport `user` packages). The service type is `Service`, its constructor `NewService`.
-- **DI wiring (`internal/infrastructure/di`).** After adding a constructor, register it in the provider set{{if .UseWire}} and run `make gen` to regenerate `wire_gen.go`{{else}} and add it to the fx module{{end}}.{{if .HasHTTP}} A new HTTP feature also adds its `*Registrar` to `provideRegistrars`.{{end}}{{if .HasGRPC}} A new gRPC service adds its handler to `provideGRPCServices`.{{end}}{{if .HasWorker}} A new worker message handler adds itself to `provideWorkerHandlers`.{{end}}
+- **DI wiring (`internal/infrastructure/di`).** After adding a constructor, {{if .UseWire}}register it in the provider set in `wire.go` and run `make gen` to regenerate `wire_gen.go`{{else}}add it to the matching fx module in `fx.go`{{end}}.{{if .HasHTTP}} A new HTTP feature also adds its `*Registrar` to `provideRegistrars`.{{end}}{{if .HasGRPC}} A new gRPC service adds its handler to `provideGRPCServices`.{{end}}{{if .HasWorker}} A new worker message handler adds itself to `provideWorkerHandlers`.{{end}}
   {{- if .HasGRPC}}
 - **Adding an RPC.** Edit `api/proto/user/v1/user.proto`, run `make gen` (buf rewrites `api/gen`), implement the method on `transport/grpc.UserHandler`, add it to `Public()` only if it must work without a bearer token (auth is deny-by-default), and return errors through `rpcstatus.FromError` so the code and message match the HTTP classification. A new service implements `transport/grpc.Registrar` and is added to `provideGRPCServices`.
   {{- end}}

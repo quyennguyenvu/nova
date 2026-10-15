@@ -25,10 +25,7 @@
 //
 //	// transport — log ONCE; translate at write time
 //	appErr := errors.ToAppError(err)
-//	logger.Error("request failed",
-//	    "code",  appErr.Code,
-//	    "err",   appErr.Error(),
-//	    "trace", appErr.Trace())
+//	logger.Error("request failed", errors.LogFields(err)...) // app_code, app_err, app_trace
 //	writeJSON(w, appErr.Code, appErr) // body is translated using ctx language
 package errors
 
@@ -146,7 +143,7 @@ func (e *AppError) Origin() Frame {
 	return e.frames[0]
 }
 
-// Trace returns a compact one-line trail "file:line(msg) → file:line(msg)"
+// Trace returns a compact one-line trail "file:line (msg) → file:line (msg)"
 // suitable for a single structured log field at the transport boundary.
 func (e *AppError) Trace() string {
 	if len(e.frames) == 0 {
@@ -376,10 +373,10 @@ func ToAppError(err error) *AppError {
 // surfaced from an HTTP request or a worker. Returns nil for a nil error.
 //
 // Use it anywhere outside the HTTP access-log path that owns its own error
-// line — chiefly the Kafka workers, which have no transport middleware to fold
+// line — chiefly the worker (any broker), which has no transport middleware to fold
 // the cause + trace in for them:
 //
-//	log.Error("kafka: handle message", errors.LogFields(err)...)
+//	log.Error("worker: message parked", errors.LogFields(err)...)
 func LogFields(err error) []any {
 	if err == nil {
 		return nil

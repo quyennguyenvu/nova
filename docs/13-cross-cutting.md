@@ -14,11 +14,11 @@ Templates should never omit these. **Adding a new HTTP framework variant means r
 | Request-scoped logger       | `pkg/logctx` — `logctx.From(ctx)` in inner layers                                                                                   |
 | Request ID                  | `middleware/requestid.go` + `pkg/requestid.With`                                                                                    |
 | Health endpoints            | `transport/http/health/checker.go` — `/healthz`, `/readyz`                                                                          |
-| OpenTelemetry tracing       | `infrastructure/tracing/otel.go` + the framework's OTel middleware, installed first in `router.go`; `trace_id` on every log line    |
-| Input validation            | `go-playground/validator` via `httpwriter.Bind` / `BindQuery`                                                                       |
+| OpenTelemetry tracing       | `infrastructure/tracing/otel.go` + the framework's OTel middleware, ahead of RequestID and Logging; `trace_id` on every log line    |
+| Input validation            | `go-playground/validator` via `httpwriter.Bind` / `BindQuery` (chi: `QueryInt` + `ValidateQuery`)                                   |
 | Error handling + i18n       | `pkg/errors` (AppError, status table) + `pkg/locale` (codes, translations)                                                          |
 | API versioning              | URL path — `transport/http/v1/v1.go` (`/api/v1`)                                                                                    |
-| CORS                        | `middleware/cors.go`, config-driven; an empty list installs nothing, never `*`                                                      |
+| CORS                        | `middleware/cors.go`, config-driven; an empty list allows no origin, never `*`                                                      |
 | Client IP / trusted proxies | `http.trusted_proxies`: gin `SetTrustedProxies`, echo `IPExtractor`, fiber and chi `middleware/clientip.go`                         |
 | Request deadline            | `middleware/timeout.go` — `http.request_timeout` on every ctx; `context.DeadlineExceeded` → 504                                     |
 | Body limit                  | fiber `BodyLimit`; `middleware/bodylimit.go` (gin, chi, echo) → 413 through `httpwriter.Bind`                                       |
@@ -37,23 +37,24 @@ Most of the table above is implemented by four ideas that recur everywhere. If y
 
 ### 1. Everything rides on `context.Context`
 
-Five distinct things travel through ctx, each with an unexported key type in the package that owns it:
+Seven distinct values travel through ctx, each with an unexported key type in the package that owns it:
 
-| Value           | Set by                 | Read by                     | Package                   |
-| --------------- | ---------------------- | --------------------------- | ------------------------- |
-| Request ID      | `middleware.RequestID` | logger, response envelope   | `pkg/requestid`           |
-| Scoped logger   | `middleware.Logging`   | any inner layer             | `pkg/logctx`              |
-| Language        | `middleware.Locale`    | `httpwriter.WriteError`     | `pkg/locale`              |
-| Principal       | `middleware.Auth`      | handlers                    | `domain/identity`         |
-| `AppError` slot | `middleware.Logging`   | `middleware.Logging`, after | `pkg/errors`              |
-| DB transaction  | `TxManager.WithinTx`   | `qx.Q(ctx)`                 | `adapter/repository/{db}` |
+| Value           | Set by                 | Read by                     | Package                     |
+| --------------- | ---------------------- | --------------------------- | --------------------------- |
+| Request ID      | `middleware.RequestID` | logger, response envelope   | `pkg/requestid`             |
+| Scoped logger   | `middleware.Logging`   | any inner layer             | `pkg/logctx`                |
+| Language        | `middleware.Locale`    | `httpwriter.WriteError`     | `pkg/locale`                |
+| Principal       | `middleware.Auth`      | usecase (`requireSelf`)     | `domain/identity`           |
+| Principal slot  | `middleware.Logging`   | `middleware.Logging`, after | `transport/http/middleware` |
+| `AppError` slot | `middleware.Logging`   | `middleware.Logging`, after | `pkg/errors`                |
+| DB transaction  | `TxManager.WithinTx`   | `qx.Q(ctx)`                 | `adapter/repository/{db}`   |
 
 Two rules make this safe rather than a global-variable bag:
 
 - **The key type is always an unexported `struct{}`** (`type langCtxKey struct{}`), so no other package can collide with it or read the value without going through the accessor.
 - **The accessors live with the *value*, not with the setter.** `pkg/locale` owns `WithLanguage`/`LanguageFromContext` even though only middleware calls the setter — that's what lets `pkg/httputil` read the language without importing a transport package.
 
-The one exception is `pkg/errors`'s `appErrSlot`, which is a *mutable* pointer in ctx. It exists because a value must flow back *up* through an immutable context ([10](10-shared-packages.md#the-apperror-context-stash)); it is the only place the codebase does this, deliberately.
+The exceptions are `pkg/errors`'s `appErrSlot` and the HTTP middleware's principal slot, which are *mutable* pointers in ctx. They exist because a value must flow back *up* through an immutable context to the access log ([10](10-shared-packages.md#the-apperror-context-stash)); they are the only two places the codebase does this, deliberately.
 
 **Fiber caveat:** the `context.Context` is `c.UserContext()`, not `c.Context()`. Every handler and middleware uses `SetUserContext`/`UserContext` — using the fasthttp context silently drops all of the above ([07](07-transport-layer.md#handlergo)).
 
@@ -76,10 +77,10 @@ errors.Wrapf(err,     errors.Wrapf(err,       httpwriter.WriteError()
 Why this and not log-at-each-layer:
 
 - **One line per failed request**, so error-rate alerting counts requests, not layers.
-- **The frame trail replaces the stack**: `app_trace` shows `user/service.go:67 → v1/user/handler.go:36` — the path through *your* code, which is the part you read.
+- **The frame trail replaces the stack**: `app_trace` shows `postgres/user_repository.go:52 (user repo: select id=1) → user/service.go:67 (get user id=1)` — the path through *your* code, which is the part you read.
 - **Correlation is free**: `request_id` and `trace_id` are on the scoped logger, so every line the request did emit joins up, and `requestId` in the response body lets a user hand you the key. The access line adds `route` (the matched pattern) and, after `Auth`, `user_id`.
 
-The three deliberate exceptions are all "the error is being swallowed, so it must be logged here": the best-effort event publish ([06](06-usecase-layer.md)), cache read/refill failures ([08](08-adapter-layer.md)), and panic recovery. A swallowed error that isn't logged is invisible.
+The deliberate exceptions are all "the error is being swallowed, so it must be logged here": the best-effort event publish ([06](06-usecase-layer.md)), cache read/refill failures ([08](08-adapter-layer.md)), and panic recovery. The worker's `audit: duplicate delivery ignored` info line is the fourth: a redelivery is success, so nothing reaches the boundary to log it. A swallowed error that isn't logged is invisible.
 
 The worker has its own boundary line: `Worker.dispatch` logs `worker: message handled|parked|abandoned` once per message with the topic, the broker position (Kafka partition/offset or RabbitMQ delivery tag), the producer's `request_id`/`trace_id`, `attempts` and `duration_ms`, using `errors.LogFields(err)` for the failure fields so one log query works across HTTP and worker ([10](10-shared-packages.md#logfields--for-transports-without-middleware)). Each failed attempt before that adds one `worker: attempt failed` warn line with the attempt number and the wait before the next; `parked` is the error-level line to alert on, `abandoned` only means shutdown interrupted a message that the broker will redeliver ([07](07-transport-layer.md#one-policy-three-outcomes)).
 
@@ -124,7 +125,7 @@ Collected here because it's spread across layers by design:
 | Password length         | Rejected above 72 bytes (the bcrypt bound) as a 400, never a 500                       |
 | Request time            | Deadline on every request ctx (`http.request_timeout`)                                 |
 | Readiness detail        | `/readyz` says `ok`/`fail` per dependency; the error text goes to the log              |
-| CORS                    | Explicit origin list; an empty list installs no CORS at all, never `*`                 |
+| CORS                    | Explicit origin list; an empty list allows no origin, never `*`                        |
 | Validation error detail | Generic localized 400; the field-level cause goes to the log                           |
 | Secrets in logs         | `c.Path()` not `OriginalURL()` — query strings never logged                            |
 | Secrets in git          | `.env` gitignored; JWT keys are env-only (no YAML tag)                                 |
@@ -139,7 +140,7 @@ Each of these is documented at its source: [06](06-usecase-layer.md#login--unifo
 ```bash
 Request
   │  X-Request-ID (validated, else generated) ─▶ ctx + response header + body.requestId
-  │  traceparent                          ─────▶ OTel server span (middleware runs first) → trace_id
+  │  traceparent                          ─────▶ OTel server span (before RequestID/Logging) → trace_id
   ▼
 scoped logger = base.With(request_id, trace_id, method, path)
   │
@@ -152,9 +153,9 @@ one access line: status, route, duration_ms, client_ip, user_agent, [user_id],
 
 Three properties this buys:
 
-- **Log → trace in one click**: `trace_id` is on every line once a span exists — the framework's OTel middleware runs before everything else, so an inbound `traceparent` or a configured exporter is enough — and a log search jumps to Jaeger/Tempo.
+- **Log → trace in one click**: `trace_id` is on every line once a span exists — the framework's OTel middleware runs ahead of RequestID and Logging, so an inbound `traceparent` or a configured exporter is enough — and a log search jumps to Jaeger/Tempo.
 - **User report → full replay**: the `requestId` in the response body is the log search key.
-- **Signal, not volume**: probes and `OPTIONS` emit no line; a plain validation 400 omits `app_err`/`app_trace`, so client-driven noise doesn't move error-rate alerts.
+- **Signal, not volume**: probes and `OPTIONS` emit no line, and 4xx lines log at `Warn`, so client-driven noise doesn't move error-rate alerts.
 
 Spans are opened by hand in usecases/repositories where they're worth it:
 
@@ -178,7 +179,7 @@ Being explicit about the gaps, so nobody assumes coverage that isn't there:
 - **No general rate limiter.** Only login and registration are throttled (HTTP and gRPC), and only per-process. Global shedding belongs upstream (CDN, ingress) where it can drop traffic before it costs you a goroutine.
 - **No outbox.** Event publishing is best-effort-with-logging. If an event must not be lost, write it to a table in the same transaction as the aggregate and relay it separately.
 - **No refresh tokens.** `AccessTokenTTL` only; add a session id claim to `AccessTokenClaims` and `identity.UserPrincipal` together to build on.
-- **No authorization.** `middleware.Auth` establishes *who* the caller is; deciding *what* they may do is a domain concern with no scaffold.
+- **No role or permission model.** `middleware.Auth` establishes *who* the caller is and `requireSelf` enforces ownership; anything richer (roles, an admin audience) goes in the usecase and has no scaffold.
 - **gRPC is unary-only, and its health service reports process liveness.** Stream interceptors and a dependency-aware readiness check are yours to add ([07](07-transport-layer.md#internaltransportgrpc)).
 - **`transport/cronjob/` and `cmd/cron.go` are not rendered.** The `cron.go.tmpl` template exists but is not wired into `buildFileList`.
 - **Not scaffolded, documented as patterns**: `domain/valueobject/`, `domain/service/`, `domain/event/` as a package, `adapter/external/`.

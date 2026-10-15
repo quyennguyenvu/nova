@@ -28,8 +28,8 @@ RUN apk add --no-cache ca-certificates tzdata && \
 
 WORKDIR /app
 
-# The YAML config is embedded in the binary; only the migrations ride along
-# for a migrate job that runs from this image.
+# The YAML config is embedded in the binary.{{if .HasSQL}} The migrations ride
+# along so a migrate job can copy them (this image has no migrate binary).{{end}}
 COPY --from=builder /out/api /app/api
 {{- if .HasSQL}}
 {{- if eq .QueryGen "sqlc"}}
@@ -49,8 +49,8 @@ ENV SERVER_PORT=${SERVER_PORT}
 EXPOSE ${SERVER_PORT}
 
 # Probes the readiness endpoint, not the liveness one, so the container is
-# only "healthy" once DB/cache are reachable. start-period=10s gives the app
-# time to dial dependencies on cold boot.
+# only "healthy" once {{if or .HasDatabase .HasRedis}}its database/cache are reachable{{else}}the server answers{{end}}. start-period=10s gives
+# the app time to start on cold boot.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:${SERVER_PORT}/readyz >/dev/null 2>&1 || exit 1
 {{- end}}

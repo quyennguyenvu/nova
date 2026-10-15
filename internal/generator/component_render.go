@@ -17,7 +17,7 @@ var skelFS embed.FS
 
 // renderSpec maps one embedded template to an output path.
 type renderSpec struct {
-	tmpl         string // path within componentTemplateFS
+	tmpl         string // path within skelFS
 	outRel       string // output path relative to baseDir
 	skipIfExists bool   // for shared/project-level files — don't clobber on re-run
 }

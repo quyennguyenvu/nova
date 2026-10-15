@@ -6,7 +6,8 @@ Cross-cutting utilities with **no layer affiliation**. Nothing here imports `int
 pkg/
 ├── errors/           # AppError + caller trace + locale→status table
 ├── locale/           # error codes, translations, language ctx
-├── httputil/         # framework-free response envelope + request-ID ctx
+├── httputil/         # framework-free envelope + X-Request-ID header name (HTTP only)
+├── requestid/        # transport-neutral correlation ID in ctx
 ├── logctx/           # request-scoped logger through context
 └── observability/     # Logger port
 ```
@@ -87,7 +88,7 @@ return errors.Wrapf(err, "register user email=%s: lookup", input.Email)
 // authoritative.
 ```
 
-That is the rule the whole design rests on: **classify once, at the layer that knows what went wrong.** Twelve layers of `Wrapf` on a 404 still produce a 404. `Wrap`/`Wrapf` return `error`, not `*AppError`, on purpose: a nil `*AppError` stored in an `error` is not nil, so returning the concrete type would make `return errors.Wrap(err, "…")` on a nil `err` report a failure. As `error`, `Wrap(nil, …)` is a true nil and the pattern is safe unconditionally; `errors.ToAppError` or `errors.As` recover the concrete type at the boundary (`errors_test.go` pins both). `L` keeps returning `*AppError` because it never returns nil and `.WithCause` chains off it.
+That is the rule the whole design rests on: **classify once, at the layer that knows what went wrong.** Twelve layers of `Wrapf` on a 404 still produce a 404. `Wrap`/`Wrapf` return `error`, not `*AppError`, on purpose: a nil `*AppError` stored in an `error` is not nil, so returning the concrete type would make `return errors.Wrap(err, "…")` on a nil `err` report a failure. As `error`, `Wrap(nil, …)` is a true nil and the pattern is safe unconditionally; `errors.ToAppError` or `errors.As` recover the concrete type at the boundary (`TestWrapNilIsNil` and `TestWrapKeepsClassification` in `errors_test.go` pin it). `L` keeps returning `*AppError` because it never returns nil and `.WithCause` chains off it.
 
 `WithCause` attaches a diagnostic cause **without** changing the classification:
 
@@ -104,7 +105,7 @@ This is what lets `httpwriter.Bind` return an identical generic 400 to every cli
 ### The frame trail
 
 ```go
-// Trace returns a compact one-line trail "file:line(msg) → file:line(msg)"
+// Trace returns a compact one-line trail "file:line (msg) → file:line (msg)"
 // suitable for a single structured log field at the transport boundary.
 ```
 
@@ -189,7 +190,7 @@ type appErrSlot struct{ err *AppError }
 type appErrSlotKey struct{}
 ```
 
-A pointer-to-struct in ctx is a mutable channel _upward_ through an immutable value. It's the one place the codebase does this, and it's what buys "handlers never log": `Logging` installs the slot, `httpwriter.WriteError` fills it, `Logging` reads it after `c.Next()`. `StashAppError` no-ops when the slot is absent, so tests and background contexts are safe.
+A pointer-to-struct in ctx is a mutable channel _upward_ through an immutable value. It's one of two such slots — the other hands the authenticated principal to the access log — and it's what buys "handlers never log": `Logging` installs the slot, `httpwriter.WriteError` fills it, `Logging` reads it after `c.Next()`. `StashAppError` no-ops when the slot is absent, so tests and background contexts are safe.
 
 ## pkg/locale
 
@@ -257,9 +258,9 @@ This is the mechanism behind "business code never names a language". `errors.L(l
 // translations is populated by NewMapping() — no init() side effects.
 var translations = map[Language]Mapping{}
 
-// NewMapping registers all language translations.
-// Call this ONCE at app startup (e.g. in main.go or DI provider).
-func NewMapping() { enMapping(); viMapping() }
+// NewMapping registers all language translations. Safe to call more than
+// once; only the first call does work.
+func NewMapping() { mappingOnce.Do(func() { enMapping(); viMapping() }) }
 ```
 
 No `init()`, so registration order is explicit and testable. `cmd/root.go` calls it ([11](11-di-and-entrypoints.md)) — a generated project that forgets to would serve `"unknown error: -1100"`.
@@ -312,20 +313,6 @@ That paragraph is the operational payoff of the whole logging design: one envelo
 
 The package is HTTP-only and is rendered only for HTTP projects. It owns the envelope and the `X-Request-ID` header name (`RequestIDHeader`); the correlation value itself lives in `pkg/requestid` so the worker and the gRPC interceptors never import the HTTP envelope.
 
-## pkg/requestid
-
-The transport-neutral home of the correlation ID. Rendered for every project.
-
-```go
-// Package requestid carries the per-request correlation ID through
-// context.Context. It is transport-neutral: the HTTP RequestID middleware, the
-// gRPC RequestID interceptor and the worker dispatcher all set it at their
-// boundary, the publishers copy it onto outgoing messages, and any inner layer
-// can read it without importing a transport package.
-```
-
-`With(ctx, id)` / `From(ctx)` follow the `pkg/logctx` naming. `Valid(id)` guards the reuse of an inbound id (1–128 characters of `[A-Za-z0-9._-]`); each boundary mints a UUID when it rejects one. The carriers stay with their transports: the HTTP header name in `pkg/httputil`, the gRPC metadata key in `transport/grpc/interceptor`, the message header in `transport/worker`. The publishers copy the current id onto outgoing messages as the `x-request-id` header so a consumer-side line joins the request that produced the event.
-
 ### Two pagination metas, two audiences
 
 ```go
@@ -363,6 +350,20 @@ type PageMeta struct {
 ```
 
 So the HTTP status says _category_ (404) and `error.code` says _reason_ (-1100 `UserNotFound` vs -1003 `RecordNotFound`) — a client can branch on the specific code without string matching. The nil-app path means a bug in the caller still produces a valid, translated envelope.
+
+## pkg/requestid
+
+The transport-neutral home of the correlation ID. Rendered for every project.
+
+```go
+// Package requestid carries the per-request correlation ID through
+// context.Context. It is transport-neutral: the HTTP RequestID middleware, the
+// gRPC RequestID interceptor and the worker dispatcher all set it at their
+// boundary, the publishers copy it onto outgoing messages, and any inner layer
+// can read it without importing a transport package.
+```
+
+`With(ctx, id)` / `From(ctx)` follow the `pkg/logctx` naming. `Valid(id)` guards the reuse of an inbound id (1–128 characters of `[A-Za-z0-9._-]`); each boundary mints a UUID when it rejects one. The carriers stay with their transports: the HTTP header name in `pkg/httputil`, the gRPC metadata key in `transport/grpc/interceptor`, the message header in `transport/worker`. The publishers copy the current id onto outgoing messages as the `x-request-id` header so a consumer-side line joins the request that produced the event.
 
 ## pkg/observability — the Logger port
 

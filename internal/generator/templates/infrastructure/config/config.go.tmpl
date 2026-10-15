@@ -37,9 +37,11 @@ type Config struct {
 	AppName    string         `{{.ConfigFormat}}:"app_name"    env:"APP_NAME"`
 	AppVersion string         `{{.ConfigFormat}}:"app_version" env:"APP_VERSION"`
 	AppEnv     string         `{{.ConfigFormat}}:"app_env"     env:"APP_ENV"`
-	// ShutdownTimeout bounds the whole cleanup chain (fx's Stop budget); keep
+{{- if .UseFx}}
+	// ShutdownTimeout is fx's Stop budget for the whole cleanup chain; keep
 	// it above the server's shutdown_timeout plus the dependency closes.
 	ShutdownTimeout time.Duration `{{.ConfigFormat}}:"shutdown_timeout" env:"APP_SHUTDOWN_TIMEOUT"`
+{{- end}}
 	Log        LogConfig      `{{.ConfigFormat}}:"log"`
 	Tracing    TracingConfig  `{{.ConfigFormat}}:"tracing"`
 	JWT        JWTConfig      `{{.ConfigFormat}}:"jwt"`

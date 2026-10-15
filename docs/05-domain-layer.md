@@ -154,15 +154,15 @@ import (
     "{module}/internal/domain/entity"
 )
 
-// UserFilter defines filtering/pagination for user queries. Part of the
-// repository contract — no framework tags. Zero values mean "no filter".
+// UserFilter is the admin list's filter: an optional exact-match email plus
+// the page window. An empty Email means no email filter; Limit must be
+// positive (the usecase always sets it).
 type UserFilter struct {
     Email  string
     Limit  int32
     Offset int32
 }
 
-// UserRepository defines the data access contract for users.
 type UserRepository interface {
     Create(ctx context.Context, user *entity.User) error
     GetByID(ctx context.Context, id int64) (*entity.User, error)
@@ -264,7 +264,7 @@ type PricingService interface {
 
 ## internal/domain/event/ — domain events
 
-**Not scaffolded as a package.** `nova new` puts one publisher port + its event struct per aggregate directly in `domain/` — `domain.UserPublisher` and `domain.UserCreated` in [domain/user_publisher.go](../internal/generator/templates/domain/user_publisher.go.tmpl) — matching how `domain.UserRepository` lives in `domain/user.go`:
+**Not scaffolded as a package.** When `--queue` is set, `nova new` puts one publisher port + its event struct per aggregate directly in `domain/` — `domain.UserPublisher` and `domain.UserCreated` in [domain/user_publisher.go](../internal/generator/templates/domain/user_publisher.go.tmpl) — matching how `domain.UserRepository` lives in `domain/user.go`:
 
 ```go
 // internal/domain/user_publisher.go — what ships today

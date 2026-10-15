@@ -39,8 +39,8 @@ Use "{{.CommandPath}} [command] --help" for more info.
 		addCommand(),
 	)
 
-	// cobra already prints "Error: ..." (and usage) to stderr when a command
-	// returns an error; exit non-zero without dumping a panic stack trace.
+	// cobra already prints "Error: ..." to stderr when a command returns an
+	// error; exit non-zero without dumping a panic stack trace.
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

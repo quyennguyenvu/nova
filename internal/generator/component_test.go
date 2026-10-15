@@ -154,7 +154,7 @@ func TestMapFieldTypes(t *testing.T) {
 		},
 		{"postgres", "json.RawMessage", "JSONB", "row.Name", "e.Name"},
 		{"mysql", "string", "VARCHAR(255)", "row.Name", "e.Name"},
-		{"mysql", "time.Time", "DATETIME", "row.Name", "e.Name"},
+		{"mysql", "time.Time", "DATETIME(6)", "row.Name", "e.Name"},
 		{"mysql", "json.RawMessage", "JSON", "row.Name", "e.Name"},
 	}
 	for _, c := range cases {
@@ -445,7 +445,7 @@ func TestGenerateWorkerScaffoldsFxDI(t *testing.T) {
 	f := filepath.Join(dir, di, "fx.go")
 	assertFileContains(t, f, "func InitializeHTTPServer(")
 	assertFileContains(t, f, "func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error)")
-	assertFileContains(t, f, "fx.Populate(&log, &w, &tracer, &cfg)")
+	assertFileContains(t, f, "fx.Populate(&log, &tracer, &w, &cfg)")
 	// fx populates via modules (TODO in the scaffold), so no wire-style
 	// workerInfraSet/provideWorkerHandlers and no standalone worker_*.go files.
 	for _, fn := range []string{"worker_app.go", "worker_wire.go", "worker_fx.go", "worker_provider.go"} {

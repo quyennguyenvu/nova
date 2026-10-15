@@ -12,8 +12,8 @@ import (
 	"{{.ModuleName}}/pkg/errors"
 )
 
-// drainTimeout bounds how long shutdown waits for the consume loop to finish
-// the message it is on before the consumer is closed.
+// drainTimeout bounds how long shutdown waits for the consume loop to return
+// before the consumer is closed.
 const drainTimeout = 30 * time.Second
 
 // errConsumerStopped reports a consume loop that returned without an error
@@ -26,10 +26,12 @@ var errConsumerStopped = stderrors.New("worker: consumer stopped before shutdown
 // RunE) can set a non-zero exit code.
 //
 // Mirrors RunHTTPServer's lifecycle: signal.NotifyContext owns shutdown and
-// DI cleanup runs in reverse construction order (broker first, then DB).
+// DI cleanup runs in reverse construction order (the DB pool and broker
+// clients first, the tracer last so the final spans still flush).
 // The consume loop runs in a goroutine so we can select on ctx.Done, and
-// shutdown waits for it to finish its in-flight message before closing the
-// consumer, so the final ack or offset commit is not lost.
+// shutdown waits for it to return before closing the consumer: the cancelled
+// in-flight message is left for redelivery, and every ack or offset commit
+// already decided still lands.
 func RunWorker() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

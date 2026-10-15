@@ -398,7 +398,7 @@ func (g *Generator) grpcFiles() []templateFile {
 // httpMiddlewareFiles lists the middleware package: framework-prefixed
 // sources with clean output names, the framework-agnostic principal slot,
 // and the extras a framework needs only when it lacks a native mechanism
-// (body limit outside fiber, client IP for chi).
+// (body limit outside fiber, client IP for chi and fiber).
 func (g *Generator) httpMiddlewareFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{

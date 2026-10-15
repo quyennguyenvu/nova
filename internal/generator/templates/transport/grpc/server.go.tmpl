@@ -35,9 +35,9 @@ type Server struct {
 	Health *health.Server
 }
 
-// New builds the server. Interceptor order mirrors the HTTP middleware
-// chain: request id → locale → access log → recovery → deadline → throttle
-// → auth, so a throttled or unauthenticated call is logged and a panic
+// New builds the server. Interceptor order follows the HTTP middleware
+// chain, except that Locale runs second: request id → locale → access log →
+// recovery → deadline → throttle → auth, so a throttled or unauthenticated call is logged and a panic
 // anywhere inside is recovered. Only unary interceptors are installed (the
 // health Watch and reflection streams need none); add stream counterparts
 // with the first streaming RPC.

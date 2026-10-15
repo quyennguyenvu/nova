@@ -54,7 +54,7 @@ General rule: if a package imports `internal/` or a specific framework, it must 
 
 Locale codes are **consumed by multiple layers**:
 
-- **usecase/** returns `errors.L(locale.UserNotFound)`
+- **usecase/** returns `errors.L(locale.UserNotFound)` (`Get` and `Update` on a missing id)
 - **transport/** translates codes to HTTP/gRPC responses
 
 `pkg/` (or an equivalent like `internal/shared/`) signals: "this package has no layer affiliation — it's a cross-cutting utility." It depends on nothing inside `internal/`.
@@ -167,17 +167,19 @@ No domain interface needed — the verifier is used directly by middleware:
 
 ```go
 // internal/infrastructure/jwt/service.go — used directly by transport middleware
-package jwt
+package jwtsec
 
-func (s *TokenService) Verify(token string) (*Claims, error) { ... }
+func (s *TokenService) ParseAndVerifyAccessToken(
+    ctx context.Context, tokenStr string,
+) (*identity.UserPrincipal, error) { ... }
 ```
 
 ```go
 // internal/transport/http/middleware/auth.go
-func Auth(tokenSvc *jwt.TokenService) fiber.Handler {
+func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
     return func(c *fiber.Ctx) error {
-        claims, err := tokenSvc.Verify(bearer(c.Get("Authorization")))
-        // put the principal in ctx (domain/identity), then c.Next()
+        principal, err := tokenSvc.ParseAndVerifyAccessToken(c.UserContext(), token)
+        // put the principal in ctx (identity.WithUserPrincipal), then c.Next()
     }
 }
 ```
@@ -219,7 +221,7 @@ domain/
 ├── order.go             # OrderRepository + OrderFilter
 ├── payment.go           # PaymentGateway (usecase calls it)
 ├── notification.go      # NotificationSender (usecase calls it)
-├── auth.go              # TokenGenerator (usecase calls it for login)
+├── security/            # TokenIssuer (token.go), PasswordHasher (hasher.go)
 ├── service/             # Domain service interfaces (business rules)
 ├── event/               # Domain events + EventPublisher interface
 └── valueobject/         # Value objects (Email, Money, etc.)

@@ -162,7 +162,7 @@ func promptOptionalFeatures(cfg *config.ProjectConfig) error {
 }
 
 // SupportedComponents is the menu `nova add` offers — exactly the component
-// generators implemented today. Keep in lockstep with the dispatch in runAdd
+// generators implemented today. Keep in lockstep with dispatchAdd in cmd/add.go
 // and the Generate* methods in internal/generator/component.go.
 //
 //nolint:gochecknoglobals // immutable menu; treated as a const.

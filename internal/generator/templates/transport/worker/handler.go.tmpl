@@ -11,9 +11,9 @@ package worker
 import "context"
 
 // Handler processes one event off the broker. Topic is the wire-level
-// identifier (Kafka topic / RabbitMQ routing key). Handle returns nil to
-// signal a successful ack; a non-nil error triggers a broker-specific
-// nack/retry path.
+// identifier (Kafka topic / RabbitMQ routing key). Handle returns nil on
+// success. A plain error is retried under the worker Policy, then parked;
+// wrap input that can never succeed in Poison to park it at once.
 type Handler interface {
 	Topic() string
 	Handle(ctx context.Context, payload []byte) error

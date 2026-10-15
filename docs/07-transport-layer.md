@@ -23,11 +23,11 @@ transport/
 Rendered from the `{framework}_router.go.tmpl` variant. It builds the framework instance and nothing else — port binding and graceful shutdown belong to `infrastructure/server` ([09](09-infrastructure-layer.md)).
 
 ```go
-// Registrar attaches a feature's routes to a router subtree. The version
-// package (transport/http/v1) provides a concrete Registrar implementing
-// this interface. Prefix is mounted as a subgroup before Register is called.
-// Multiple Registrars may share a Prefix; the slice order in NewRouter
-// determines mount order.
+// Registrar attaches a feature's routes to a router subtree. Each feature
+// package (transport/http/v1/<feature>) provides a concrete Registrar; its
+// Prefix() (the embedded v1.Prefixed) is mounted as a subgroup before
+// Register is called. Multiple Registrars may share a Prefix; the slice
+// order in NewRouter determines mount order.
 type Registrar interface {
     Prefix() string
     Register(fiber.Router)
@@ -72,6 +72,7 @@ func NewRouter(
 
 | Position | Middleware  | Why here                                                                                   |
 | -------- | ----------- | ------------------------------------------------------------------------------------------ |
+| 0        | OTel        | Opens the server span so `RequestID` and `Logging` see `trace_id`; probes are skipped      |
 | 1        | `RequestID` | Every later layer (including the logger) must see the ID                                   |
 | 2        | `Logging`   | Wraps everything below to measure duration and emit **one** log line                       |
 | 3        | `Recovery`  | Inside `Logging`, so a panic still produces an access log                                  |
@@ -80,9 +81,9 @@ func NewRouter(
 | 6        | `CORS`      | After the observability layers, before app logic                                           |
 | 7        | `Locale`    | Populates ctx language for `httpwriter.WriteError` to read back                            |
 
-fiber and chi install one more middleware before all of these: `ClientIP`, which resolves the client address through `http.trusted_proxies` (the right-most `X-Forwarded-For` hop that is not itself a trusted proxy) so the access line and the login limiter read the same value; chi rewrites `RemoteAddr`, fiber stores a copied string read back with `middleware.RemoteIP`. fiber needs it because its own `c.IP()` returns the header verbatim, client-controlled left-most entry included, once any proxy is trusted. gin and echo resolve the same way natively (`SetTrustedProxies`, `IPExtractor`); with no trusted proxies every framework ignores `X-Forwarded-For`.
+fiber and chi install one more middleware before even the OTel one: `ClientIP`, which resolves the client address through `http.trusted_proxies` (the right-most `X-Forwarded-For` hop that is not itself a trusted proxy) so the access line and the login limiter read the same value; chi rewrites `RemoteAddr`, fiber stores a copied string read back with `middleware.RemoteIP`. fiber needs it because its own `c.IP()` returns the header verbatim, client-controlled left-most entry included, once any proxy is trusted. gin and echo resolve the same way natively (`SetTrustedProxies`, `IPExtractor`); with no trusted proxies every framework ignores `X-Forwarded-For`.
 
-Framework-raised errors take one path per framework into the same envelope: fiber's `ErrorHandler` and echo's `HTTPErrorHandler` are `httpwriter.HandleError`, gin's `NoRoute`/`NoMethod` (with `RedirectTrailingSlash` off, so `/api/v1/users` is served rather than redirected) and chi's `NotFound`/`MethodNotAllowed` call `httpwriter.WriteError` with `errors.FromStatus(code)`. A client never sees a framework's plain-text 404.
+Framework-raised errors take one path per framework into the same envelope: fiber's `ErrorHandler` and echo's `HTTPErrorHandler` are `httpwriter.HandleError`, gin's `NoRoute`/`NoMethod` (with redirects off, so `/api/v1/users/` gets the envelope 404, not a redirect) and chi's `NotFound`/`MethodNotAllowed` call `httpwriter.WriteError` with `errors.FromStatus(code)`. A client never sees a framework's plain-text 404.
 
 `registrars` is a **slice, not a map**, so mount order is deterministic — map iteration order would make route shadowing nondeterministic between restarts.
 
@@ -144,9 +145,9 @@ type ListQuery struct {
 Two rules visible in that comment block:
 
 - **One DTO, every framework.** `dto.go` and `assembler.go` are the only files in the feature package with no framework variant — the dual `query:`/`form:` tags are what buy that.
-- **Validation here is shape, not policy.** Formats and enums (`email`, `min=8` on a password) belong to the wire contract. Magnitude (`per_page` caps) is usecase policy, so gRPC and CLI callers inherit the same limits ([06](06-usecase-layer.md#list--page-based-policy-clamped-in-the-usecase)).
+- **Validation here is shape, not policy.** Formats and enums (`email`, `min=8` on a password) belong to the wire contract. Magnitude (`perPage` caps) is usecase policy, so gRPC and CLI callers inherit the same limits ([06](06-usecase-layer.md#list--page-based-policy-clamped-in-the-usecase)).
 
-`LoginResponse` follows the RFC 6749 token-endpoint shape (`accessToken`, `tokenType`, `expiresIn`) so OAuth-aware clients consume it directly. `PublicUserResponse` is the name only — the public list is unauthenticated, so it exposes no email or id.
+`LoginResponse` carries the RFC 6749 token-endpoint fields in the API's camelCase (`accessToken`, `tokenType`, `expiresIn`), plus `user`. `PublicUserResponse` is the name only — the public list is unauthenticated, so it exposes no email or id.
 
 ### assembler.go — the only place that maps
 
@@ -180,7 +181,7 @@ func ToPublicUserListMeta(out *usersvc.PublicListOutput) httputil.CursorMeta {
 
 `tokenType` is hardcoded to `"Bearer"` in `ToLoginResponse` — a wire-format constant, so it belongs here rather than in the usecase's `LoginOutput`.
 
-There is no request→input assembler function: the handler builds `usersvc.RegisterInput{…}` inline. Two-field mappings do not earn a named function.
+There is no request→input assembler function: the handler builds `usersvc.RegisterInput{…}` inline. Small mappings do not earn a named function.
 
 ### handler.go
 
@@ -265,7 +266,7 @@ Shipped route table:
 
 The framework-bound half of the response story. The envelope itself is framework-free in `pkg/httputil` ([10](10-shared-packages.md)); this file binds requests and serializes that envelope through the chosen framework. [04](04-placement-rationale.md#why-httpwriter-is-under-transporthttp-not-pkg) explains why it can't live in `pkg/`.
 
-**Writers** — all three stamp the request ID onto the envelope from ctx:
+**Writers** — all three stamp the request ID onto the envelope from ctx (chi's `WriteJSON`/`WriteListJSON` read the `X-Request-ID` response header instead):
 
 ```go
 func WriteJSON(c *fiber.Ctx, status int, data any) error
@@ -293,7 +294,7 @@ func WriteError(c *fiber.Ctx, app *errors.AppError) error {
 
 The stash is the mechanism behind "handlers never log": `WriteError` is the single funnel every error passes through, so it is the one place that can hand the error to the logging middleware.
 
-**Binders** — `Bind[T]` (body), `BindQuery[T]` (query string), `ParseID` (path param). All three collapse every failure to the same generic localized 400:
+**Binders** — `Bind[T]` (body), `BindQuery[T]` (query string; chi has no struct binder, so its handlers use `QueryInt` + `ValidateQuery`), `ParseID` (path param). Every parse or validation failure becomes the same generic localized 400; on gin, chi and echo an over-limit body is 413:
 
 ```go
 // A parse failure and a validation failure both map to the same generic
@@ -316,7 +317,7 @@ Uniform messages mean a client can't probe struct field names or binder internal
 
 ## internal/transport/http/middleware/
 
-Eight middlewares are rendered for every framework from `{framework}_{name}.go.tmpl` variants (`requestid`, `logging`, `recovery`, `timeout`, `cors`, `locale`, `auth`, `loginlimit`), plus `bodylimit` for gin, chi and echo and `clientip` for chi, where the framework has no native equivalent.
+Eight middlewares are rendered for every framework from `{framework}_{name}.go.tmpl` variants (`requestid`, `logging`, `recovery`, `timeout`, `cors`, `locale`, `auth`, `loginlimit`), plus `bodylimit` for gin, chi and echo (fiber caps the body in `fiber.Config`), `clientip` for fiber and chi (gin and echo resolve it natively), and the framework-free `principal.go`.
 
 ### requestid.go
 
@@ -343,10 +344,10 @@ Six decisions in this file are worth keeping when you extend it:
 - **`client_ip`/`user_agent` are on the access line only**, not on the scoped logger. They're entry-point facts; repeating them on every inner log line is pure volume. `client_ip` is the address the framework resolved through the trusted-proxy list (chi: `RemoteAddr` after `ClientIP`), without a port.
 - **`/healthz`, `/readyz` and `OPTIONS` emit no line.** Kubernetes probes every few seconds and preflights carry no app signal — both would drown real traffic. They still run through `RequestID` and `Recovery`, so the safety net is intact; only the log line is suppressed.
 - **Level follows status**: `Info` < 400, `Warn` 4xx, `Error` 5xx. fiber and echo resolve a returned error inside the middleware (`c.App().ErrorHandler`, `c.Error`) before reading the status, so a router 404 logs as a 404 at `Warn` rather than a 200 at `Error`.
-- **`route` and `path` are both on the access line.** `path` is the raw request path (also on the scoped logger); `route` is the matched pattern (`/api/v1/users/:id`) for low-cardinality dashboards. All four frameworks agree on this.
+- **`route` and `path` are both on the access line.** `path` is the raw request path (also on the scoped logger); `route` is the matched pattern (`/api/v1/users/:id`; chi `/api/v1/users/{id}`) for low-cardinality dashboards.
 - **`user_id` comes from `Auth` through a slot.** `Auth` runs inside `Logging` and derives a child context only inner handlers see, so the only way the access line can say who called is the mutable slot `Logging` installs and `Auth` fills (`rememberPrincipal`).
 
-When the stash holds an `AppError` the line gains `app_code` (+ `app_locale`), and gains `app_err`/`app_trace` only when there is something to diagnose — a 5xx, or any error carrying an inner cause. A plain validation 400 stays lean, so client-driven noise doesn't move your error-rate alerts.
+When the stash holds an `AppError` the line gains `app_code` (+ `app_locale`), and gains `app_err`/`app_trace` only when there is something to diagnose — a 5xx, or any error carrying an inner cause (binder 400s do, so the failing field is logged). A 4xx raised without a cause stays lean, and every 4xx logs at `Warn`, so client mistakes never reach 5xx alerts.
 
 ### recovery.go
 
@@ -419,7 +420,7 @@ func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 
 `bearerToken` compares the scheme case-insensitively (RFC 9110), and every 401 carries an RFC 6750 challenge: `Bearer` when the credential is missing, `Bearer error="invalid_token"` when it was rejected.
 
-Handlers read the caller via `identity.UserPrincipalFromContext(ctx)` — they never see a token, and the usecase layer never learns that JWT exists.
+The usecase reads the caller via `identity.UserPrincipalFromContext(ctx)` (`requireSelf`); handlers never touch it, and the usecase never learns that JWT exists.
 
 ### loginlimit.go
 
@@ -464,7 +465,7 @@ Request (Accept-Language: vi-VN)
 │   1. errors.StashAppError(ctx, app)  → for the access log    │
 │   2. locale.LanguageFromContext(ctx) → LangVi                │
 │   3. httputil.ErrorResponseFromApp(app, LangVi)              │
-│        translates app.Locale + app.LocaleArgs                │
+│        translates app.Locale + app.Args                      │
 │   4. c.Status(app.Code)   ← set by errors.L via              │
 │                             localeHTTPStatus                 │
 │                                                              │
@@ -504,7 +505,7 @@ Framework-free (no variant prefix), so all four framework routers share it.
 func (*Checker) Liveness() Status { return Status{OK: true} }
 ```
 
-`Readiness(ctx)` pings every configured dependency under a **1-second deadline** and returns `OK=false` if any fails, with a per-check `details` map so an operator sees _which_ dependency is down without log archaeology. The router maps `!OK` to 503.
+`Readiness(ctx)` pings the database and Redis, when configured (search and broker clients are not probed), under one shared **1-second deadline** and returns `OK=false` if any fails, with a per-check `details` map so an operator sees _which_ dependency is down without log archaeology. The router maps `!OK` to 503.
 
 The liveness/readiness split matters operationally: coupling liveness to the database means a database blip restarts every healthy pod, turning a degradation into an outage.
 
@@ -523,11 +524,11 @@ transport/grpc/
 
 The contract is `api/proto/user/v1/user.proto` (package `user.v1`, one RPC per HTTP endpoint: `CreateUser`, `Login`, `GetUser`, `UpdateUser`, `DeleteUser`, `ListUsers`, `ListPublicUsers`). `make gen` runs `buf generate`, which writes `api/gen/user/v1` through version-pinned `go run` plugins ([12](12-build-and-deploy.md#makefile)); the output is committed like `dbgen`.
 
-**`New` is the router.** `transport/grpc.New(cfg, log, tokenSvc, services)` builds the `*grpc.Server`, chains the unary interceptors in the HTTP middleware order (`RequestID → Locale → Logging → Recovery → Deadline → Throttle → Auth`), registers every `Registrar`, then the standard `grpc.health.v1` service and, when `grpc.reflection` is on (base `true`, production `false`), server reflection so `grpcurl` needs no proto files. `infrastructure/server.NewGRPCServer` wraps it for the listener and the graceful stop, and flips health to NOT_SERVING as shutdown starts, immediately before the drain ([09](09-infrastructure-layer.md)); a balancer that polls health only sees it if the platform delays the stop signal (a Kubernetes `preStop` sleep). Health reports process liveness, not dependency readiness: there is no gRPC `/readyz`.
+**`New` is the router.** `transport/grpc.New(cfg, log, tokenSvc, services)` builds the `*grpc.Server`, chains the unary interceptors in the HTTP middleware order, except that `Locale` runs second (`RequestID → Locale → Logging → Recovery → Deadline → Throttle → Auth`), registers every `Registrar`, then the standard `grpc.health.v1` service and, when `grpc.reflection` is on (base `true`, production `false`), server reflection so `grpcurl` needs no proto files. `infrastructure/server.NewGRPCServer` wraps it for the listener and the graceful stop, and flips health to NOT_SERVING as shutdown starts, immediately before the drain ([09](09-infrastructure-layer.md)); a balancer that polls health only sees it if the platform delays the stop signal (a Kubernetes `preStop` sleep). Health reports process liveness, not dependency readiness: there is no gRPC `/readyz`.
 
 **A feature is a `Registrar`.** Three methods: `Register(*grpc.Server)` mounts the generated service, `Public() []string` names the full methods callable without a bearer token, and `Throttled() []string` names the credential methods limited per peer. Auth is deny-by-default: an RPC added to the proto needs a token until it is listed in `Public()`, which `TestEveryRPCIsProtectedUnlessPublic` checks against the generated service descriptor. `UserHandler` lists `CreateUser`, `Login` and `ListPublicUsers` as public, the same split as the HTTP routes, and throttles `CreateUser` and `Login` like the HTTP login and registration routes. DI collects the registrars in `provideGRPCServices` ([11](11-di-and-entrypoints.md)).
 
-**Errors take one path.** A handler never builds a status itself: it returns `rpcstatus.FromError(ctx, err)`, which runs `errors.ToAppError`, stashes the `AppError` for the access log, translates the message into the call's language (`accept-language` metadata, read by the `Locale` interceptor) and maps the HTTP status `pkg/errors` assigned to the nearest gRPC code (400 → `InvalidArgument`, 401 → `Unauthenticated`, 403 → `PermissionDenied`, 404 → `NotFound`, 409 → `AlreadyExists`, 429 → `ResourceExhausted`, 503 → `Unavailable`, 504 → `DeadlineExceeded`, anything else `Internal`). A wrapped internal error therefore reaches the client as the generic localized message, never its text. Wire-shape validation reuses the HTTP DTO rules through small tagged structs and the shared `*validator.Validate`; the entity still owns its invariants ([05](05-domain-layer.md)).
+**Errors take one path.** A handler never builds a status itself: it returns `rpcstatus.FromError(ctx, err)`, which runs `errors.ToAppError`, stashes the `AppError` for the access log, translates the message into the call's language (`accept-language` metadata, read by the `Locale` interceptor) and maps the HTTP status `pkg/errors` assigned to the nearest gRPC code (400/415/422 → `InvalidArgument`, 401 → `Unauthenticated`, 403 → `PermissionDenied`, 404 → `NotFound`, 409 → `AlreadyExists`, 408/504 → `DeadlineExceeded`, 413/429 → `ResourceExhausted`, 405/501 → `Unimplemented`, 502/503 → `Unavailable`, anything else `Internal`). A wrapped internal error therefore reaches the client as the generic localized message, never its text. Wire-shape validation reuses the HTTP DTO rules through small tagged structs and the shared `*validator.Validate`; the entity still owns its invariants ([05](05-domain-layer.md)).
 
 **Interceptors mirror middleware** ([04](04-placement-rationale.md#why-middleware-is-under-transporthttp-not-transport) explains why they cannot share a package). `RequestID` adopts a valid `x-request-id` or mints one and echoes it. `Locale` sets the language. `Logging` scopes the logger with `request_id`, `trace_id` and `method`, installs the `AppError` stash and emits one `rpc` line per call with `code` and `duration_ms`, using the stashed `AppError` (cause and frame trail) when there is one. `Recovery` turns a panic into `codes.Internal` with the localized internal-error message, through `rpcstatus` like any other failure. `Deadline` bounds every call by `grpc.request_timeout` (a sooner client deadline wins). `Throttle` applies a per-peer token bucket (`grpc.login_rate_limit`) to the throttled methods and answers `ResourceExhausted` with a `retry-after` header; it keys on the TCP peer, since gRPC has no `X-Forwarded-For` convention to trust. `Auth` verifies the bearer token from the `authorization` metadata on every method outside the public set (health `Check` is always public) and attaches the `identity.UserPrincipal`, so `requireSelf` in the usecase works unchanged. Only unary interceptors are installed; the first streaming RPC needs their stream counterparts.
 
@@ -549,9 +550,9 @@ Two ports and one orchestrator:
 
 ```go
 // Handler processes one event off the broker. Topic is the wire-level
-// identifier (Kafka topic / RabbitMQ routing key). Handle returns nil to
-// signal a successful ack; a non-nil error triggers a broker-specific
-// nack/retry path.
+// identifier (Kafka topic / RabbitMQ routing key). Handle returns nil on
+// success. A plain error is retried under the worker Policy, then parked;
+// wrap input that can never succeed in Poison to park it at once.
 type Handler interface {
     Topic() string
     Handle(ctx context.Context, payload []byte) error
@@ -564,7 +565,7 @@ type Consumer interface {
 }
 ```
 
-`Worker` holds a topic-keyed handler map built from the injected `[]Handler`, derives `Topics()` from it, and `Start(ctx)` blocks on `consumer.Subscribe`. Adding a feature is: implement `Handler`, list it in `provideWorkerHandlers` ([11](11-di-and-entrypoints.md)). The consumer is selected at generation time — `kafka_consumer.go` (sarama consumer group) or `rabbitmq_consumer.go` — and the orchestrator never learns which.
+`Worker` holds a topic-keyed handler map built from the injected `[]Handler`, derives `Topics()` from it, and `Start(ctx)` blocks on `consumer.Subscribe`. Adding a feature is: implement `Handler`, list it in `provideWorkerHandlers` ([11](11-di-and-entrypoints.md)). The consumer is selected at generation time — `consumer.go`, rendered from `kafka_consumer.go.tmpl` (sarama consumer group) or `rabbitmq_consumer.go.tmpl` — and the orchestrator never learns which.
 
 Consumers hand `dispatch` a broker-neutral `Message` (topic, payload, key, correlation headers, Kafka partition/offset or RabbitMQ delivery tag/message id). `Worker.dispatch` adopts the producer's `traceparent` and `x-request-id` headers, scopes the logger with the topic, the position and those ids, runs the handler under the policy below, and emits one `worker: message handled|parked|abandoned` line with `attempts` and `duration_ms` (and `errors.LogFields` on failure) — the worker equivalent of the HTTP access log. Inner layers still log through `logctx.From(ctx)` with the same correlation fields; handlers do not log success themselves.
 
@@ -580,7 +581,7 @@ type Policy struct {
 }
 ```
 
-`Worker.run` gives each attempt its own deadline and panic guard (a panic becomes `ErrHandlerPanic` and counts as a failed attempt), retries a failed attempt after the backoff, and gives up in two cases: the handler returned `worker.Poison(err)`, or the budget is spent. Both come back wrapped in `ErrParked`. A ctx cancelled mid-message (shutdown) returns `ctx.Err()` instead, after at most the attempt in flight. So `dispatch` has exactly three outcomes, and the handler rule is short:
+`Worker.run` gives each attempt its own deadline and panic guard (a panic becomes `ErrHandlerPanic` and counts as a failed attempt), retries a failed attempt after the backoff, and gives up in two cases: the handler returned `worker.Poison(err)`, or the budget is spent. Both come back wrapped in `ErrParked`. A ctx cancelled mid-message (shutdown) returns `ctx.Err()` instead, after at most the attempt in flight. So `dispatch` has exactly three outcomes (a topic with no handler is logged and acked before any of them), and the handler rule is short:
 
 ```go
 if err := json.Unmarshal(payload, &msg); err != nil {
@@ -606,7 +607,7 @@ The consumers map the three outcomes the same way; `consumer_test.go` pins it fo
 | parked (`ErrParked`) | copy to `<topic>.dlq` with `x-dead-letter-reason` and `x-dead-letter-source` headers, then `MarkMessage` | `Nack(requeue=false)`; the queue's `x-dead-letter-exchange` routes it to `<queue>.dlx`, whose queue is `<queue>.dlq` |
 | abandoned (`ctx.Err()`) | left unmarked; the next session redelivers | `Nack(requeue=true)` |
 
-`ConsumeClaim` therefore never returns because a handler failed — that used to end the session and rebalance the group on every poison message. It returns only on shutdown or when the dead-letter write itself fails (then the message stays unmarked and comes back). The RabbitMQ consumer declares the whole topology on start (exchange, dead-letter exchange and queue, work queue), sets `Qos(prefetch)` so a slow handler does not hold the entire backlog unacked, and watches `NotifyClose`. Both `Subscribe` loops return `ctx.Err()` on shutdown and `ErrConsumerClosed` when the broker side ends the subscription while ctx is live, which `RunWorker` turns into a non-zero exit ([11](11-di-and-entrypoints.md)) — a worker that lost its subscription must not idle as a zombie.
+`ConsumeClaim` therefore never returns because a handler failed — that used to end the session and rebalance the group on every poison message. It never returns because a dead-letter write failed either: `park` retries the copy with capped backoff (100 ms doubling to 30 s) until it lands or the session ends; only then does the message stay unmarked and come back. The RabbitMQ consumer declares the whole topology on start (exchange, dead-letter exchange and queue, work queue), sets `Qos(prefetch)` so a slow handler does not hold the entire backlog unacked, and watches `NotifyClose`. Both `Subscribe` loops return `ctx.Err()` on shutdown and `ErrConsumerClosed` when the broker side ends the subscription while ctx is live, which `RunWorker` turns into a non-zero exit ([11](11-di-and-entrypoints.md)) — a worker that lost its subscription must not idle as a zombie.
 
 The topic constant is duplicated on both sides on purpose, with a comment pointing at its twin:
 

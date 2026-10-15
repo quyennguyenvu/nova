@@ -8,23 +8,25 @@ Sections marked **not scaffolded** are patterns to grow into.
 
 ## What ships: internal/usecase/user/
 
-`nova new` emits one usecase package per feature, always two files:
+`nova new` emits one usecase package per feature: `service.go` and `dto.go`, plus a test file:
 
 ```bash
 usecase/user/
-├── service.go    # orchestration
-└── dto.go        # Input/Output shapes (no json/validate tags)
+├── service.go       # orchestration
+├── dto.go           # Input/Output shapes (no json/validate tags)
+└── service_test.go  # Register, Get, Update and Login against fakes
 ```
 
 For a `--transport=worker` project a second package, `usecase/useraudit/`, follows the same shape ([below](#useraudit--record-each-event-once)).
 
 ## internal/usecase/user/service.go
 
-The service holds only ports — the token signer is `security.TokenIssuer` ([04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface)), so `service_test.go` runs every method against fakes. The publisher field only exists when a queue is selected:
+The service holds only ports — the token signer is `security.TokenIssuer` ([04](04-placement-rationale.md#33-where-to-put-adapter-interfaces--consumer-owns-the-interface)), so `service_test.go` drives Register, Get, Update and Login against fakes. The publisher field only exists when a queue is selected:
 
 ```go
-// Service implements the user use case. It never calls the logger directly —
-// it wraps errors with errors.Wrapf and lets the transport boundary log once.
+// Service implements the user use case. It never logs an error it returns —
+// it wraps with errors.Wrapf and lets the transport boundary log once; the one
+// exception is the best-effort publish, which logs and does not fail.
 //
 // Login lives on this service rather than a separate auth feature because
 // authentication IS a user concern in the scaffold; it signs through the
@@ -36,6 +38,10 @@ type Service struct {
     tokens    security.TokenIssuer
     tx        domain.TxManager
     publisher domain.UserPublisher   // [--queue]
+
+    // timing hash for Login's unknown-email path; built on first use.
+    dummyMu   sync.Mutex
+    dummyHash string
 }
 ```
 
@@ -99,7 +105,7 @@ The event publish is the one place the service logs, because the failure is deli
 // best-effort publish — user is already persisted; broker outage shouldn't fail the request.
 // Failure is logged so it can drive an alert; the API still returns success.
 if pubErr := s.publisher.PublishUserCreated(ctx, domain.UserCreated{…}); pubErr != nil {
-    logctx.From(ctx).Error("publish user.created failed", "user_id", user.ID, "error", pubErr)
+    logctx.From(ctx).Error("publish user.created failed", "user_id", user.ID, "err", pubErr)
 }
 ```
 
@@ -116,9 +122,9 @@ const (
 )
 ```
 
-`List` clamps `Page`/`PerPage`, builds `domain.UserFilter`, then runs the page query **and** a `Count` against the same filter inside one `WithinTx` (the port contract says `Count` ignores `Limit`/`Offset`; one transaction gives the two reads one snapshot where the engine's isolation level provides it — MySQL's REPEATABLE READ does, Postgres READ COMMITTED does not, so raise it in `TxManager` if that matters). It returns the _clamped_ values in `ListOutput`, so the page meta the client sees matches what was actually queried — an out-of-range `per_page=9999` reports `per_page: 10`, not a lie.
+`List` clamps `Page`/`PerPage`, builds `domain.UserFilter`, then runs the page query **and** a `Count` against the same filter inside one `WithinTx` (the port contract says `Count` ignores `Limit`/`Offset`; one transaction gives the two reads one snapshot where the engine's isolation level provides it — MySQL's REPEATABLE READ does, Postgres READ COMMITTED does not, so raise it in `TxManager` if that matters). It returns the _clamped_ values in `ListOutput`, so the page meta the client sees matches what was actually queried — an out-of-range `?perPage=9999` reports `perPage: 10`, not a lie.
 
-Note that transport hands raw values in as `ListInput` and the service converts to `domain.UserFilter` internally: **transport never imports `domain`.**
+Note that transport hands raw values in as `ListInput` and the service converts to `domain.UserFilter` internally: **transport never imports `domain` itself** (only `domain/identity`, for the auth principal).
 
 ### PublicList — cursor (keyset) paging
 
@@ -136,8 +142,8 @@ The second read shape, for unauthenticated callers. It exists separately because
 // Login verifies email+password and returns a signed access token + the user
 // profile. Returns InvalidCredentials (401) for both "no such user" and "bad
 // password" so attackers can't enumerate accounts via status or timing — the
-// unknown-user path consumes a bcrypt verify against a precomputed dummy
-// hash so wall-clock time matches the bad-password path.
+// unknown-user path consumes a bcrypt verify against the timing hash so
+// wall-clock time matches the bad-password path.
 ```
 
 Both failure paths return `errors.L(locale.InvalidCredentials)`. Equal _status_ is the easy half; equal _timing_ is the half that gets forgotten. `bcrypt.CompareHashAndPassword` is CPU-bound, so a missing user would return in microseconds while a wrong password takes ~100ms — a reliable account-enumeration oracle even with identical response bodies. The fix:
@@ -163,7 +169,7 @@ On success it builds an `identity.UserPrincipal`, signs it, and returns the toke
 
 ### Ownership and input bounds
 
-`Update` loads the entity, calls `user.Rename(name)` — the entity validates and stamps `UpdatedAt` — and persists it, so the `updatedAt` in the response is the value that was written, not the pre-update one. `Update` and `Delete` begin with `requireSelf(ctx, id)`: no principal in ctx is 401, another user's id is 403. The check lives in the usecase, not the handler, so a future gRPC or CLI transport inherits it; widen it here (roles, an admin audience) when the product needs it. `Register` refuses passwords over `security.MaxPasswordLen` (72 bytes, the bcrypt bound) with the generic 400 instead of letting the hasher fail with a 500.
+A missing id on `Get` or `Update` is `errors.L(locale.UserNotFound)` (404 with the user-specific message), not the generic `RecordNotFound` the repository's `ErrNotFound` would classify to. `Update` loads the entity, calls `user.Rename(name)` — the entity validates and stamps `UpdatedAt` — and persists it, so the `updatedAt` in the response is the value that was written, not the pre-update one. `Update` and `Delete` begin with `requireSelf(ctx, id)`: no principal in ctx is 401, another user's id is 403. The check lives in the usecase, not the handler, so a future gRPC or CLI transport inherits it; widen it here (roles, an admin audience) when the product needs it. `Register` refuses passwords over `security.MaxPasswordLen` (72 bytes, the bcrypt bound) with the generic 400 instead of letting the hasher fail with a 500.
 
 ## internal/usecase/user/dto.go
 
@@ -190,7 +196,7 @@ type ListOutput struct {
 
 type PublicListInput  struct{ Cursor string; Limit int }
 type PublicListOutput struct{ Items []*PublicOutput; NextCursor string; HasMore bool }
-type PublicOutput     struct{ Email, Name string }
+type PublicOutput     struct{ Name string } // display name only
 
 // Output is the use-case's return shape — entities never cross this boundary.
 type Output struct {

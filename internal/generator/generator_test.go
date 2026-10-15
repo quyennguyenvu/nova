@@ -1413,7 +1413,7 @@ func TestGeneratedProjectBootstrap(t *testing.T) {
 		return cfg
 	}
 	// The stacks nova's own `make gen-api`, `gen-worker` and `gen-grpc`
-	// produce (gen-api minus Elasticsearch, see above).
+	// produce.
 	with := func(cfg *config.ProjectConfig, cache, queue string) *config.ProjectConfig {
 		cfg.Cache, cfg.MessageQueue = cache, queue
 		return cfg
@@ -1464,6 +1464,9 @@ func bootstrapProject(t *testing.T, cfg *config.ProjectConfig) {
 	// The generated Makefile owns the bootstrap order (sqlc → tidy → wire); a
 	// user's first run is exactly this.
 	run("make", "gen")
+	if cfg.UseWire() {
+		assertTracerBuiltFirst(t, readFile(t, filepath.Join(dir, "internal/infrastructure/di/wire_gen.go")))
+	}
 	run("go", "build", "./...")
 	// Rendered unit tests (errors, usecase with fakes, adapter translation,
 	// worker policy and settle): run them so they are proven, not just compiled.
@@ -1891,7 +1894,8 @@ func assertUsecaseSeams(t *testing.T, dir, engine string) {
 		"errors.ErrAlreadyExists", "s.tx.WithinTx(")
 	mustNotContain(t, svc, "jwtsec", "infrastructure/")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/usecase/user/service_test.go")),
-		"func TestRegisterDuplicateEmailIs409(", "func TestUpdateReportsNewUpdatedAt(")
+		"func TestRegisterDuplicateEmailIs409(", "func TestUpdateReportsNewUpdatedAt(",
+		"func TestGetMissingUserIsUserNotFound(")
 	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/domain/security/token.go")),
 		"type TokenIssuer interface")
 	jwtSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/jwt/service.go"))
@@ -2049,10 +2053,15 @@ func TestDeployContract(t *testing.T) {
 func assertDeployContract(t *testing.T, dir, engine string) {
 	t.Helper()
 	cfgSrc := readFile(t, filepath.Join(dir, "internal/infrastructure/config/config.go"))
-	mustContainAll(t, cfgSrc, "godotenv.Read(", "unknown APP_ENV", "DB_USER) is required", `"shutdown_timeout"`,
-		"normalizeLists(&cfg)")
-	mustContainAll(t, readFile(t, filepath.Join(dir, "internal/infrastructure/config/base.yaml")),
-		"shutdown_timeout: 20s")
+	mustContainAll(t, cfgSrc, "godotenv.Read(", "unknown APP_ENV", "DB_USER) is required", "normalizeLists(&cfg)")
+	// The top-level budget is fx's Stop deadline; Wire's cleanup has none.
+	baseYAML := readFile(t, filepath.Join(dir, "internal/infrastructure/config/base.yaml"))
+	if engine == "postgres" { // wire
+		mustNotContain(t, cfgSrc, `"shutdown_timeout" env:"APP_SHUTDOWN_TIMEOUT"`)
+	} else {
+		mustContainAll(t, cfgSrc, `"shutdown_timeout" env:"APP_SHUTDOWN_TIMEOUT"`)
+		mustContainAll(t, baseYAML, "shutdown_timeout: 20s")
+	}
 	mustContainAll(t, readFile(t, filepath.Join(dir, "cmd/root.go")), "SilenceUsage: true")
 	env := readFile(t, filepath.Join(dir, ".env.example"))
 	mustNotContain(t, env, "<set-me", "<user>", "<password>")
@@ -2233,5 +2242,52 @@ func assertEnvSourceable(t *testing.T, dir string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf(".env.example is not sourceable: %v\n%s", err, out)
+	}
+}
+
+// TestComposeParsesForEveryShape: compose rejects a service whose
+// `environment:` key is present but empty, so a project with no dependencies
+// must not render one. Parsed as a generic map to see the null that the typed
+// compose struct would hide.
+func TestComposeParsesForEveryShape(t *testing.T) {
+	t.Parallel()
+	for name, cfg := range map[string]*config.ProjectConfig{
+		"http_none":   noDBMatrixConfig("chi", "fx"),
+		"grpc_none":   noDBGRPCConfig("fx"),
+		"http_deps":   httpMatrixConfig("fiber", "postgres", "wire"),
+		"worker_deps": workerMatrixConfig("mysql", "rabbitmq", "fx"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var doc map[string]any
+			raw := readFile(t, filepath.Join(renderProject(t, cfg), "docker-compose.yaml"))
+			if err := yamlv3.Unmarshal([]byte(raw), &doc); err != nil {
+				t.Fatalf("compose YAML: %v", err)
+			}
+			services, _ := doc["services"].(map[string]any)
+			for svc, v := range services {
+				fields, _ := v.(map[string]any)
+				if env, present := fields["environment"]; present && env == nil {
+					t.Errorf("service %s has an empty environment key, which compose rejects", svc)
+				}
+			}
+			if !cfg.HasDependencies() {
+				mustNotContain(t, readFile(t, filepath.Join(renderProject(t, cfg), "README.md")),
+					"Start infrastructure only")
+			}
+		})
+	}
+}
+
+// assertTracerBuiltFirst: DI cleans up in reverse construction order, so the
+// tracer must be built before the server or worker for its flush to run after
+// they drain; otherwise the last spans of in-flight work are dropped.
+func assertTracerBuiltFirst(t *testing.T, wireGen string) {
+	t.Helper()
+	tracer := strings.Index(wireGen, "tracing.Provider(")
+	for _, ctor := range []string{"server.NewHTTPServer(", "server.NewGRPCServer(", "worker.NewWorker("} {
+		if i := strings.Index(wireGen, ctor); i >= 0 && (tracer < 0 || tracer > i) {
+			t.Errorf("wire_gen.go builds %s before tracing.Provider: spans would flush before the drain", ctor)
+		}
 	}
 }

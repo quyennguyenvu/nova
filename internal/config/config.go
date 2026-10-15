@@ -13,26 +13,19 @@ type ProjectConfig struct {
 	ProjectName string `json:"project_name"`
 	ModuleName  string `json:"module_name"`
 
-	// Transport
-	Transport     string `json:"transport"`      // "http", "grpc", "cron", "cli"
-	HTTPFramework string `json:"http_framework"` // "fiber", "gin", "chi", "echo", "nethttp"
+	// Allowed values for every option are the slices in options.go.
+	Transport     string `json:"transport"`
+	HTTPFramework string `json:"http_framework"` // HTTP only; Validate defaults it to fiber
 
 	// Database
-	Database string `json:"database"`  // "postgres", "mysql", "sqlite", "mongodb", "none"
-	DBDriver string `json:"db_driver"` // "pgx", "sqlx", "gorm", "database/sql"
-	QueryGen string `json:"query_gen"` // "sqlc", "raw", "gorm"
+	Database string `json:"database"`
+	DBDriver string `json:"db_driver"` // one per engine; Validate fills it
+	QueryGen string `json:"query_gen"`
 
-	// Cache
-	Cache string `json:"cache"` // "redis", "bigcache", "none"
-
-	// Search
-	Search string `json:"search"` // "elasticsearch", "none"
-
-	// Message Queue
-	MessageQueue string `json:"message_queue"` // "kafka", "rabbitmq", "nats", "none"
-
-	// Configuration format
-	ConfigFormat string `json:"config_format"` // "yaml", "toml"
+	Cache        string `json:"cache"`
+	Search       string `json:"search"`
+	MessageQueue string `json:"message_queue"`
+	ConfigFormat string `json:"config_format"`
 
 	// Dependency Injection
 	DI string `json:"di"` // "wire", "fx"
@@ -104,6 +97,12 @@ func (c *ProjectConfig) HasElasticsearch() bool {
 	return c.Search == "elasticsearch"
 }
 
+// HasDependencies reports whether the project dials any external service
+// (database, cache, search or broker) that compose has to run beside the app.
+func (c *ProjectConfig) HasDependencies() bool {
+	return c.HasDatabase() || c.HasRedis() || c.HasElasticsearch() || c.HasMessageQueue()
+}
+
 // UseWire returns true if Google Wire DI is selected.
 func (c *ProjectConfig) UseWire() bool {
 	return c.DI == "wire"
@@ -114,7 +113,8 @@ func (c *ProjectConfig) UseFx() bool {
 	return c.DI == "fx"
 }
 
-// DefaultConfig returns a sensible default configuration (Quick Start). The
+// DefaultConfig returns the values a flag-driven `nova new` uses for every
+// option it leaves unset. The
 // module path, driver and HTTP framework stay empty: the CLI derives the
 // module from the project name, and Validate picks the engine's driver and
 // fiber for HTTP, so a flag that overrides one never fights a pre-filled value.

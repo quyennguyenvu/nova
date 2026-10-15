@@ -7,14 +7,18 @@
 #
 #   cp .env.example .env          # secrets + credentials, read via env_file
 #   docker compose up -d --build  # whole stack
+{{- if .HasDependencies}}
 #   docker compose up -d {{if eq .Database "mysql"}}mysql{{else if .HasDatabase}}postgres{{end}}{{if .HasRedis}} redis{{end}}{{if eq .MessageQueue "kafka"}} kafka{{end}}{{if eq .MessageQueue "rabbitmq"}} rabbitmq{{end}}{{if .HasElasticsearch}} elasticsearch{{end}}   # dependencies only
+{{- end}}
 #
 # Every limit is an env var with a default, so a sweep needs no file edits:
 #
 #   LIMIT_APP_CPUS=1 LIMIT_APP_MEMORY=256M docker compose up -d --force-recreate app
+{{- if .HasDependencies}}
 #
 # Host ports are published for each dependency, so host-side tooling
-# ({{if .HasDatabase}}`make migrate-up`, {{end}}k6, kafka CLI) works against the same stack.
+# ({{if .HasDatabase}}`make migrate-up`, {{end}}k6{{if eq .MessageQueue "kafka"}}, kafka CLI{{end}}) works against the same stack.
+{{- end}}
 
 services:
   app:
@@ -22,9 +26,10 @@ services:
       context: .
     image: {{.ProjectName}}:local
     # The subcommand comes from the image's CMD ({{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else}}api{{end}}) — see Dockerfile.
-    # Secrets and per-deploy values (DB_USER/DB_PASSWORD, JWT keys, APP_ENV).
+    # Secrets and per-deploy values ({{if .HasDatabase}}DB_USER/DB_PASSWORD, {{end}}{{if not .HasWorker}}JWT keys, {{end}}APP_ENV).
     env_file:
       - .env
+{{- if .HasDependencies}}
     # Endpoints are overridden here — .env points at localhost for host runs,
     # but inside the compose network each dependency answers on its service
     # name. `environment` wins over `env_file`.
@@ -44,6 +49,7 @@ services:
 {{- end}}
 {{- if eq .MessageQueue "rabbitmq"}}
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+{{- end}}
 {{- end}}
 {{- if .HasHTTP}}
     ports:

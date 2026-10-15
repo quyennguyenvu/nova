@@ -260,7 +260,7 @@ func mapField(engine string, f entityField) (fieldMapping, bool) {
 	case "float32":
 		fm.sqlType = pick(pg, "REAL", "FLOAT")
 	case "time.Time":
-		fm.sqlType = pick(pg, "TIMESTAMP WITH TIME ZONE", "DATETIME")
+		fm.sqlType = pick(pg, "TIMESTAMP WITH TIME ZONE", "DATETIME(6)")
 		if pg {
 			fm.readExpr = "row." + f.Name + ".Time"
 			fm.writeExpr = "pgtype.Timestamptz{Time: e." + f.Name + ", Valid: true}"
@@ -289,7 +289,7 @@ func genMigrationUp(engine, table string, insertCols []fieldMapping) string {
 	for _, c := range insertCols {
 		def := ""
 		if c.Column == "created_at" || c.Column == "updated_at" {
-			def = pick(engine == enginePostgres, " DEFAULT NOW()", " DEFAULT CURRENT_TIMESTAMP")
+			def = pick(engine == enginePostgres, " DEFAULT NOW()", " DEFAULT CURRENT_TIMESTAMP(6)")
 		}
 		fmt.Fprintf(&b, ",\n    %s %s NOT NULL%s", c.Column, c.sqlType, def)
 	}

@@ -18,20 +18,20 @@ import (
 	"{{.ModuleName}}/pkg/observability"
 )
 
-// Registrar attaches a feature's routes to a router subtree. The version
-// package (transport/http/v1) provides a concrete Registrar implementing
-// this interface. Prefix is mounted as a subgroup before Register is called.
-// Multiple Registrars may share a Prefix; the slice order in NewRouter
-// determines mount order.
+// Registrar attaches a feature's routes to a router subtree. Each feature
+// package (transport/http/v1/<feature>) provides a concrete Registrar; its
+// Prefix() (the embedded v1.Prefixed) is mounted as a subgroup before
+// Register is called. Multiple Registrars may share a Prefix; the slice
+// order in NewRouter determines mount order.
 type Registrar interface {
 	Prefix() string
 	Register(fiber.Router)
 }
 
 // NewRouter builds the fiber app: middleware → probes → registrars at their prefixes.
-// Order of middleware matters: tracing first so every layer sees the span,
-// RequestID next (so every later layer sees the ID), Logging third (wraps
-// everything to compute duration & emit one line), Recovery inside Logging so
+// Order of middleware matters: ClientIP first, tracing next so every layer
+// sees the span, then RequestID (so every later layer sees the ID), Logging
+// (wraps everything to compute duration & emit one line), Recovery inside Logging so
 // panics still produce an access log, Timeout inside Recovery so a deadline
 // panic is still caught, then CORS and Locale before app logic.
 //

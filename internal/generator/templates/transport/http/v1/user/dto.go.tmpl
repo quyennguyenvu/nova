@@ -45,8 +45,8 @@ type LoginRequest struct {
 	Password string `json:"password" validate:"required"`
 }
 
-// LoginResponse follows the RFC 6749 token-endpoint shape (access_token,
-// token_type, expires_in) so OAuth-aware clients can consume it directly.
+// LoginResponse carries the RFC 6749 token-endpoint fields in the API's
+// camelCase (accessToken, tokenType, expiresIn), plus the user profile.
 type LoginResponse struct {
 	AccessToken string        `json:"accessToken"`
 	TokenType   string        `json:"tokenType"`

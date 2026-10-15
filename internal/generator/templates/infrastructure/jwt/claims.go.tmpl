@@ -4,7 +4,7 @@ import "github.com/golang-jwt/jwt/v5"
 
 // AccessTokenClaims is the canonical user access-token shape this service
 // issues + verifies. Custom claims sit alongside the registered ones; the
-// registered set (Issuer, Subject, Audience, ExpiresAt, IssuedAt, ID) is the
+// registered set (Issuer, Subject, Audience, ExpiresAt, NotBefore, IssuedAt) is the
 // authoritative source for token lifecycle — custom fields are convenience.
 //
 // Add a claim here and on identity.UserPrincipal together. Add admin/service

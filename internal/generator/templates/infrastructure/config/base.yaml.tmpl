@@ -1,8 +1,10 @@
 app_name: "{{.ProjectName}}"
 app_version: "0.1.0"
-# Budget for the whole shutdown chain (server drain, then dependency closes);
-# the fx engine stops its hooks within it. Keep above http/grpc shutdown_timeout.
+{{- if .UseFx}}
+# fx's budget for the whole shutdown chain (server drain, then dependency
+# closes). Keep above http/grpc shutdown_timeout.
 shutdown_timeout: 20s
+{{- end}}
 
 log:
   level: "info" # debug | info | warn | error | fatal
@@ -25,7 +27,7 @@ jwt:
 
 security:
   # bcrypt work factor. 10 is bcrypt.DefaultCost; raise to 12-13 in
-  # production when CPU headroom allows. Clamped to [4, 31] at construction.
+  # production when CPU headroom allows. Values outside [4, 31] fall back to 10.
   bcrypt_cost: 10
 
 {{- if .HasHTTP}}

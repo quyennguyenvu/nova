@@ -50,9 +50,9 @@ func Logging(base observability.Logger) echo.MiddlewareFunc {
 			reqID := requestid.From(ctx)
 			sc := trace.SpanContextFromContext(ctx)
 
-			// c.Path() returns the route pattern (no query string) — keep
-			// it that way so secrets in `?token=...` never reach structured
-			// logs. Do NOT switch to req.URL.RequestURI() or URL.String().
+			// req.URL.Path has no query string — keep it that way so
+			// secrets in `?token=...` never reach structured logs. Do NOT
+			// switch to req.URL.RequestURI() or URL.String().
 			// scoped is the request-scoped logger handed to inner layers via
 			// logctx: only the correlation fields belong here. client_ip/user_agent
 			// are deliberately NOT attached — they're entry-point facts that belong
@@ -110,9 +110,9 @@ func logAccess(ctx context.Context, scoped observability.Logger, c echo.Context,
 		// Surface the inner cause + trace whenever there's something to
 		// diagnose: a server fault (5xx), or any error that wrapped an
 		// underlying cause — e.g. a 4xx that failed decoding input or a
-		// downstream call. A plain validation 4xx carries no inner Err, so
-		// its line stays lean (app_code already names the client mistake)
-		// and error-rate alerts stay free of client-driven noise.
+		// downstream call. A 4xx raised without a cause (binder
+		// 400s carry one) stays lean; every 4xx logs at Warn, so error-rate
+		// alerts stay free of client-driven noise.
 		if err != nil || app.Err != nil || status >= 500 {
 			fields = append(fields, "app_err", app.Error(), "app_trace", app.Trace())
 		}

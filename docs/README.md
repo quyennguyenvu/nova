@@ -2,7 +2,7 @@
 
 This directory is the **design reference for what `nova new` generates** — not docs for the CLI itself (see the [root README](../README.md) for that). It captures the intent behind every layer, file, and placement decision so the templates stay consistent as new framework/DB variants are added.
 
-Where a doc and a template disagree, **the template wins** — and the doc is the bug. Fix it in the same change.
+These docs and the templates must always say the same thing ([CLAUDE.md](../CLAUDE.md), working principle 5). When they disagree, decide which is right — usually the template, so fix the doc; if the doc describes the better behavior, change the template with a test — and fix it in the same change.
 
 ## The docs
 

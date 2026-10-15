@@ -12,7 +12,7 @@ type Principal struct {
 }
 
 // UserPrincipal represents an authenticated end-user. It carries identity
-// only; add a field here and the matching claim in jwt.AccessTokenClaims
+// only; add a field here and the matching claim in jwtsec.AccessTokenClaims
 // together as the token grows. Add a sibling type (AdminPrincipal,
 // ServicePrincipal) for distinct audiences rather than overloading this one.
 type UserPrincipal struct {

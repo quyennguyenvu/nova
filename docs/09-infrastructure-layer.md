@@ -30,7 +30,7 @@ func NewHTTPServer(_ context.Context, cfg config.HTTPConfig, …) (*HTTPServer, 
 
 **Each component owns its own shutdown.** No `Close()` on a domain port, no central teardown function listing every resource. Wire composes the cleanups automatically and runs them in reverse construction order; fx's lifecycle hooks do the same ([11](11-di-and-entrypoints.md#how-cleanup-works)). Adding a dependency therefore cannot leak it: if it needs teardown, its constructor returns the hook and the graph picks it up.
 
-The other consistent choice: **constructors verify connectivity**. Postgres pings, Elasticsearch pings, RabbitMQ declares its exchange. A misconfigured dependency fails at startup with a clear error rather than on the first request in production. Redis is the one exception: it pings, logs `redis: ping failed, starting degraded` and returns the client anyway, because a cache outage is survivable — reads fall through to the database and readiness reports `redis: fail` until it is back.
+The other consistent choice: **constructors verify connectivity**. Postgres pings, Elasticsearch pings, RabbitMQ declares its exchange. A constructor runs only when something in the graph depends on its output, so a client nothing consumes (Elasticsearch until you wire the index adapter, Redis in a gRPC or worker project) is never built or pinged even though compose still starts its container. A misconfigured dependency fails at startup with a clear error rather than on the first request in production. Redis is the one exception: it pings, logs `redis: ping failed, starting degraded` and returns the client anyway, because a cache outage is survivable — reads fall through to the database and readiness reports `redis: fail` until it is back.
 
 ## config/ — one struct, three layers of value
 
@@ -84,14 +84,14 @@ func Load() (*Config, error) {
 
 Precedence, lowest to highest: **`base.yaml` → `<APP_ENV>.yaml` → `./.env` → environment variables**. `loadDotEnv` reads `./.env` with `godotenv.Read` and sets only the keys that are not already in the environment and have a value, treating a missing file as fine — so `cp .env.example .env && go run main.go api` works on the host, while a container keeps injecting its environment and ships no `.env`. An empty `KEY=` line means "keep the YAML default": cleanenv would otherwise apply the empty string and, for a list such as `CORS_ALLOW_ORIGINS`, erase the development origins. After the environment is applied, `normalizeLists` trims every list entry and drops empty ones, because cleanenv splits on `,` without trimming and `"a, b"` would otherwise reach the router as `" b"`.
 
-Four consequences worth understanding before you change this:
+Six consequences worth understanding before you change this:
 
 - **`Load()` takes no path.** The YAML is `//go:embed`-ed, so the binary has no runtime dependency on the working directory — the same image runs from `/`, from a scratch container, from a Kubernetes job. The cost is that a config change is a rebuild, which is the intended trade for a service image.
 - **`APP_ENV` is validated against a whitelist** (`EnvLocal`, `EnvDev`, `EnvProd` from `constant.go`; `local` or unset loads base only). A typo'd `APP_ENV=prod` is an error at startup, because the alternative — silently running base defaults such as `ssl_mode: disable` in what the operator believes is production — is the worse failure.
 - **`DB_USER` is required.** With it empty the driver falls back to the OS user, which surfaces as a permissions error on the database; `Load` fails with the real cause instead.
-- **`shutdown_timeout` at the top level** budgets the whole cleanup chain; the fx engine stops its hooks within it and logs the budget when a stop overruns ([11](11-di-and-entrypoints.md#how-cleanup-works)).
+- **`shutdown_timeout` at the top level (fx projects only)** is fx's budget for the whole cleanup chain: it stops its hooks within it and logs the budget when a stop overruns ([11](11-di-and-entrypoints.md#how-cleanup-works)). Wire's generated cleanup has no overall deadline, so a Wire project has no such key; each resource bounds its own shutdown.
 - **The split between YAML and `.env` is by _nature_, not convenience.** Operational tuning (timeouts, pool sizes, bcrypt cost, sample ratio) lives in YAML and is reviewed in code review. Secrets and per-deployment endpoints live in the environment. That's why `JWTConfig.PrivateKey` and `PublicKey` carry **only** an `env:` tag and no YAML tag — they cannot be committed by accident.
-- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ`, `Worker` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure. `GRPC` carries `port`, `shutdown_timeout` and `reflection` (service discovery for `grpcurl`; base `true`, `production.yaml` `false`).
+- **The struct is conditional.** `HTTP`, `GRPC`, `Database`, `Redis`, `Elasticsearch`, `Kafka`, `RabbitMQ`, `Worker` sections only exist when the corresponding flag was set, so a worker project's config has no HTTP block to misconfigure. `GRPC` carries `port`, `shutdown_timeout`, `request_timeout`, `login_rate_limit` and `reflection` (service discovery for `grpcurl`; base `true`, `production.yaml` `false`).
 
 ### The sub-config projection
 
@@ -153,7 +153,7 @@ u := url.URL{
 
 **Config carries discrete typed fields** (`Host`, `Port`, `User`, `Password`, `Name`, `SSLMode`), not a single `DATABASE_URL`, and the DSN is assembled escape-safely. `net.JoinHostPort` handles IPv6 literals; `url.UserPassword` percent-encodes the credentials. The mysql variant uses `mysql.Config.FormatDSN()` for the same reason. A `fmt.Sprintf` DSN is the single most common way a generated project breaks on a rotated password.
 
-Pool limits (`MaxConns`, `MinConns`, `MaxConnLifetime`, `MaxConnIdleTime`) come from config, and the factory pings under `cfg.ConnectTimeout` before returning. The mysql variant has the same surface: `tls` (`false` | `true` | `skip-verify` | `preferred`; `skip-verify` is the counterpart of `sslmode=require` and is what `production.yaml` sets), `max_conn_lifetime`, `max_conn_idle_time`, and `connect_timeout`, which bounds both the driver's dial and the startup ping.
+Pool limits (`MaxConns`, `MinConns`, `MaxConnLifetime`, `MaxConnIdleTime`) come from config, and the factory pings under `cfg.ConnectTimeout` before returning. The mysql variant has the same shape with its own pool names (`max_open_conns`, `max_idle_conns` instead of `max_conns`, `min_conns`), plus `tls` (`false` | `true` | `skip-verify` | `preferred`; `skip-verify` is the counterpart of `sslmode=require` and is what `production.yaml` sets), `max_conn_lifetime`, `max_conn_idle_time`, and `connect_timeout`, which bounds both the driver's dial and the startup ping.
 
 ## cache/ and search/ — thin wrappers, deliberately
 
@@ -174,13 +174,13 @@ The wrapper type is what makes single/sentinel/cluster mode a **config** choice 
 
 ## pubsub/ — producer and consumer group
 
-`NewKafkaProducer` returns a `sarama.SyncProducer` with `RequiredAcks: WaitForAll` and `Return.Successes: true` — a synchronous, fully-acknowledged producer, because the publish path is best-effort-with-logging in the usecase and a silently-dropped ack would defeat that ([06](06-usecase-layer.md#register--check-hash-create-publish)). It dials the brokers at startup on purpose, unlike Redis: a publisher that cannot reach its broker is a misconfiguration, not a degraded mode, and the compose file waits on the broker's healthcheck before starting the app. Make it lazy only if you accept that every publish until the broker is up is a logged failure.
+`NewKafkaProducer` returns a `sarama.SyncProducer` with `RequiredAcks: WaitForAll` and `Return.Successes: true` — a synchronous, fully-acknowledged producer, because the publish path is best-effort-with-logging in the usecase and a silently-dropped ack would defeat that ([06](06-usecase-layer.md#register--hash-then-check-and-insert-in-one-transaction)). It dials the brokers at startup on purpose, unlike Redis: a publisher that cannot reach its broker is a misconfiguration, not a degraded mode, and the compose file waits on the broker's healthcheck before starting the app. Make it lazy only if you accept that every publish until the broker is up is a logged failure.
 
 `NewKafkaConsumerGroup` is worker-only and **fails fast** on missing config:
 
 ```go
 if cfg.ConsumerGroupID == "" {
-    return nil, nil, fmt.Errorf("kafka: consumer_group_id is required for worker mode")
+    return nil, nil, errors.New("kafka: consumer_group_id is required for worker mode")
 }
 ```
 
@@ -230,9 +230,9 @@ type Logger struct {
 }
 ```
 
-The port is in `pkg/observability` so inner layers can log via `logctx.From(ctx)` without importing infrastructure ([10](10-shared-packages.md)). This is one of the two ports implemented outside `adapter/` — logging is cross-cutting, not a business operation ([03](03-architecture-rules.md#ports-implemented-outside-adapter)).
+The port is in `pkg/observability` so inner layers can log via `logctx.From(ctx)` without importing infrastructure ([10](10-shared-packages.md)). This is one of the three ports implemented outside `adapter/` — logging is cross-cutting, not a business operation ([03](03-architecture-rules.md#ports-implemented-outside-adapter)).
 
-`New(cfg *config.Config)` takes the whole config: level and format come from `cfg.Log`, every line is stamped with `service`, `version` and `env` from the app fields, timestamps are RFC 3339 with nanoseconds, and the first line a process emits is `config loaded` with `cfg.Summary()` — every non-secret setting it runs with. `production.yaml` keeps `log.level: info` so access and lifecycle lines survive in production.
+`New(cfg *config.Config)` takes the whole config: level and format come from `cfg.Log`, every line is stamped with `service`, `version` and `env` from the app fields, timestamps are RFC 3339 with nanoseconds, and the first line a process emits is `config loaded` with `cfg.Summary()` — a redacted subset of what it runs with (endpoints, modes, database host and name, log and tracing settings; never secrets). `production.yaml` keeps `log.level: info` so access and lifecycle lines survive in production.
 
 Two details that exist because wrapping a logger usually breaks its caller reporting:
 
@@ -350,7 +350,7 @@ Note the propagator is still installed in the no-op path, so inbound `traceparen
 
 `Shutdown` flushes pending spans; without calling it, the last spans before exit are lost. `SampleRatio` defaults to 0.1 in `base.yaml`.
 
-`Provider(ctx, cfg, log)` wraps `New` for DI and logs a flush failure at shutdown. The provider alone creates no spans: the HTTP routers install the framework's OTel middleware first (`otelfiber`, `otelgin`, `otelchi`, `otelecho`) and `NewGRPCServer` adds the `otelgrpc` stats handler, so every request has a server span and `trace_id` on its log lines.
+`Provider(ctx, cfg, log)` wraps `New` for DI and logs a flush failure at shutdown. The provider alone creates no spans: the HTTP routers install the framework's OTel middleware ahead of RequestID and Logging (`otelfiber`, `otelgin`, `otelchi`, `otelecho`; fiber and chi run `ClientIP` before it) and `transport/grpc.New` adds the `otelgrpc` stats handler, so every request has a server span and `trace_id` on its log lines.
 
 ## Nothing here knows about business rules
 

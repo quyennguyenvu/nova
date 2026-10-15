@@ -26,7 +26,7 @@ Run without arguments for interactive mode, or use flags to skip prompts.
 Examples:
 	nova new
 	nova new myproject --module=github.com/myorg/myproject --transport=http
-	nova new myproject --http-framework=fiber --database=postgres --cache=redis`,
+	nova new myproject --transport=http --http-framework=fiber --database=postgres --cache=redis`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runNew,
 	}

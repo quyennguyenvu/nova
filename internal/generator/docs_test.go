@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -200,4 +201,65 @@ func assertNovaTargetsListed(t *testing.T) {
 		mustContainAll(t, claude, "make "+name)
 	}
 	mustContainAll(t, readme, "`{cache}`")
+}
+
+// TestDocsLinksResolve: every relative link in nova's docs points at a file
+// that exists and, when it carries a #fragment, at a heading that exists —
+// so renaming a section or moving a file breaks the build, not a reader.
+func TestDocsLinksResolve(t *testing.T) {
+	t.Parallel()
+	docs, err := filepath.Glob(filepath.Join("..", "..", "docs", "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs = append(docs, filepath.Join("..", "..", "README.md"), filepath.Join("..", "..", "CLAUDE.md"))
+	link := regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
+	for _, doc := range docs {
+		for _, m := range link.FindAllStringSubmatch(stripFences(readFile(t, doc)), -1) {
+			target := m[1]
+			if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
+				continue
+			}
+			path, anchor, _ := strings.Cut(target, "#")
+			file := doc
+			if path != "" {
+				file = filepath.Join(filepath.Dir(doc), path)
+			}
+			if !fileExists(file) {
+				t.Errorf("%s links to missing %s", filepath.Base(doc), target)
+				continue
+			}
+			if anchor != "" && strings.HasSuffix(file, ".md") && !headingAnchors(t, file)[anchor] {
+				t.Errorf("%s links to missing heading %s", filepath.Base(doc), target)
+			}
+		}
+	}
+}
+
+var fence = regexp.MustCompile("(?s)```.*?```")
+
+func stripFences(src string) string { return fence.ReplaceAllString(src, "") }
+
+// headingAnchors returns the GitHub anchors of every heading in a Markdown
+// file: lowercased, punctuation other than "-" and "_" dropped, spaces as
+// "-", and "-1", "-2"… appended to repeats.
+func headingAnchors(t *testing.T, file string) map[string]bool {
+	t.Helper()
+	drop := regexp.MustCompile(`[^\p{L}\p{N}_\- ]`)
+	seen := map[string]int{}
+	anchors := map[string]bool{}
+	for _, line := range strings.Split(stripFences(readFile(t, file)), "\n") {
+		text, ok := strings.CutPrefix(strings.TrimLeft(line, "#"), " ")
+		if !ok || !strings.HasPrefix(line, "#") {
+			continue
+		}
+		slug := strings.ReplaceAll(drop.ReplaceAllString(strings.ToLower(strings.TrimSpace(text)), ""), " ", "-")
+		if n := seen[slug]; n > 0 {
+			anchors[slug+"-"+strconv.Itoa(n)] = true
+		} else {
+			anchors[slug] = true
+		}
+		seen[slug]++
+	}
+	return anchors
 }

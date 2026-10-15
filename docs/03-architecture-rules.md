@@ -6,14 +6,14 @@ The dependency rule the layout enforces, and the adapter-vs-infrastructure decis
 
 1. **Dependency Rule**: Source code dependencies point inward only
    - Domain layer has ZERO external dependencies (no framework imports)
-   - Use case layer depends only on domain
-   - Adapter layer depends on domain and use case
+   - Use case layer depends only on domain and `pkg/` (`TestDependencyRule` pins both)
+   - Adapter layer depends on domain and `pkg/`, plus the infrastructure clients it wraps (`cache.Client`, `search.Client`); never on use case
    - Infrastructure depends on all inner layers
 
 2. **Dependency Inversion**:
    - High-level modules (use cases) define interfaces
    - Low-level modules (repositories) implement them
-   - Interfaces live in the domain layer
+   - Interfaces live in the domain layer (except the cross-cutting `observability.Logger`, in `pkg/`)
 
 3. **Separation of Concerns**:
    - Entities contain enterprise-wide business rules
@@ -32,7 +32,7 @@ This is the most confusing part of Clean Architecture. Here's the definitive dis
 | **Purpose**                  | Implements domain ports by carrying out business operations on an external system          |
 | **Question to ask**          | "Does this fulfil a domain port by talking to an external system?"                         |
 | **Contains business logic?** | Yes - data transformation, mapping, business-aware error handling                          |
-| **Examples**                 | Repository implementations, HTTP handlers, gRPC handlers, external API clients, assemblers |
+| **Examples**                 | Repository implementations, event publishers, external API clients                         |
 
 **Adapter components:**
 
@@ -41,6 +41,7 @@ adapter/
 ├── repository/              # Implements domain.XxxRepository
 │   ├── postgres/            # SQL implementation
 │   ├── mysql/               # SQL implementation
+│   ├── memory/              # In-memory implementation (no database)
 │   ├── redis/               # Cache-aside decorator
 │   └── elasticsearch/       # Search index
 ├── pubsub/                  # Event publishing implementations
@@ -57,7 +58,9 @@ transport/                   # Delivery mechanisms (separate from adapter)
 │       └── order/
 ├── grpc/
 │   ├── interceptor/         # gRPC-specific middleware (interceptors)
-│   └── v1/seller/
+│   ├── rpcstatus/           # AppError → gRPC status
+│   └── user.go              # UserService server
+├── worker/                  # Consumer, dispatch policy, v1/user handler
 └── cronjob/                 # Cron job handlers (no middleware)
 ```
 
@@ -122,8 +125,8 @@ infrastructure/
 | --------------------------------------------------- | ------------------- | ------------------------------------------------ |
 | `database.NewPostgresDB()` → `*pgxpool.Pool`        | **infrastructure/** | Just creates the pool, no business logic         |
 | `UserRepository.Create(user)` → runs INSERT         | **adapter/**        | Implements `domain.UserRepository`               |
-| `cache.New()` → `redis.UniversalClient`             | **infrastructure/** | Just creates the client                          |
-| `UserCache.GetByID()` → checks cache, falls through | **adapter/**        | Implements caching strategy for a domain port    |
+| `cache.New()` → `*cache.Client`                     | **infrastructure/** | Just creates the client                          |
+| `UserCacheRepository.GetByID()` → cache, then DB    | **adapter/**        | Implements caching strategy for a domain port    |
 | `config.Load()` → `*Config`                         | **infrastructure/** | Pure technical config loading                    |
 | `HTTPServer.Start()` → listens on port              | **infrastructure/** | Server bootstrap                                 |
 | `Handler.Create(c *fiber.Ctx)`                      | **transport/**      | Calls use case, transforms request/response      |
@@ -148,8 +151,9 @@ Think of it this way:
 
 ### Ports implemented outside `adapter/`
 
-Satisfying a port is necessary but not sufficient for `adapter/`. The implementation must also _carry out a business operation against an external system_ — persist, publish, charge, notify. Two ports in this layout are implemented in `infrastructure/`:
+Satisfying a port is necessary but not sufficient for `adapter/`. The implementation must also _carry out a business operation against an external system_ — persist, publish, charge, notify. Three ports in this layout are implemented in `infrastructure/`:
 
+- `domain/security.TokenIssuer` → `infrastructure/jwt/service.go`, bound in DI (see below).
 - `domain/security.PasswordHasher` → `infrastructure/security/bcrypt.go`. `Hash(plain string) (string, error)` is pure computation: no external system, no `context.Context`, no I/O, nothing to map. A technical capability the usecase consumes, like a connection pool.
 - `pkg/observability.Logger` → `infrastructure/logger/zerolog.go`. It does write output, but logging is cross-cutting, not a business operation. [04](04-placement-rationale.md) documents this split.
 

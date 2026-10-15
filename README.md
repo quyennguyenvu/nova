@@ -115,18 +115,18 @@ nova add worker order                     # full worker transport + order featur
 nova add all order                        # entity + usecase + repository + handler
 ```
 
-Names must be Go identifiers (letters and digits, starting with a letter); `add` needs a module path (a `go.mod`, or `module:` in `nova.yaml`), writes only under the project root, refuses to overwrite a feature file unless you pass `--force`, and rejects a `--type` that does not match the project's database.
+Names must be Go identifiers (letters and digits, starting with a letter); `add` needs a module path (a `go.mod`, or `module:` in `nova.yaml`), writes only under the project root, refuses to overwrite a feature file unless you pass `--force`, and rejects a `--type` other than the project's database unless that engine's adapter package already exists.
 
 #### worker — a runnable second service
 
 `nova add worker <Name>` scaffolds a **runnable worker service** you can run alongside an existing one (e.g. an HTTP API) from the same repo — `go run main.go worker`. It generates the whole inbound worker subsystem plus its entry points:
 
-- `internal/transport/worker/` — the `Handler` interface, `Worker` orchestrator, and a broker consumer (`kafka`/`rabbitmq`, from `stack.message_queue`)
+- `internal/transport/worker/` — the `Handler` interface, `Worker` orchestrator, and a broker consumer (`kafka`/`rabbitmq`, detected from `internal/infrastructure/pubsub/`, else `stack.message_queue`)
 - `internal/transport/worker/v1/<name>/` — a per-feature handler + message DTO
 - `cmd/worker.go` + `internal/app/worker.go` — the `worker` subcommand and its bootstrap
 - and it registers `workerCommand()` in `cmd/root.go`
 
-The bootstrap boots through the project's **DI graph** (`di.InitializeWorker`), byte-identical to what `nova new --transport=worker` emits, so it is broker-agnostic. `add` also drops a minimal `WorkerApp` struct + `InitializeWorker` injector into `internal/infrastructure/di` (wire or fx, from `stack.di`) — each symbol only when that package doesn't already declare it, so a worker-enabled project is left untouched and re-runs never duplicate. This assumes a nova-new (or `nova.yaml`) layout with a message broker: a project whose `stack.message_queue` is neither `kafka` nor `rabbitmq` is refused, because the consumer is wired to its `infrastructure/pubsub` package; with no `di` package it prints a hint instead. Complete the injector with your provider sets, run `go mod tidy` and (for wire) `wire`, then `go run main.go worker`. Shared files are written only when **absent**, so a second `nova add worker payment` just appends its feature handler.
+The bootstrap boots through the project's **DI graph** (`di.InitializeWorker`), byte-identical to what `nova new --transport=worker` emits, so it is broker-agnostic. `add` also merges a `WorkerApp` struct and an `InitializeWorker` injector into `internal/infrastructure/di` (wire or fx, detected from the package's `wire.go`/`fx.go`, else `stack.di`) — each symbol only when that package doesn't already declare it, so a worker-enabled project is left untouched and re-runs never duplicate. The wire injector already builds the infrastructure set plus a broker-aware worker set; the fx one starts without modules for you to add. This assumes a nova-new (or `nova.yaml`) layout with a message broker: a project with neither `infrastructure/pubsub/kafka.go` nor `rabbitmq.go`, whose `stack.message_queue` is not `kafka` or `rabbitmq` either, is refused, because the consumer is wired to that package; with no `di` package it prints a hint instead. Run `go mod tidy` and (for wire) `make wire-gen`, then `go run main.go worker`. Shared files are written only when **absent**, so a second `nova add worker payment` just appends its feature handler.
 
 #### sqlc-backed repositories
 
@@ -137,11 +137,11 @@ When the project's stack uses **sqlc** (the default), `nova add repository <Name
 - the **repository impl** (typed against `*entity.<Name>`, satisfies the domain port),
 - the entity ⇄ row **mapper**.
 
-Go types are mapped to SQL + the sqlc row type as far as possible — `int64`→`BIGINT`, `string`→`TEXT`/`VARCHAR`, `bool`→`BOOLEAN`, `float64`→`DOUBLE PRECISION`/`DOUBLE`, `time.Time`→`TIMESTAMP`/`DATETIME` (postgres timestamps go through `pgtype`), `json.RawMessage`→`JSONB`/`JSON`. Fields with unsupported types are skipped with a warning so the output always compiles. After generating, run `make gen` (sqlc) and wire the repository into your DI provider. For `raw`/`gorm` stacks a generic hand-fillable stub is emitted instead.
+Go types are mapped to SQL + the sqlc row type as far as possible — `int64`→`BIGINT`, `string`→`TEXT`/`VARCHAR`, `bool`→`BOOLEAN`/`TINYINT(1)`, `float64`→`DOUBLE PRECISION`/`DOUBLE`, `time.Time`→`TIMESTAMP WITH TIME ZONE`/`DATETIME(6)` (postgres timestamps go through `pgtype`), `json.RawMessage`→`JSONB`/`JSON`. Fields with unsupported types are skipped with a warning so the output always compiles. After generating, run `make gen` (sqlc) and wire the repository into your DI provider. For `raw`/`gorm` stacks a generic hand-fillable stub is emitted instead.
 
 #### `nova.yaml` — targeting non-nova layouts
 
-`add` decides _where_ each component's files go from a `nova.yaml` at the project root. Projects generated by `nova new` follow nova's standard layout and need no file — the built-in defaults apply. To scaffold into a project with a **different** layout, drop a `nova.yaml` describing it:
+`add` decides _where_ each component's files go from a `nova.yaml` at the project root. Projects generated by `nova new` ship a `nova.yaml` recording their stack and the standard layout; keep it, because without it `add` falls back to a fiber/postgres/wire stack. To scaffold into a project with a **different** layout, drop a `nova.yaml` describing it:
 
 ```yaml
 version: 1
@@ -202,7 +202,7 @@ make verify-gen       # gen-api + list every output file
 make diff-gen         # gen-api + print key generated files for review
 ```
 
-Output for the `gen-api` / `gen-worker` / `gen-grpc` targets lands in `/tmp/nova-test-output`. CI (`.github/workflows/ci.yaml`) runs `go test -short ./...` and golangci-lint on every push and pull request; run `make test-all` locally before changing templates.
+Output for the `gen-api` / `gen-worker` / `gen-grpc` targets lands in `/tmp/nova-test-output`. CI (`.github/workflows/ci.yaml`) runs `go test -short ./...` and golangci-lint on pushes to `main` and on every pull request; run `make test-all` locally before changing templates.
 
 ### Knowledge graph
 

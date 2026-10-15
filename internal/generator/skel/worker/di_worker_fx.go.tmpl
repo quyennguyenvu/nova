@@ -29,7 +29,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 		fx.NopLogger,
 		fx.Provide(func() context.Context { return ctx }),
 		// TODO: add infraModule(), workerModule(), adapterModule(), usecaseModule()
-		fx.Populate(&log, &w, &tracer, &cfg),
+		fx.Populate(&log, &tracer, &w, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start worker app: %w", err)
@@ -41,5 +41,5 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
-	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil
+	return &WorkerApp{Logger: log, Tracer: tracer, Worker: w}, cleanup, nil
 }

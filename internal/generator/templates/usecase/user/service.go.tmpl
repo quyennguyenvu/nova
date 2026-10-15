@@ -19,8 +19,9 @@ import (
 {{- end}}
 )
 
-// Service implements the user use case. It never calls the logger directly —
-// it wraps errors with errors.Wrapf and lets the transport boundary log once.
+// Service implements the user use case. It never logs an error it returns —
+// it wraps with errors.Wrapf and lets the transport boundary log once; the one
+// exception is the best-effort publish, which logs and does not fail.
 //
 // Login lives on this service rather than a separate auth feature because
 // authentication IS a user concern in the scaffold; it signs through the
@@ -126,9 +127,19 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*Output, e
 func (s *Service) Get(ctx context.Context, id int64) (*Output, error) {
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, errors.Wrapf(err, "get user id=%d", id)
+		return nil, notFoundAsUser(err, "get user id=%d", id)
 	}
 	return toOutput(user), nil
+}
+
+// notFoundAsUser classifies a missing row as the user-specific 404
+// (UserNotFound) rather than the generic RecordNotFound; any other error is
+// wrapped unchanged.
+func notFoundAsUser(err error, format string, id int64) error {
+	if errors.Is(err, errors.ErrNotFound) {
+		return errors.L(locale.UserNotFound).WithCause(errors.Wrapf(err, format, id))
+	}
+	return errors.Wrapf(err, format, id)
 }
 
 func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*Output, error) {
@@ -137,7 +148,7 @@ func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*Out
 	}
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, errors.Wrapf(err, "update user id=%d: load", id)
+		return nil, notFoundAsUser(err, "update user id=%d: load", id)
 	}
 
 	if input.Name != "" {

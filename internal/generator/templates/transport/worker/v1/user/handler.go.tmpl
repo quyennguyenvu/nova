@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"{{.ModuleName}}/internal/transport/worker"
-	"{{.ModuleName}}/internal/usecase/useraudit"
+	userauditsvc "{{.ModuleName}}/internal/usecase/useraudit"
 	"{{.ModuleName}}/pkg/errors"
 )
 
@@ -14,14 +14,14 @@ import (
 const userCreatedTopic = "user.created"
 
 // Handler implements worker.Handler for the user.created event. It
-// deserializes the inbound JSON, calls useraudit.Service.RecordUserCreated,
+// deserializes the inbound JSON, calls userauditsvc.Service.RecordUserCreated,
 // and lets the worker's policy translate errors into retries, parking or
 // redelivery: input that can never succeed is returned as worker.Poison.
 type Handler struct {
-	audit *useraudit.Service
+	audit *userauditsvc.Service
 }
 
-func NewHandler(audit *useraudit.Service) *Handler {
+func NewHandler(audit *userauditsvc.Service) *Handler {
 	return &Handler{audit: audit}
 }
 
@@ -38,7 +38,7 @@ func (h *Handler) Handle(ctx context.Context, payload []byte) error {
 		return worker.Poison(errors.New("user.created: missing eventId"))
 	}
 
-	input := useraudit.UserCreatedInput{
+	input := userauditsvc.UserCreatedInput{
 		EventID:    msg.EventID,
 		UserID:     msg.UserID,
 		Email:      msg.Email,

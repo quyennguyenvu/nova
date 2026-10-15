@@ -69,8 +69,8 @@ func NewTokenService(cfg config.JWTConfig) (*TokenService, error) {
 	}, nil
 }
 
-// AccessTokenTTL exposes the configured lifetime so handlers can return it
-// in the login response (RFC 6749 expires_in).
+// AccessTokenTTL exposes the configured lifetime so the login usecase can
+// return it as ExpiresIn (RFC 6749 expires_in).
 func (s *TokenService) AccessTokenTTL() time.Duration { return s.accessTokenTTL }
 
 // Sign issues a signed access token for p. The token's exp/iat/iss/aud are

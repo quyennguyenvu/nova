@@ -6,19 +6,19 @@ What `nova new` asks, which flag maps to each answer, and how invalid or unimple
 
 `nova new` with no flags asks the questions below, in this order — see [internal/prompt/prompt.go](../internal/prompt/prompt.go) (`RunInteractive`). Each has a matching `nova new` flag; passing **any** flag skips every prompt and fills the rest from `config.DefaultConfig()`. The choices offered are exactly the option sets in [internal/config/options.go](../internal/config/options.go).
 
-| Prompt                | Flag               | Values (default first)                               |
-| --------------------- | ------------------ | ---------------------------------------------------- |
-| Project name          | positional arg     | letters, digits, `.`, `_`, `-` (default `myproject`) |
-| Go module name        | `--module`         | a Go module path (default `github.com/myorg/<name>`) |
-| Transport layer       | `--transport`      | `http`, `grpc`, `worker`                             |
-| HTTP framework        | `--http-framework` | `fiber`, `gin`, `chi`, `echo`                        |
-| Database              | `--database`       | `postgres`, `mysql`, `none`                          |
-| Cache                 | `--cache`          | `redis`, `none`                                      |
-| Search engine         | `--search`         | `none`, `elasticsearch`                              |
-| Message queue         | `--queue`          | `none` (`kafka` for workers), `kafka`, `rabbitmq`    |
-| Dependency injection  | `--di`             | `wire`, `fx`                                         |
-| Include Docker setup? | `--docker`         | `true`; pass `--docker=false` to skip                |
-| Include CI/CD?        | `--ci`             | `github`, `none`                                     |
+| Prompt                | Flag               | Values (default first)                                     |
+| --------------------- | ------------------ | ---------------------------------------------------------- |
+| Project name          | positional arg     | letters, digits, `.`, `_`, `-` (default `myproject`)       |
+| Go module name        | `--module`         | a Go module path (default `github.com/myorg/<name>`)       |
+| Transport layer       | `--transport`      | `http`, `grpc`, `worker`                                   |
+| HTTP framework        | `--http-framework` | `fiber`, `gin`, `chi`, `echo`                              |
+| Database              | `--database`       | `postgres`, `mysql`, `none`                                |
+| Cache                 | `--cache`          | `redis`, `none`                                            |
+| Search engine         | `--search`         | `none`, `elasticsearch`                                    |
+| Message queue         | `--queue`          | `none`, `kafka`, `rabbitmq` (workers: `kafka`, `rabbitmq`) |
+| Dependency injection  | `--di`             | `wire`, `fx`                                               |
+| Include Docker setup? | `--docker`         | `true`; pass `--docker=false` to skip                      |
+| Include CI/CD?        | `--ci`             | `github`, `none`                                           |
 
 Three flags have no prompt because only one value is implemented per engine: `--db-driver` (`pgx` for postgres, `database/sql` for mysql), `--query` (`sqlc`) and `--config` (`yaml`). Leave them unset; `Validate` fills them in. `--force` lets `nova new` render into a directory that already has files; migrations keep their existing timestamped names, so a re-render overwrites them instead of adding a second copy.
 
@@ -26,7 +26,7 @@ The Makefile, the lint config and the git pre-commit hook are always emitted —
 
 `--transport=grpc` needs buf v1.70.0 on the PATH for `make gen` (the Go plugins are pinned in `buf.gen.yaml` and run through `go run`, so nothing else is installed).
 
-One option carries a cost the generator cannot remove: `--search=elasticsearch` imports the typed `go-elasticsearch` client, whose thousands of generated types make `golangci-lint run` take minutes on the rendered project (measured at 6–8 minutes against 19 seconds without it). The project still lints clean; budget for it, or switch the adapter to the low-level `esapi` client if lint time matters more than the typed API. nova's own bootstrap keeps Search off for exactly this reason.
+One option carries a cost the generator cannot remove: `--search=elasticsearch` imports the root `go-elasticsearch/v8` package (`internal/infrastructure/search`), which links its thousands of generated `typedapi` types even though the adapter only uses `esapi`; they make `golangci-lint run` take minutes on the rendered project (measured at 6–8 minutes against 19 seconds without it). The project still lints clean; budget for it, or build the client from `elastic-transport-go` + `esapi` if lint time matters. nova's own bootstrap keeps Search off for exactly this reason.
 
 ## Validation
 

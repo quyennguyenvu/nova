@@ -20,8 +20,8 @@ const (
 )
 
 // Auth verifies the bearer token via the JWT verifier and attaches the
-// resolved *identity.UserPrincipal to the request context. Inner handlers
-// read it via identity.UserPrincipalFromContext. Every 401 carries a
+// resolved *identity.UserPrincipal to the request context, where the usecase
+// reads it (identity.UserPrincipalFromContext). Every 401 carries a
 // WWW-Authenticate challenge.
 func Auth(tokenSvc *jwtsec.TokenService) fiber.Handler {
 	return func(c *fiber.Ctx) error {

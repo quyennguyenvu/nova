@@ -30,7 +30,12 @@ func main() { cmd.Execute() }
 func Execute() {
     locale.NewMapping()
 
-    root := &cobra.Command{Use: "{project}", Short: "Project description"}
+    root := &cobra.Command{
+        Use:   "{project}",
+        Short: "Project description",
+        // A boot failure prints the error, not the usage text.
+        SilenceUsage: true,
+    }
     root.AddCommand(
         apiCommand(),     // [HTTP]
         grpcCommand(),    // [gRPC]
@@ -76,14 +81,18 @@ func RunHTTPServer() error {
     if err != nil {
         return fmt.Errorf("initialize http server: %w", err)
     }
-    defer cleanup()
 
     log := app.Logger
     server := app.Server
+    defer func() {
+        start := time.Now()
+        cleanup()
+        log.Info("shutdown complete", "duration_ms", time.Since(start).Milliseconds())
+    }()
 
     errChan := make(chan error, 1)
     go func() {
-        if startErr := server.Start(); startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
+        if startErr := server.Start(); startErr != nil && !stderrors.Is(startErr, http.ErrServerClosed) {
             errChan <- startErr
         }
     }()
@@ -92,7 +101,7 @@ func RunHTTPServer() error {
     case <-ctx.Done():
         log.Info("shutdown signal received")
     case startErr := <-errChan:
-        log.Error("server stopped with error", "error", startErr)
+        log.Error("server stopped with error", errors.LogFields(startErr)...)
         return startErr
     }
 
@@ -107,9 +116,9 @@ Five things this shape gets right, all of which are easy to get wrong:
 2. **`Start()` runs in a goroutine** so the function can `select` on both the signal and a startup failure. A blocking `Listen` in the main goroutine can't observe SIGTERM.
 3. **`http.ErrServerClosed` is not an error.** It's what a graceful shutdown returns; treating it as a failure would make every clean stop exit non-zero.
 4. **`errChan` is buffered (size 1)** so the goroutine can't leak by blocking on a send after the `select` has already returned via `ctx.Done()`.
-5. **`defer cleanup()` before anything can fail.** Registered immediately after `Initialize*` succeeds, so every return path — signal, startup error, panic — runs it.
+5. **The deferred cleanup is registered before anything can fail.** It goes in right after `Initialize*` succeeds, so every return path — signal, startup error, panic — runs it, and it logs `shutdown complete` with its duration.
 
-`RunWorker` mirrors it (with `worker.Start(ctx)` / `worker.Stop()`), with two differences a consumer needs. A consume loop that returns while ctx is still live — nil, or `worker.ErrConsumerClosed` because the broker ended the subscription — is fatal: nothing resubscribes in-process, so it logs and exits non-zero for the orchestrator to restart. And on a signal it waits up to `drainTimeout` (30s) for the loop to finish the message in flight before `Stop()`, so the final ack or offset commit lands instead of being cut off by the consumer closing. The file is byte-identical to the one `nova add worker` generates — a nova test pins that.
+`RunWorker` mirrors it (with `worker.Start(ctx)` / `worker.Stop()`), with two differences a consumer needs. A consume loop that returns while ctx is still live — nil, or `worker.ErrConsumerClosed` because the broker ended the subscription — is fatal: nothing resubscribes in-process, so it logs and exits non-zero for the orchestrator to restart. And on a signal it waits up to `drainTimeout` (30s) for the consume loop to return before `Stop()`: the cancelled in-flight message is abandoned (left unacked or unmarked, so the broker redelivers it), and every ack or offset commit already decided lands instead of being cut off by the consumer closing. The file is byte-identical to the one `nova add worker` generates — a nova test pins that.
 
 ## di/app.go — per-entry-point bundles
 
@@ -117,11 +126,13 @@ Five things this shape gets right, all of which are easy to get wrong:
 // HTTPApp bundles every dependency the HTTP entry point needs from DI. The
 // Logger is the single instance wired into every service. Tracer is held here
 // so DI emits the tracing provider's cleanup hook (flush spans on shutdown)
-// even when no service consumes the tracer constructor argument directly.
+// even when no service consumes the tracer constructor argument directly. It
+// comes before Server so DI builds it first and, cleaning up in reverse,
+// flushes the last spans only after the server has drained.
 type HTTPApp struct {
     Logger *logger.Logger
-    Server *server.HTTPServer
     Tracer trace.Tracer
+    Server *server.HTTPServer
 }
 ```
 
@@ -130,7 +141,7 @@ type HTTPApp struct {
 Two jobs, one struct:
 
 - **It returns the _same_ logger** DI wired into every service, so the entry point's log lines correlate with the app's.
-- **`Tracer` is a field the entry point never reads.** A DI graph only builds what the requested type transitively needs; if nothing referenced the tracer, the tracing provider — and therefore its cleanup hook — would be pruned, and the last spans before exit would be lost. Listing it here is what forces the flush. Delete the field and you silently lose trace data on shutdown.
+- **`Tracer` is a field the entry point never reads.** A DI graph only builds what the requested type transitively needs; if nothing referenced the tracer, the tracing provider — and therefore its cleanup hook — would be pruned, and the last spans before exit would be lost. Listing it here is what forces the flush, and listing it before `Server` makes DI build it first, so its cleanup runs after the server drains. Delete the field, or move it last, and you silently lose trace data on shutdown.
 
 The struct is also what prunes the graph _down_: `WorkerApp` doesn't mention `server.HTTPServer`, so no HTTP provider enters the worker binary.
 
@@ -182,10 +193,10 @@ The build tag means this file is **excluded from normal builds** — `wire` read
 ```go
 // infraSet provides the foundational dependencies every binary needs:
 // config, logger, tracing, DB, redis, and the security primitives
-// (TokenService, hasher, validator). Mode-specific providers live in
-// httpInfraSet / workerInfraSet so unused Transport modes don't drag in
-// providers that would fail at startup (e.g. NewTokenService rejecting
-// a missing public key when the worker doesn't need JWTs).
+// (TokenService, hasher, validator). Wire builds only what an injector's
+// App struct reaches, so a worker never builds TokenService (and needs no
+// JWT keys). Transport-specific providers live in httpInfraSet /
+// grpcInfraSet / workerInfraSet.
 ```
 
 | Set              | Contents                                                                                                   |
@@ -202,13 +213,13 @@ The build tag means this file is **excluded from normal builds** — `wire` read
 
 All **unexported** — nothing outside `di` composes them, so they can be reorganized freely.
 
-The reason for splitting mode-specific sets is in that comment and is not cosmetic: a worker project has no JWT keys configured, and `NewTokenService` errors on a missing public key. Keeping it out of `workerInfraSet` means the worker never constructs it.
+Two things keep a worker from building HTTP or JWT machinery. The transport-specific sets keep server, router and gRPC providers out of its graph entirely. `NewTokenService` does sit in `infraSet`, but Wire (and fx) build only what the injector's App struct reaches, and nothing reachable from `WorkerApp` depends on it — which is why a worker project ships no JWT keys and `NewTokenService` never errors on the missing public key.
 
 ### wire.FieldsOf projects sub-configs
 
 ```go
 config.Load,
-wire.FieldsOf(new(*config.Config), "Log", "JWT", "Security"),
+wire.FieldsOf(new(*config.Config), "JWT", "Security"),
 ```
 
 This is what lets every constructor take the sub-struct it actually reads (`config.DatabaseConfig`, `config.HTTPConfig`, …) instead of the whole `*Config` ([09](09-infrastructure-layer.md#the-sub-config-projection)). Nested projection works too:
@@ -273,14 +284,15 @@ One `fx.Option` module per Wire set — `infraModule()`, `httpModule()`, `transp
 func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
     var (
         log    *logger.Logger
-        srv    *server.HTTPServer
         tracer trace.Tracer
+        srv    *server.HTTPServer
+        cfg    *config.Config
     )
     fxApp := fx.New(
         fx.NopLogger,
         fx.Provide(func() context.Context { return ctx }),
         infraModule(), httpModule(), adapterModule(), usecaseModule(), transportModule(),
-        fx.Populate(&log, &srv, &tracer),
+        fx.Populate(&log, &tracer, &srv, &cfg), // tracer before srv: its OnStop runs last
     )
     if err := fxApp.Start(ctx); err != nil {
         return nil, nil, fmt.Errorf("fx: start http app: %w", err)
@@ -292,7 +304,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
             log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
         }
     }
-    return &HTTPApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
+    return &HTTPApp{Logger: log, Tracer: tracer, Server: srv}, cleanup, nil
 }
 ```
 
@@ -300,7 +312,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 
 `fx_provider.go` adapts each `(instance, cleanup, error)` constructor into an fx provider with an `OnStop` hook, which is how the two engines converge on the same cleanup semantics.
 
-The stop budget is the app's `shutdown_timeout` (config, default 20s), populated alongside the logger: an operator can widen it when a dependency close is slow, and a stop that overruns it is logged with the budget, so the hooks fx skipped are visible rather than silently dropped. Each underlying cleanup still enforces its own deadline; this is the process-wide backstop, not the per-resource budget.
+The stop budget is the app's top-level `shutdown_timeout` (config, default 20s; fx projects only), populated alongside the logger: an operator can widen it when a dependency close is slow, and a stop that overruns it is logged with the budget, so the hooks fx skipped are visible rather than silently dropped. Each underlying cleanup still enforces its own deadline; this is the process-wide backstop, not the per-resource budget.
 
 ### Wire vs fx
 
@@ -340,7 +352,7 @@ ctx cancelled → RunHTTPServer returns → defer cleanup() runs
 Process exits cleanly
 ```
 
-The worker's chain is the same idea: the consumer group (or channel) closes first, then the Kafka producer or RabbitMQ connection, then the pool, then tracing — and `RunWorker` has already waited for the consume loop before any of it runs.
+Tracing flushes last because the App bundles list `Tracer` before the server or worker, so DI builds it first; nova's bootstrap checks that order in every generated `wire_gen.go`. The worker's chain follows the same rule: the DB pool closes first, then the Kafka producer and consumer group (or the RabbitMQ channel, then the connection), then tracing — and `RunWorker` has already waited for the consume loop and stopped the worker before any of it runs.
 
 Reverse order is what makes this correct rather than just tidy: the server stops accepting requests _before_ the pool it depends on closes, so no in-flight request meets a closed pool. You get this for free — but only if every constructor that owns a resource returns its cleanup. A constructor that closes nothing leaks it, and no test will tell you.
 

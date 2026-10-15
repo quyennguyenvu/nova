@@ -50,7 +50,7 @@ import (
 {{- if .HasWorker}}
 	"{{.ModuleName}}/internal/transport/worker"
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
-	"{{.ModuleName}}/internal/usecase/useraudit"
+	userauditsvc "{{.ModuleName}}/internal/usecase/useraudit"
 {{- end}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/observability"
@@ -60,10 +60,10 @@ import (
 
 // infraSet provides the foundational dependencies every binary needs:
 // config, logger, tracing, DB, redis, and the security primitives
-// (TokenService, hasher, validator). Mode-specific providers live in
-// httpInfraSet / workerInfraSet so unused Transport modes don't drag in
-// providers that would fail at startup (e.g. NewTokenService rejecting
-// a missing public key when the worker doesn't need JWTs).
+// (TokenService, hasher, validator). Wire builds only what an injector's
+// App struct reaches, so a worker never builds TokenService (and needs no
+// JWT keys). Transport-specific providers live in httpInfraSet /
+// grpcInfraSet / workerInfraSet.
 var infraSet = wire.NewSet(
 	config.Load,
 	wire.FieldsOf(new(*config.Config), "JWT", "Security"),
@@ -189,7 +189,7 @@ var adapterSet = wire.NewSet(
 var usecaseSet = wire.NewSet(
 	usersvc.NewService,
 {{- if .HasWorker}}
-	useraudit.NewService,
+	userauditsvc.NewService,
 {{- end}}
 )
 

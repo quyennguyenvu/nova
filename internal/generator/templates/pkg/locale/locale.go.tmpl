@@ -89,8 +89,8 @@ type Mapping map[Locale]string
 // translations is populated by NewMapping() — no init() side effects.
 var translations = map[Language]Mapping{}
 
-// mappingOnce guards the translations map: NewMapping is called from the DI
-// provider and from tests, and a second registration must not race a reader.
+// mappingOnce guards the translations map: NewMapping is called from
+// cmd/root.go and from tests, and a second registration must not race a reader.
 var mappingOnce sync.Once
 
 // NewMapping registers all language translations. Safe to call more than

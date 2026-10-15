@@ -201,10 +201,12 @@ func (g *ComponentGenerator) GenerateWorker(name string) error {
 		g.Out,
 		"   ▶ run `go mod tidy` then `go run main.go worker` (broker addr via env, e.g. KAFKA_BROKERS)\n",
 	)
-	fmt.Fprintf(
-		g.Out,
-		"   ▶ add more feature handlers to provideWorkerHandlers in internal/infrastructure/di/provider.go\n",
-	)
+	if fileExists(filepath.Join(g.baseDir, "internal/infrastructure/di/provider.go")) {
+		fmt.Fprintf(
+			g.Out,
+			"   ▶ add more feature handlers to provideWorkerHandlers in internal/infrastructure/di/provider.go\n",
+		)
+	}
 	return nil
 }
 
@@ -248,10 +250,10 @@ func (g *ComponentGenerator) registerWorkerCommand() error {
 }
 
 // scaffoldWorkerDI drops the worker's DI wiring into the project's di package
-// (internal/infrastructure/di): the WorkerApp bundle plus a minimal
-// InitializeWorker injector for the project's DI engine (Stack.DI). The
-// injector is a scaffold — it builds only WorkerApp; the user adds the provider
-// sets the worker needs. To match the nova-new layout, the WorkerApp struct is
+// (internal/infrastructure/di): the WorkerApp bundle plus an InitializeWorker
+// injector for the project's DI engine, detected from wire.go/fx.go (else
+// Stack.DI). The wire injector builds infraSet plus a broker-aware
+// workerInfraSet; the fx one starts with no modules for the user to add. To match the nova-new layout, the WorkerApp struct is
 // merged into the existing app.go and InitializeWorker into wire.go (or fx.go)
 // rather than dropped in separate files; when that canonical file is absent it
 // falls back to a standalone worker_*.go. Each symbol is written only when the

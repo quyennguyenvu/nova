@@ -5,7 +5,7 @@ The full tree `nova new` produces, and which flag gates each entry. ([index](REA
 The tree below is the **union of every transport**, generated with everything else turned on:
 
 ```bash
-nova new {project} --module=… --transport={http|grpc|worker} --http-framework=fiber \
+nova new {project} --module=… --transport={http|grpc|worker} [--http-framework=fiber] \
   --database=postgres --db-driver=pgx --query=sqlc --cache=redis --search=elasticsearch \
   --queue=kafka --config=yaml --di=wire --docker --ci=github
 ```
@@ -21,6 +21,7 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 ├── .golangci.yaml                          # Lint config (mirrors nova's own)
 ├── .sqlfluff                               # SQL formatter config (always emitted; `make lint` uses it for sqlc projects)
 ├── Dockerfile                              # [--docker]
+├── .dockerignore                           # [--docker] keeps .env, keys and .git out of the build context
 ├── docker-compose.yaml                     # [--docker] app + deps, each under a CPU/memory limit
 ├── Makefile
 ├── README.md
@@ -97,6 +98,7 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   ├── transport/                          # Delivery mechanisms — separate from adapter/
 │   │   ├── http/                           # [HTTP]
 │   │   │   ├── router.go                   # Root router + middleware registration + Registrar iface
+│   │   │   ├── router_test.go              # Drives the real router: 404/405, 413, 504, client IP, access line
 │   │   │   ├── health/
 │   │   │   │   └── checker.go              # /healthz (liveness) + /readyz (dependencies)
 │   │   │   ├── httpwriter/                 # Framework-bound bind/write helpers
@@ -104,7 +106,7 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   ├── middleware/                 # Framework-specific (Fiber/Gin/Chi/Echo handlers)
 │   │   │   │   ├── auth.go
 │   │   │   │   ├── bodylimit.go            # [gin/chi/echo] fiber caps the body in fiber.Config
-│   │   │   │   ├── clientip.go             # [chi] trusted-proxy client IP; others resolve it natively
+│   │   │   │   ├── clientip.go             # [chi, fiber] trusted-proxy client IP; gin/echo resolve it natively
 │   │   │   │   ├── cors.go
 │   │   │   │   ├── locale.go
 │   │   │   │   ├── logging.go
@@ -125,7 +127,7 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   ├── user.go                     # UserHandler — user.v1.UserService over api/gen
 │   │   │   ├── user_test.go                # bufconn end to end (codes, auth, health, locale)
 │   │   │   ├── rpcstatus/status.go         # AppError → gRPC status
-│   │   │   └── interceptor/                # interceptor.go (RequestID, Logging, Recovery), auth.go, locale.go
+│   │   │   └── interceptor/                # interceptor.go (RequestID, Logging, Recovery), auth.go, deadline.go, throttle.go, locale.go + tests
 │   │   └── worker/                         # [worker]
 │   │       ├── worker.go                   # Orchestrator: consumer → handler dispatch
 │   │       ├── policy.go                   # Per-message deadline, retries, parking (ErrPoison/ErrParked)
@@ -141,16 +143,19 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │       │                                   # PURPOSE: technical capabilities, no business logic
 │       ├── config/
 │       │   ├── config.go                   # Loader + Config struct
+│       │   ├── config_test.go              # [HTTP] how ./.env combines with the YAML
 │       │   ├── constant.go
 │       │   ├── base.yaml                   # [--config=yaml] shared defaults
 │       │   ├── development.yaml            # [--config=yaml] dev overrides
 │       │   └── production.yaml             # [--config=yaml] prod overrides
 │       ├── database/
-│       │   └── postgres.go                 # [--database=postgres] returns *pgxpool.Pool
+│       │   ├── postgres.go                 # [--database=postgres] returns *pgxpool.Pool
+│       │   └── mysql.go                    # [--database=mysql]    returns *sql.DB
 │       ├── cache/
-│       │   └── redis.go                    # [--cache=redis]       returns *redis.Client
+│       │   └── redis.go                    # [--cache=redis]       returns *cache.Client (single/sentinel/cluster)
 │       ├── pubsub/
-│       │   └── kafka.go                    # [--queue=kafka]       producer (+ consumer group for worker)
+│       │   ├── kafka.go                    # [--queue=kafka]       producer (+ consumer group for worker)
+│       │   └── rabbitmq.go                 # [--queue=rabbitmq]    connection (+ consuming channel for worker)
 │       ├── search/
 │       │   └── elasticsearch.go            # [--search=…]          returns the ES client
 │       ├── jwt/                            # JWT TokenService — signs at login, verifies in middleware

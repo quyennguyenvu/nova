@@ -104,6 +104,17 @@ func TestRegisterDuplicateEmailIs409(t *testing.T) {
 	}
 }
 
+// TestGetMissingUserIsUserNotFound: a missing row surfaces as the
+// user-specific 404 the docs and the translations describe, not the generic
+// RecordNotFound.
+func TestGetMissingUserIsUserNotFound(t *testing.T) {
+	_, err := newTestService(&fakeRepo{}).Get(t.Context(), 42)
+	app := errors.ToAppError(err)
+	if app == nil || app.Code != http.StatusNotFound || app.Locale != locale.UserNotFound {
+		t.Fatalf("Get on a missing id = %v, want 404 UserNotFound", err)
+	}
+}
+
 func TestRegisterRejectsInvalidInput(t *testing.T) {
 	cases := map[string]RegisterInput{
 		"bad email":  {Email: "not-an-email", Name: "Ann", Password: "hunter2-pass"},

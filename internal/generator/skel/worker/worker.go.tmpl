@@ -15,9 +15,9 @@ import (
 	"{{.ModuleName}}/internal/infrastructure/logger"
 )
 
-// Consumer is the broker-side abstraction. Implementations live in
-// kafka_consumer.go / rabbitmq_consumer.go (one is rendered per project per
-// MessageQueue choice). Subscribe blocks until ctx is cancelled or an
+// Consumer is the broker-side abstraction. The implementation lives in
+// consumer.go, rendered for the project's broker (sarama group or RabbitMQ
+// channel). Subscribe blocks until ctx is cancelled or an
 // unrecoverable error surfaces; dispatch is invoked per received message.
 // dispatch returns nil to ack, an error wrapping ErrParked to dead-letter and
 // ack, or the ctx error to leave the message for redelivery.
@@ -99,7 +99,7 @@ func (w *Worker) dispatch(ctx context.Context, msg Message) error {
 	h, ok := w.handlers[msg.Topic]
 	if !ok {
 		// Unknown topic — log and ack so we don't poison-pill the partition.
-		// Tighten by returning an error if your broker has a DLQ configured.
+		// To dead-letter it instead, return an error wrapping ErrParked.
 		w.log.Warn("worker: dropping message, no handler for topic", "topic", msg.Topic, "size", len(msg.Payload))
 		return nil
 	}

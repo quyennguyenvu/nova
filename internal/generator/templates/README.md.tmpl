@@ -52,7 +52,7 @@ internal/
 │       ├── router.go       # Framework instance + middleware order + Registrar interface
 │       ├── health/         # /healthz (liveness) + /readyz (dependency probes)
 │       ├── httpwriter/     # Framework-specific bind + response envelope writer
-│       ├── middleware/     # RequestID, Logging, Recovery, Timeout{{if ne .HTTPFramework "fiber"}}, BodyLimit{{end}}{{if eq .HTTPFramework "chi"}}, ClientIP{{end}}, CORS, Locale, Auth, LoginRateLimit
+│       ├── middleware/     # RequestID, Logging, Recovery, Timeout{{if ne .HTTPFramework "fiber"}}, BodyLimit{{end}}{{if or (eq .HTTPFramework "chi") (eq .HTTPFramework "fiber")}}, ClientIP{{end}}, CORS, Locale, Auth, LoginRateLimit
 │       └── v1/             # v1.go: APIPrefix + Prefixed embed (one prefix per section)
 │           └── user/       # Handler, Registrar (embeds v1.Prefixed), DTOs, assembler
 {{- end}}
@@ -78,7 +78,7 @@ internal/
     ├── search/             # Elasticsearch client factory (ping on construct)
     {{- end}}
     {{- if .HasMessageQueue}}
-    ├── pubsub/             # {{.MessageQueue}} producer{{if .HasWorker}} + consumer group{{end}} factory
+    ├── pubsub/             # {{if eq .MessageQueue "kafka"}}kafka producer{{if .HasWorker}} + consumer group{{end}}{{else}}rabbitmq connection{{if .HasWorker}} + consuming channel{{end}}{{end}} factory
     {{- end}}
     ├── jwt/                # TokenService (RS256 sign + verify)
     ├── logger/             # zerolog implementation of observability.Logger
@@ -129,12 +129,13 @@ internal/
 
 ```bash
 # Clone the repository
-git clone {{.ModuleName}}
+git clone https://{{.ModuleName}}.git
 cd {{.ProjectName}}
 
 # Copy environment variables; the binary loads ./.env on host runs
 # (real environment variables win over it).
 cp .env.example .env
+{{- if not .HasWorker}}
 
 # Generate an RS256 keypair and add the base64-encoded PEMs to .env.
 # Only the token-issuing service needs JWT_PRIVATE_KEY; verify-only services
@@ -143,10 +144,11 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt.key
 openssl rsa -in jwt.key -pubout -out jwt.pub
 sed -i.bak "s|^JWT_PUBLIC_KEY=.*|JWT_PUBLIC_KEY=$(base64 < jwt.pub | tr -d '\n')|" .env
 sed -i.bak "s|^JWT_PRIVATE_KEY=.*|JWT_PRIVATE_KEY=$(base64 < jwt.key | tr -d '\n')|" .env && rm .env.bak
+{{- end}}
 
 # Generate code and resolve dependencies. `make gen` runs{{if eq .QueryGen "sqlc"}} sqlc,{{end}}{{if .HasGRPC}} buf,{{end}} go mod tidy{{if .UseWire}}, wire{{end}} in the order that works.
 make gen
-{{- if .IncludeDocker}}
+{{- if and .IncludeDocker .HasDependencies}}
 
 # Start infrastructure only — the app itself runs on the host below
 docker compose up -d{{if eq .Database "mysql"}} mysql{{else if .HasDatabase}} postgres{{end}}{{if .HasRedis}} redis{{end}}{{if eq .MessageQueue "kafka"}} kafka{{end}}{{if eq .MessageQueue "rabbitmq"}} rabbitmq{{end}}{{if .HasElasticsearch}} elasticsearch{{end}}
@@ -237,6 +239,7 @@ End-to-end demo, with a publisher project generated next to this one:
 | DELETE | /api/v1/users/:id    | bearer | Delete a user                              |
 | GET    | /healthz             | public | Liveness check (always 200)                |
 | GET    | /readyz              | public | Readiness check (200 / 503)                |
+| GET    | /openapi.yaml        | public | The OpenAPI document this binary serves    |
 
 **Authenticated requests** carry `Authorization: Bearer <accessToken>` where the token comes from `POST /api/v1/login`.
 
@@ -304,8 +307,8 @@ make help           # List every target
 make setup          # Point git at .githooks (fmt + lint + build on commit)
 make test           # Run tests (race + coverage)
 make test-coverage  # Write coverage.out + coverage.html
-make lint           # Run linter{{if eq .QueryGen "sqlc"}} + sqlfluff{{end}}
-make fmt            # Format Go{{if eq .QueryGen "sqlc"}} + SQL{{end}}
+make lint           # Run linter{{if eq .QueryGen "sqlc"}} + sqlfluff{{end}}{{if .HasGRPC}} + buf lint{{end}}
+make fmt            # Format Go{{if eq .QueryGen "sqlc"}} + SQL{{end}}{{if .HasGRPC}} + protos{{end}}
 make vet            # go vet ./...
 {{- if or .UseWire (eq .QueryGen "sqlc") .HasGRPC}}
 make gen            # Regenerate {{if .UseWire}}wire_gen{{if or (eq .QueryGen "sqlc") .HasGRPC}} + {{end}}{{end}}{{if eq .QueryGen "sqlc"}}sqlc dbgen{{if .HasGRPC}} + {{end}}{{end}}{{if .HasGRPC}}proto stubs{{end}}
@@ -353,7 +356,7 @@ The project follows Clean Architecture principles:
 
 {{if and .HasRedis .HasElasticsearch}}The cache and search integrations follow{{else if .HasRedis}}The cache integration follows{{else}}The search integration follows{{end}} the same convention on purpose:
 
-- The **infrastructure client** is constructed and provided by the DI container ({{if .UseWire}}`infraSet` in `wire.go`{{else}}`infraModule` in `fx.go`{{end}}), so it is ready to inject.
+- The **infrastructure client** is provided by the DI container ({{if .UseWire}}`infraSet` in `wire.go`{{else}}`infraModule` in `fx.go`{{end}}), ready to inject; DI builds (and pings) it only once something you wire depends on it.
 - The **adapter** built on that client is a **standalone reference implementation** — it is deliberately **not** wired into the graph by default.
 
 This is intentional: the scaffold ships a correct, compiling adapter but leaves the decision of *where* to apply it to you, since that is a domain choice the generator cannot make. Plug each adapter into the usecase where you actually need it.

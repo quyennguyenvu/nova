@@ -7,7 +7,8 @@ import (
 )
 
 // UserFilter is the admin list's filter: an optional exact-match email plus
-// the page window. Zero values mean "no filter".
+// the page window. An empty Email means no email filter; Limit must be
+// positive (the usecase always sets it).
 type UserFilter struct {
 	Email  string
 	Limit  int32

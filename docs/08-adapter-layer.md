@@ -11,9 +11,12 @@ adapter/
 │   │   ├── tx_manager.go    # implements domain.TxManager
 │   │   ├── qx.go            # TX-aware query executor
 │   │   ├── user_repository.go
+│   │   ├── errors.go        # unique violation (23505) → ErrAlreadyExists
+│   │   ├── errors_test.go
 │   │   ├── dbgen/           # sqlc output — generated, not templated
 │   │   └── mapper/          # row ↔ entity, pure functions
-│   ├── mysql/               # [--database=mysql] same shape
+│   ├── mysql/               # [--database=mysql] same shape (1062 → ErrAlreadyExists)
+│   ├── memory/              # [--database=none] in-memory UserRepository + no-op TxManager
 │   ├── redis/               # [--cache=redis] cache-aside decorator
 │   └── elasticsearch/       # [--search=elasticsearch] derived read model
 └── pubsub/                  # [--queue]
@@ -29,7 +32,7 @@ A SQL repository is deliberately split across three concerns, so no file does tw
 ```bash
 ┌──────────────────────────────────────────────────────────────────────┐
 │ infrastructure/database/postgres.go                                  │
-│   NewPostgresPool() → (*pgxpool.Pool, cleanup, error)                │
+│   NewPostgresDB() → (*pgxpool.Pool, cleanup, error)                  │
 └────────────────────────────┬─────────────────────────────────────────┘
                              │ injected into
                 ┌────────────┴────────────┐
@@ -194,7 +197,7 @@ func UserToCreateParams(u *entity.User) dbgen.CreateUserParams {
 }
 ```
 
-`pgtype.Timestamptz` never escapes this package — that's the point. `UserToUpdateParams` carries only `ID` and `Name`, matching what `UpdateUser` actually sets.
+`pgtype.Timestamptz` never escapes this package — that's the point. `UserToUpdateParams` carries only `ID`, `Name` and `UpdatedAt`, matching what `UpdateUser` actually sets.
 
 ### The mysql variant
 
@@ -250,13 +253,11 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-
-CREATE INDEX idx_users_email ON users (email);
 ```
 
-golang-migrate format (`.up.sql`/`.down.sql`, timestamp-prefixed). `TIMESTAMP WITH TIME ZONE` rather than plain `TIMESTAMP` — storing wall-clock time without a zone is the classic source of one-hour bugs. The `UNIQUE` on `email` is the real uniqueness guarantee; the usecase's `GetByEmail` check only exists to produce a friendlier message ([06](06-usecase-layer.md#register--check-hash-create-publish)).
+golang-migrate format (`.up.sql`/`.down.sql`, timestamp-prefixed). `TIMESTAMP WITH TIME ZONE` rather than plain `TIMESTAMP` — storing wall-clock time without a zone is the classic source of one-hour bugs. The `UNIQUE` on `email` is the real uniqueness guarantee (and already indexes the column); the usecase's `GetByEmail` check only exists to produce a friendlier message ([06](06-usecase-layer.md#register--hash-then-check-and-insert-in-one-transaction)).
 
-> **Known bug:** `nova new`'s `create_users_table` migration emits postgres DDL (`BIGSERIAL`, `TIMESTAMP WITH TIME ZONE`) even for a `--database=mysql` project. `nova add repository` does emit correct per-engine DDL — see [internal/generator/repository_sqlc.go](../internal/generator/repository_sqlc.go).
+The mysql variant of the same migration uses `BIGINT AUTO_INCREMENT` and `DATETIME(6)`; `nova add repository` emits the same per-engine DDL ([internal/generator/repository_sqlc.go](../internal/generator/repository_sqlc.go)).
 
 ### Queries
 
@@ -329,7 +330,7 @@ The publisher mints `eventId` once per event and the broker may deliver that eve
 └─────────────────────┘      └────────────────────────┘      └──────────────────────┘
 ```
 
-The domain event never carries serialization concerns, so renaming a JSON field is a wire-format change that cannot reach the domain. The topic string lives here and is duplicated (with a pointer comment) in the worker's handler — see [07](07-transport-layer.md#the-ack-decision-is-the-interesting-part) for why that duplication is intentional.
+The domain event never carries serialization concerns, so renaming a JSON field is a wire-format change that cannot reach the domain. The topic string lives here and is duplicated (with a pointer comment) in the worker's handler — see [07](07-transport-layer.md#one-policy-three-outcomes) for why that duplication is intentional.
 
 ### The broker variant
 
@@ -343,7 +344,6 @@ wire.Bind(new(domain.UserPublisher), new(*pubsub.Publisher)),
 
 - **kafka** — wraps `sarama.SyncProducer`, which `infrastructure/pubsub.NewKafkaProducer` owns and closes. Checks `ctx.Err()` before marshalling, so a cancelled request doesn't publish.
 - **rabbitmq** — opens its own channel in confirm mode on the shared connection and declares the durable topic exchange named by `rabbitmq.exchange`, the same one the worker binds its queue to (a failed declare fails startup rather than the first publish). Every message is persistent and carries `MessageId`; `publish` waits for the broker's confirm, so a nil return means the broker accepted it. The constructor returns `(*Publisher, func(), error)`: the cleanup closes the channel, the connection's own cleanup closes the connection. The topic name becomes the routing key.
-- **nats** — a compiling stub returning `errors.L(locale.Unimplemented)`.
 
 Switching brokers in an existing project means re-rendering `publisher.go` and the `infrastructure/pubsub` factory. Usecases, handlers, and the other two files are untouched.
 
@@ -352,10 +352,11 @@ Switching brokers in an existing project means re-rendering `publisher.go` and t
 ```go
 // Package redis is the cache-aside decorator over UserRepository.
 //
-// Cache hits return an entity.User WITHOUT the Password/PasswordHash fields —
-// credentials are never serialized into Redis. Callers MUST NOT re-persist
-// the returned entity into the underlying store; pull a fresh row via
-// GetByEmail (which bypasses cache) when credentials are required.
+// Cache hits return an entity.User WITHOUT the PasswordHash field —
+// credentials are never serialized into Redis. Passing such an entity back
+// to Update is safe only because UpdateUser writes name and updated_at and
+// nothing else; keep it that way if that query grows columns, or pull a
+// fresh row via GetByEmail (which bypasses the cache) before persisting.
 ```
 
 `UserCacheRepository` implements `domain.UserRepository` by wrapping another `domain.UserRepository`, so the usecase is unaware it exists. Per-method behaviour:
@@ -391,8 +392,9 @@ Also not wired by default. Enabling it means calling `Index`/`Delete` on every u
 
 ## Ports implemented elsewhere
 
-Two ports are satisfied outside this layer, because satisfying a port is necessary but not sufficient for `adapter/`:
+Three ports are satisfied outside this layer, because satisfying a port is necessary but not sufficient for `adapter/`:
 
+- `domain/security.TokenIssuer` → `infrastructure/jwt/service.go` (signing is computation)
 - `domain/security.PasswordHasher` → `infrastructure/security/bcrypt.go` (pure computation)
 - `pkg/observability.Logger` → `infrastructure/logger/zerolog.go` (cross-cutting)
 

@@ -40,7 +40,7 @@ import (
 {{- if .HasWorker}}
 	"{{.ModuleName}}/internal/transport/worker"
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
-	"{{.ModuleName}}/internal/usecase/useraudit"
+	userauditsvc "{{.ModuleName}}/internal/usecase/useraudit"
 {{- end}}
 {{- if or .HasHTTP .HasGRPC .HasWorker}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
@@ -196,7 +196,7 @@ func usecaseModule() fx.Option {
 	return fx.Provide(
 		usersvc.NewService,
 {{- if .HasWorker}}
-		useraudit.NewService,
+		userauditsvc.NewService,
 {{- end}}
 	)
 }
@@ -223,7 +223,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 		adapterModule(),
 		usecaseModule(),
 		transportModule(),
-		fx.Populate(&log, &srv, &tracer, &cfg),
+		fx.Populate(&log, &tracer, &srv, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start http app: %w", err)
@@ -238,7 +238,7 @@ func InitializeHTTPServer(ctx context.Context) (*HTTPApp, func(), error) {
 			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
-	return &HTTPApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
+	return &HTTPApp{Logger: log, Tracer: tracer, Server: srv}, cleanup, nil
 }
 {{- end}}
 
@@ -262,7 +262,7 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 		adapterModule(),
 		usecaseModule(),
 		transportModule(),
-		fx.Populate(&log, &srv, &tracer, &cfg),
+		fx.Populate(&log, &tracer, &srv, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start grpc app: %w", err)
@@ -277,7 +277,7 @@ func InitializeGRPCServer(ctx context.Context) (*GRPCApp, func(), error) {
 			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
-	return &GRPCApp{Logger: log, Server: srv, Tracer: tracer}, cleanup, nil
+	return &GRPCApp{Logger: log, Tracer: tracer, Server: srv}, cleanup, nil
 }
 {{- end}}
 
@@ -301,7 +301,7 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 		workerModule(),
 		adapterModule(),
 		usecaseModule(),
-		fx.Populate(&log, &w, &tracer, &cfg),
+		fx.Populate(&log, &tracer, &w, &cfg),
 	)
 	if err := fxApp.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fx: start worker app: %w", err)
@@ -316,6 +316,6 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
 		}
 	}
-	return &WorkerApp{Logger: log, Worker: w, Tracer: tracer}, cleanup, nil
+	return &WorkerApp{Logger: log, Tracer: tracer, Worker: w}, cleanup, nil
 }
 {{- end}}

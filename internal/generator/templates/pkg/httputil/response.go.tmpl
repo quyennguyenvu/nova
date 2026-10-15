@@ -1,4 +1,5 @@
-// Package httputil holds the HTTP response envelope and per-framework writers.
+// Package httputil holds the framework-free HTTP response envelope; the
+// per-framework writers live in transport/http/httpwriter.
 //
 // All success and error responses share a single shape:
 //
@@ -40,8 +41,9 @@ type Response struct {
 
 // ErrorBody is the machine-readable error payload.
 //
-// Code is the stable application error identifier (HTTP status when sourced from
-// *errors.AppError; locale code when sourced from *locale.LocaleError).
+// Code is the stable application error identifier: the locale code when the
+// AppError carries one (every L and classify error does), otherwise its HTTP
+// status.
 type ErrorBody struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
