@@ -1,4 +1,4 @@
-.PHONY: build run clean gen gen-api gen-grpc gen-worker verify-gen diff-gen rebuild test test-all lint fmt vet help
+.PHONY: build run clean gen gen-api gen-grpc gen-worker verify-gen diff-gen rebuild test test-all lint fmt vet release help
 
 # Binary
 BINARY    := bin/nova
@@ -110,6 +110,11 @@ fmt: ## Format all Go source files
 
 vet: ## Run go vet
 	go vet ./...
+
+## —— Release ————————————————————————————————————
+
+release: ## Gate, tag and push a release: V=patch|minor|major|vX.Y.Z (FULL=1 gates on test-all)
+	./scripts/release.sh $(if $(FULL),--full) $(V)
 
 ## —— Help ———————————————————————————————————————
 

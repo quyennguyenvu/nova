@@ -37,6 +37,7 @@ make test-all         # full suite: 36-case vet matrix (2 at a time) + 8 real-to
 make lint             # GOGC=50 golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...
+make release V=minor  # scripts/release.sh: clean synced main → lint + test → confirm → push tag (CI runs GoReleaser)
 make help             # list every target
 
 make gen              # build + run `nova new` interactively

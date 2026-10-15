@@ -192,6 +192,7 @@ make test-all         # full suite: 36-case vet matrix + 8 real-toolchain bootst
 make lint             # golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...
+make release V=minor  # gate, tag and push a release (see Releasing)
 make help             # list every target
 
 make gen              # build + run `nova new` interactively
@@ -211,11 +212,11 @@ This repo ships a committed [graphify](https://github.com/Graphify-Labs/graphify
 ## Releasing
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+make release V=minor          # or patch, major, or an exact tag such as V=v1.0.0-rc.1
+make release V=patch FULL=1   # gate on make test-all instead of make test
 ```
 
-GitHub Actions runs GoReleaser, cross-compiles for Linux/macOS/Windows × amd64/arm64, and uploads `.tar.gz`/`.zip` archives + checksums to GitHub Releases.
+[scripts/release.sh](scripts/release.sh) refuses to run unless you are on a clean `main` that matches `origin/main`. It bumps from the latest `vX.Y.Z` tag, runs `make lint` and `make test`, lists the commits going out, and asks before it pushes an annotated tag. The tag push is the release: GitHub Actions (`.github/workflows/release.yaml`) runs GoReleaser, cross-compiles for Linux/macOS/Windows × amd64/arm64, and uploads `.tar.gz`/`.zip` archives + checksums to GitHub Releases. A tag with a pre-release suffix (`-rc.1`) is published as a pre-release, so `releases/latest` keeps pointing at the last stable version.
 
 ## License
 
