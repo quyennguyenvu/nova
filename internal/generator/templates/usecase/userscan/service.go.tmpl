@@ -1,0 +1,52 @@
+// Package userscan is the cron transport's reference usecase: it walks every
+// user in keyset pages. Copy its loop for any job that must touch many rows
+// without one long transaction or the whole table in memory. It depends only
+// on domain.UserRepository, so a cron binary never builds the user CRUD
+// service or its JWT signer.
+package userscan
+
+import (
+	"context"
+
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// batchSize bounds each page; one page is one round-trip.
+const batchSize = 500
+
+type Service struct {
+	users domain.UserRepository
+}
+
+func NewService(users domain.UserRepository) *Service {
+	return &Service{users: users}
+}
+
+// Scan walks users in id order, batchSize at a time, starting after
+// in.AfterID, and stops at the first short page. It checks ctx between pages
+// so a shutdown or deadline ends it cleanly. On error it still returns the
+// progress so far: LastID is where a rerun resumes.
+func (s *Service) Scan(ctx context.Context, in ScanInput) (*ScanResult, error) {
+	res := &ScanResult{LastID: in.AfterID}
+	for {
+		if err := ctx.Err(); err != nil {
+			return res, errors.Wrapf(err, "scan users after id=%d", res.LastID)
+		}
+		batch, err := s.users.ListAfter(ctx, res.LastID, batchSize)
+		if err != nil {
+			return res, errors.Wrapf(err, "scan users after id=%d", res.LastID)
+		}
+		// A real job's per-batch business goes here (update, publish, notify).
+		// Keep it idempotent: a resumed run may see a page again.
+		res.Scanned += int64(len(batch))
+		if len(batch) > 0 {
+			res.LastID = batch[len(batch)-1].ID
+		}
+		logctx.From(ctx).Debug("user scan: page done", "last_id", res.LastID, "scanned", res.Scanned)
+		if len(batch) < batchSize {
+			return res, nil
+		}
+	}
+}

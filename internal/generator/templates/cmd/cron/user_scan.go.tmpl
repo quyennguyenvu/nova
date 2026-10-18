@@ -1,0 +1,24 @@
+// Package cron holds one cobra command per cron job; cmd/cron.go mounts them
+// under `cron`.
+package cron
+
+import (
+	"github.com/spf13/cobra"
+
+	"{{.ModuleName}}/internal/app"
+)
+
+// UserScan is `cron user-scan`: walk every user once, a page at a time.
+func UserScan() *cobra.Command {
+	var afterID int64
+	cmd := &cobra.Command{
+		Use:   "user-scan",
+		Short: "Walk every user in id order, one page at a time",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return app.RunUserScan(afterID)
+		},
+	}
+	cmd.Flags().Int64Var(&afterID, "after-id", 0, "Resume after this user id (a failed run logs it)")
+	return cmd
+}

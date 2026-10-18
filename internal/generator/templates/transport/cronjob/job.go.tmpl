@@ -1,0 +1,16 @@
+// Package cronjob is the run-once cron transport: `cron <job>` boots the DI
+// graph for one Job, Runner applies the run policy, and the process exits 0
+// when the job completed or 1 when it did not. The schedule lives in the
+// deploy layer (a Kubernetes CronJob or crontab), not in this binary.
+package cronjob
+
+import "context"
+
+// Job is one unit of scheduled work. Run must be idempotent (the scheduler
+// may retry a failed run or start a second one) and must return once ctx is
+// done.
+type Job interface {
+	// Name is the job's log and span name, matching its cron subcommand.
+	Name() string
+	Run(ctx context.Context) error
+}

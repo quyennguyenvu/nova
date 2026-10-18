@@ -80,7 +80,9 @@ grpc:
 {{- if .HasCron}}
 
 cron:
-  spec: "0 * * * *" # every hour
+  # Deadline for one run; the job's ctx expires at it. Keep the scheduler's
+  # own limit (Kubernetes activeDeadlineSeconds) a little above it.
+  timeout: 30m
 {{- end}}
 
 {{- if .HasDatabase}}

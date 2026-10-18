@@ -1,0 +1,87 @@
+package userscan
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	"{{.ModuleName}}/internal/domain"
+	"{{.ModuleName}}/internal/domain/entity"
+)
+
+var errDB = errors.New("db down")
+
+// pagedRepo serves users 1..total through ListAfter and records each cursor.
+type pagedRepo struct {
+	domain.UserRepository // only ListAfter is called
+
+	total   int64
+	failOn  int                // 1-based ListAfter call that fails; 0 never fails
+	cancel  context.CancelFunc // called after the first page: a shutdown mid-scan
+	cursors []int64
+}
+
+func (r *pagedRepo) ListAfter(_ context.Context, cursor int64, limit int32) ([]*entity.User, error) {
+	r.cursors = append(r.cursors, cursor)
+	if len(r.cursors) == r.failOn {
+		return nil, errDB
+	}
+	var out []*entity.User
+	for id := cursor + 1; id <= r.total && len(out) < int(limit); id++ {
+		out = append(out, &entity.User{ID: id})
+	}
+	if r.cancel != nil && len(r.cursors) == 1 {
+		r.cancel()
+	}
+	return out, nil
+}
+
+func TestScanWalksEveryPage(t *testing.T) {
+	repo := &pagedRepo{total: 2*batchSize + 1}
+	res, err := NewService(repo).Scan(t.Context(), ScanInput{})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if res.Scanned != repo.total || res.LastID != repo.total {
+		t.Errorf("result = %+v, want Scanned and LastID %d", res, repo.total)
+	}
+	if want := []int64{0, batchSize, 2 * batchSize}; !slices.Equal(repo.cursors, want) {
+		t.Errorf("cursors = %v, want %v", repo.cursors, want)
+	}
+}
+
+func TestScanResumesAfterID(t *testing.T) {
+	repo := &pagedRepo{total: 10}
+	res, err := NewService(repo).Scan(t.Context(), ScanInput{AfterID: 7})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if res.Scanned != 3 || res.LastID != 10 {
+		t.Errorf("result = %+v, want Scanned 3 and LastID 10", res)
+	}
+}
+
+func TestScanErrorKeepsResumePoint(t *testing.T) {
+	repo := &pagedRepo{total: 2 * batchSize, failOn: 2}
+	res, err := NewService(repo).Scan(t.Context(), ScanInput{})
+	if !errors.Is(err, errDB) {
+		t.Fatalf("Scan error = %v, want errDB", err)
+	}
+	if res.Scanned != batchSize || res.LastID != batchSize {
+		t.Errorf("result = %+v, want the first page as the resume point", res)
+	}
+}
+
+func TestScanStopsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	repo := &pagedRepo{total: 2 * batchSize, cancel: cancel}
+	res, err := NewService(repo).Scan(ctx, ScanInput{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Scan error = %v, want context.Canceled", err)
+	}
+	if len(repo.cursors) != 1 || res.LastID != batchSize {
+		t.Errorf("cursors = %v, LastID = %d; want one page then stop", repo.cursors, res.LastID)
+	}
+}

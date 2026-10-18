@@ -52,6 +52,11 @@ import (
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
 	userauditsvc "{{.ModuleName}}/internal/usecase/useraudit"
 {{- end}}
+{{- if .HasCron}}
+	"{{.ModuleName}}/internal/transport/cronjob"
+	usercron "{{.ModuleName}}/internal/transport/cronjob/user"
+	userscansvc "{{.ModuleName}}/internal/usecase/userscan"
+{{- end}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 	"{{.ModuleName}}/pkg/observability"
 
@@ -61,9 +66,9 @@ import (
 // infraSet provides the foundational dependencies every binary needs:
 // config, logger, tracing, DB, redis, and the security primitives
 // (TokenService, hasher, validator). Wire builds only what an injector's
-// App struct reaches, so a worker never builds TokenService (and needs no
+// App struct reaches, so a worker or cron job never builds TokenService (and needs no
 // JWT keys). Transport-specific providers live in httpInfraSet /
-// grpcInfraSet / workerInfraSet.
+// grpcInfraSet / workerInfraSet / cronInfraSet.
 var infraSet = wire.NewSet(
 	config.Load,
 	wire.FieldsOf(new(*config.Config), "JWT", "Security"),
@@ -153,6 +158,15 @@ var workerInfraSet = wire.NewSet(
 )
 {{- end}}
 
+{{- if .HasCron}}
+
+// cronInfraSet adds the run policy and the Runner every cron injector shares.
+var cronInfraSet = wire.NewSet(
+	provideCronPolicy,
+	cronjob.NewRunner,
+)
+{{- end}}
+
 var adapterSet = wire.NewSet(
 {{- if eq .Database "postgres"}}
 	postgresrepo.NewUserRepository,
@@ -190,6 +204,9 @@ var usecaseSet = wire.NewSet(
 	usersvc.NewService,
 {{- if .HasWorker}}
 	userauditsvc.NewService,
+{{- end}}
+{{- if .HasCron}}
+	userscansvc.NewService,
 {{- end}}
 )
 
@@ -252,6 +269,23 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 		adapterSet,
 		usecaseSet,
 		wire.Struct(new(WorkerApp), "*"),
+	))
+}
+{{- end}}
+{{- if .HasCron}}
+
+// InitializeUserScanJob builds the user-scan job and only what it reaches:
+// one injector per job keeps a job off dependencies it never uses. flags
+// carries the command's parsed flags into the graph.
+func InitializeUserScanJob(ctx context.Context, flags usercron.ScanFlags) (*CronApp, func(), error) {
+	panic(wire.Build(
+		infraSet,
+		cronInfraSet,
+		adapterSet,
+		usecaseSet,
+		usercron.NewScanJob,
+		wire.Bind(new(cronjob.Job), new(*usercron.ScanJob)),
+		wire.Struct(new(CronApp), "*"),
 	))
 }
 {{- end}}

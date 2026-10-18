@@ -10,7 +10,7 @@ What `nova new` asks, which flag maps to each answer, and how invalid or unimple
 | --------------------- | ------------------ | ---------------------------------------------------------- |
 | Project name          | positional arg     | letters, digits, `.`, `_`, `-` (default `myproject`)       |
 | Go module name        | `--module`         | a Go module path (default `github.com/myorg/<name>`)       |
-| Transport layer       | `--transport`      | `http`, `grpc`, `worker`                                   |
+| Transport layer       | `--transport`      | `http`, `grpc`, `worker`, `cron`                           |
 | HTTP framework        | `--http-framework` | `fiber`, `gin`, `chi`, `echo`                              |
 | Database              | `--database`       | `postgres`, `mysql`, `none`                                |
 | Cache                 | `--cache`          | `redis`, `none`                                            |
@@ -30,10 +30,10 @@ One option carries a cost the generator cannot remove: `--search=elasticsearch` 
 
 ## Validation
 
-Every value goes through `ProjectConfig.Validate()` ([internal/config/options.go](../internal/config/options.go)) before a single file is written, and `generator.New()` runs the same check so a config built in code cannot bypass it. The error lists every problem at once, for example `transport "cron" is not supported (valid: http, grpc, worker)`.
+Every value goes through `ProjectConfig.Validate()` ([internal/config/options.go](../internal/config/options.go)) before a single file is written, and `generator.New()` runs the same check so a config built in code cannot bypass it. The error lists every problem at once, for example `transport "cli" is not supported (valid: http, grpc, worker, cron)`.
 
-- Rejected as not implemented: the `cron` and `cli` transports, `nethttp`, `sqlite`, `mongodb`, `sqlx`, `gorm`, `raw`, `bigcache`, `nats`, `toml` and `env`. The former `--type` and `--grpc-gateway` flags were removed.
-- `--transport` is required when any flag is given; a `worker` also needs `--queue kafka` or `rabbitmq` and a SQL `--database` (its audit trail is stored there). `--http-framework` applies only to `http`, where it defaults to `fiber`; on another transport it is rejected rather than ignored.
+- Rejected as not implemented: the `cli` transport, `nethttp`, `sqlite`, `mongodb`, `sqlx`, `gorm`, `raw`, `bigcache`, `nats`, `toml` and `env`. The former `--type` and `--grpc-gateway` flags were removed.
+- `--transport` is required when any flag is given; a `worker` also needs `--queue kafka` or `rabbitmq` and a SQL `--database` (its audit trail is stored there). A `cron` service needs neither: any `--database` (including `none`), cache and queue work. `--http-framework` applies only to `http`, where it defaults to `fiber`; on another transport it is rejected rather than ignored.
 - Project names must match `[A-Za-z0-9][A-Za-z0-9._-]*` (no spaces, quotes or path separators) and `--module` must look like a Go module path, so the rendered Go, YAML and Makefile always parse.
 - `--database=none` blanks `--db-driver`/`--query` and renders an in-memory `UserRepository` (`internal/adapter/repository/memory/`) so the User CRUD, handlers and DI graph still build and run; data lives only for the lifetime of the process. The health probe has no dependency to check in that configuration and mirrors liveness.
 - A target directory that already contains files is refused unless `--force` is given.

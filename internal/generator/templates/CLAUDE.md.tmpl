@@ -20,6 +20,7 @@ Stack:
 {{if .HasHTTP}}- HTTP transport: {{.HTTPFramework}}
 {{end}}{{- if .HasGRPC}}- gRPC transport (contract in `api/proto`, stubs in `api/gen` via buf)
 {{end}}{{- if .HasWorker}}- Worker transport: consumes from {{.MessageQueue}}
+{{end}}{{- if .HasCron}}- Cron transport: run-once jobs (`cron <job>`) scheduled by the deploy layer
 {{end}}{{- if .HasSQL}}- Database: {{.Database}} (driver: {{.DBDriver}}{{if eq .QueryGen "sqlc"}}, queries: sqlc{{end}})
 {{end}}{{- if .HasRedis}}- Cache: Redis client wired; the cache-aside decorator over the repository ships unwired (see `README.md`)
 {{end}}{{- if .HasElasticsearch}}- Search: Elasticsearch client wired; the user index adapter ships unwired (see `README.md`)
@@ -28,7 +29,7 @@ Stack:
 
 - Config: cleanenv ({{.ConfigFormat}} + `.env`)
 
-{{if .HasWorker}}Ships the User aggregate (entity, usecase, repository) plus a `user.created` audit consumer as the reference feature — copy that slice when adding a new event.{{else}}Ships a working **User CRUD** wired across every layer as the reference feature — copy that vertical slice when adding a new aggregate.{{end}}
+{{if .HasWorker}}Ships the User aggregate (entity, usecase, repository) plus a `user.created` audit consumer as the reference feature — copy that slice when adding a new event.{{else if .HasCron}}Ships the User aggregate (entity, usecase, repository) plus a `user-scan` cron job over a keyset batch walk (`usecase/userscan`) as the reference feature — copy that slice when adding a new job.{{else}}Ships a working **User CRUD** wired across every layer as the reference feature — copy that vertical slice when adding a new aggregate.{{end}}
 
 ## Commands
 
@@ -53,7 +54,7 @@ make docker-down    # Stop the stack
 {{- end}}
 ```
 
-Run the binary: `go run main.go {{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else}}api{{end}}`. Run a single test: `go test -v -run TestName ./path/to/pkg`.
+Run the binary: `go run main.go {{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else if .HasCron}}cron user-scan{{else}}api{{end}}`. Run a single test: `go test -v -run TestName ./path/to/pkg`.
 
 ## Architecture
 
@@ -64,7 +65,7 @@ Clean Architecture's **dependency rule**: source dependencies point inward only 
 - **`internal/adapter`** — implements domain ports against concrete tech: `repository/{{if .HasDatabase}}{{.Database}}{{else}}memory{{end}}` ({{if .HasDatabase}}the DB{{else}}in-memory, process lifetime{{end}}){{if .HasRedis}}, `repository/redis` (cache-aside){{end}}{{if .HasElasticsearch}}, `repository/elasticsearch` (search index){{end}}{{if .HasMessageQueue}}, `pubsub` (the broker){{end}}.
 - **`internal/infrastructure`** (outermost) — frameworks & drivers: config, {{if .HasSQL}}database pool, {{end}}{{if .HasRedis}}cache client, {{end}}{{if .HasElasticsearch}}search client, {{end}}{{if .HasMessageQueue}}broker clients, {{end}}logger, jwt, tracing, {{if or .HasHTTP .HasGRPC}}server lifecycle, {{end}}and the `di` wiring graph.
 
-Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers/router/middleware{{else if .HasWorker}}worker consumer + handlers{{else if .HasGRPC}}gRPC server factory, interceptors and services{{end}}), `internal/app` (entry-point glue that boots a transport through the DI graph), `cmd` (cobra commands), and `pkg` (cross-cutting libs: `errors`, `locale`, `observability`, `logctx`{{if .HasHTTP}}, `httputil`{{end}}). See `README.md` for the full tree.
+Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers/router/middleware{{else if .HasWorker}}worker consumer + handlers{{else if .HasCron}}cron jobs + the Runner that applies the run policy{{else if .HasGRPC}}gRPC server factory, interceptors and services{{end}}), `internal/app` (entry-point glue that boots a transport through the DI graph), `cmd` (cobra commands), and `pkg` (cross-cutting libs: `errors`, `locale`, `observability`, `logctx`{{if .HasHTTP}}, `httputil`{{end}}). See `README.md` for the full tree.
 
 **Dependency inversion is the load-bearing rule:** the domain _defines_ an interface; an outer layer _implements_ it. Never import a concrete from infrastructure into an inner layer — depend on the port (e.g. `observability.Logger`, not `infrastructure/logger`).
 
@@ -75,7 +76,7 @@ Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers
 - **Structured logging — never reuse a reserved field key.** The logger (`observability.Logger`, backed by zerolog) takes the human-readable text as the **first** argument; everything after is `key, value` pairs — e.g. `logctx.From(ctx).Error("publish user.created failed", "user_id", id, "err", err.Error())`. zerolog auto-populates `message` (the first arg), `time`, `level`, and `caller`, so passing any of those names as a field key emits a **duplicate** key in the JSON line. Put your text in the message argument — never in a `"message"` field — and name extra fields distinctly (`detail`, `reason`, `err`, …).
 - **Localization (`pkg/locale`).** User-facing messages are `locale.Locale` codes, never literals. The `*L` error constructors carry the code + args; the transport boundary translates into the request's language.
 - **Usecase imports use the `svc` alias.** Import a usecase as `usersvc "{{.ModuleName}}/internal/usecase/user"` — never the bare `user` (it collides with the domain/transport `user` packages). The service type is `Service`, its constructor `NewService`.
-- **DI wiring (`internal/infrastructure/di`).** After adding a constructor, {{if .UseWire}}register it in the provider set in `wire.go` and run `make gen` to regenerate `wire_gen.go`{{else}}add it to the matching fx module in `fx.go`{{end}}.{{if .HasHTTP}} A new HTTP feature also adds its `*Registrar` to `provideRegistrars`.{{end}}{{if .HasGRPC}} A new gRPC service adds its handler to `provideGRPCServices`.{{end}}{{if .HasWorker}} A new worker message handler adds itself to `provideWorkerHandlers`.{{end}}
+- **DI wiring (`internal/infrastructure/di`).** After adding a constructor, {{if .UseWire}}register it in the provider set in `wire.go` and run `make gen` to regenerate `wire_gen.go`{{else}}add it to the matching fx module in `fx.go`{{end}}.{{if .HasHTTP}} A new HTTP feature also adds its `*Registrar` to `provideRegistrars`.{{end}}{{if .HasGRPC}} A new gRPC service adds its handler to `provideGRPCServices`.{{end}}{{if .HasWorker}} A new worker message handler adds itself to `provideWorkerHandlers`.{{end}}{{if .HasCron}} A new cron job adds an `Initialize<Job>Job` injector ({{if .UseWire}}in `wire.go`{{else}}one `initializeCron` call in `fx.go`{{end}}), an `app.Run<Job>` and a `cmd/cron/<job>.go` mounted in `cmd/cron.go`.{{end}}
   {{- if .HasGRPC}}
 - **Adding an RPC.** Edit `api/proto/user/v1/user.proto`, run `make gen` (buf rewrites `api/gen`), implement the method on `transport/grpc.UserHandler`, add it to `Public()` only if it must work without a bearer token (auth is deny-by-default), and return errors through `rpcstatus.FromError` so the code and message match the HTTP classification. A new service implements `transport/grpc.Registrar` and is added to `provideGRPCServices`.
   {{- end}}
@@ -83,7 +84,7 @@ Other top-level dirs: `internal/transport` (inbound {{if .HasHTTP}}HTTP handlers
 - **Adding a route.** Each feature owns a `Registrar` (implements `transport/http.Registrar`: `Prefix()` + `Register`) in its own package and embeds `v1.Prefixed` to inherit the `/api/v1` prefix — don't restate the prefix per feature. See `README.md` § _Adding routes, sections, and versions_.
   {{- end}}
 - **Config.** Secrets and per-deploy endpoints live in `.env` (see `.env.example`); everything else in `internal/infrastructure/config`.{{if .HasDatabase}} The DB config is discrete typed fields, not a single connection-string blob.{{end}}
-- **Adding a feature** = copy the `user` vertical slice: entity → domain port → usecase → adapter repo{{if .HasHTTP}} → transport handler + registrar{{else if .HasWorker}} → worker handler + DTO{{end}}, then wire it in `di`. The layout matches Nova's canonical manifest, so `nova add <entity|usecase|handler|repository> <name>` scaffolds one component if Nova is installed.
+- **Adding a feature** = copy the `user` vertical slice: entity → domain port → usecase → adapter repo{{if .HasHTTP}} → transport handler + registrar{{else if .HasWorker}} → worker handler + DTO{{else if .HasCron}} → cron job + command{{end}}, then wire it in `di`. The layout matches Nova's canonical manifest, so `nova add <entity|usecase|handler|repository> <name>` scaffolds one component if Nova is installed.
 - **Formatting & lint.** `make fmt` (goimports + golines, max line 120) before committing; lint config is strict.
 - **Commits.** Don't add a `Co-Authored-By: Claude` trailer (or any Claude/Anthropic co-author attribution) to commit messages.
   {{- if .HasSQL}}

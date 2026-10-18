@@ -6,19 +6,19 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
-{{ if and (eq .MessageQueue "kafka") (or .HasHTTP .HasGRPC .HasWorker)}}
+{{ if and (eq .MessageQueue "kafka") (or .HasHTTP .HasGRPC .HasWorker .HasCron)}}
 	"{{.ModuleName}}/internal/adapter/pubsub"
 {{- end}}
-{{- if and (eq .Database "postgres") (or .HasHTTP .HasGRPC .HasWorker)}}
+{{- if and (eq .Database "postgres") (or .HasHTTP .HasGRPC .HasWorker .HasCron)}}
 	postgresrepo "{{.ModuleName}}/internal/adapter/repository/postgres"
 {{- end}}
-{{- if and (eq .Database "mysql") (or .HasHTTP .HasGRPC .HasWorker)}}
+{{- if and (eq .Database "mysql") (or .HasHTTP .HasGRPC .HasWorker .HasCron)}}
 	mysqlrepo "{{.ModuleName}}/internal/adapter/repository/mysql"
 {{- end}}
-{{- if and (not .HasDatabase) (or .HasHTTP .HasGRPC .HasWorker)}}
+{{- if and (not .HasDatabase) (or .HasHTTP .HasGRPC .HasWorker .HasCron)}}
 	memoryrepo "{{.ModuleName}}/internal/adapter/repository/memory"
 {{- end}}
-{{- if or .HasHTTP .HasGRPC .HasWorker}}
+{{- if or .HasHTTP .HasGRPC .HasWorker .HasCron}}
 	"{{.ModuleName}}/internal/domain"
 {{- end}}
 	domainsec "{{.ModuleName}}/internal/domain/security"
@@ -42,7 +42,12 @@ import (
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
 	userauditsvc "{{.ModuleName}}/internal/usecase/useraudit"
 {{- end}}
-{{- if or .HasHTTP .HasGRPC .HasWorker}}
+{{- if .HasCron}}
+	"{{.ModuleName}}/internal/transport/cronjob"
+	usercron "{{.ModuleName}}/internal/transport/cronjob/user"
+	userscansvc "{{.ModuleName}}/internal/usecase/userscan"
+{{- end}}
+{{- if or .HasHTTP .HasGRPC .HasWorker .HasCron}}
 	usersvc "{{.ModuleName}}/internal/usecase/user"
 {{- end}}
 )
@@ -57,7 +62,7 @@ import (
 
 // --- modules ---
 // One module per Wire set. infraModule mirrors infraSet; the transport-specific
-// modules mirror httpInfraSet / grpcInfraSet / workerInfraSet, and are composed
+// modules mirror httpInfraSet / grpcInfraSet / workerInfraSet / cronInfraSet, and are composed
 // per entry point so unused transport providers never enter the graph.
 
 func infraModule() fx.Option {
@@ -161,7 +166,17 @@ func workerModule() fx.Option {
 }
 {{- end}}
 
-{{- if or .HasHTTP .HasGRPC .HasWorker}}
+{{- if .HasCron}}
+
+func cronModule() fx.Option {
+	return fx.Provide(
+		provideCronPolicy,
+		cronjob.NewRunner,
+	)
+}
+{{- end}}
+
+{{- if or .HasHTTP .HasGRPC .HasWorker .HasCron}}
 
 func adapterModule() fx.Option {
 	return fx.Provide(
@@ -197,6 +212,9 @@ func usecaseModule() fx.Option {
 		usersvc.NewService,
 {{- if .HasWorker}}
 		userauditsvc.NewService,
+{{- end}}
+{{- if .HasCron}}
+		userscansvc.NewService,
 {{- end}}
 	)
 }
@@ -317,5 +335,54 @@ func InitializeWorker(ctx context.Context) (*WorkerApp, func(), error) {
 		}
 	}
 	return &WorkerApp{Logger: log, Tracer: tracer, Worker: w}, cleanup, nil
+}
+{{- end}}
+{{- if .HasCron}}
+
+// initializeCron builds one cron job's graph with fx: the shared modules plus
+// job, the options that provide that job as cronjob.Job. Each job's
+// Initialize<Job>Job is one call to it — the fx counterpart of one wire
+// injector per job.
+func initializeCron(ctx context.Context, job ...fx.Option) (*CronApp, func(), error) {
+	var (
+		log    *logger.Logger
+		tracer trace.Tracer
+		runner *cronjob.Runner
+		j      cronjob.Job
+		cfg    *config.Config
+	)
+	fxApp := fx.New(
+		fx.NopLogger,
+		fx.Provide(func() context.Context { return ctx }),
+		infraModule(),
+		cronModule(),
+		adapterModule(),
+		usecaseModule(),
+		fx.Options(job...),
+		fx.Populate(&log, &tracer, &runner, &j, &cfg),
+	)
+	if err := fxApp.Start(ctx); err != nil {
+		return nil, nil, fmt.Errorf("fx: start cron app: %w", err)
+	}
+	cleanup := func() {
+		// The budget is config so an operator can widen it when a dependency
+		// close is slow; a stop that overruns it is logged with the budget so
+		// the skipped hooks are visible, not silently dropped.
+		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		if stopErr := fxApp.Stop(stopCtx); stopErr != nil {
+			log.Error("fx: stop", "err", stopErr, "timeout_ms", cfg.ShutdownTimeout.Milliseconds())
+		}
+	}
+	return &CronApp{Logger: log, Tracer: tracer, Runner: runner, Job: j}, cleanup, nil
+}
+
+// InitializeUserScanJob builds the user-scan job graph; flags carries the
+// command's parsed flags into it.
+func InitializeUserScanJob(ctx context.Context, flags usercron.ScanFlags) (*CronApp, func(), error) {
+	return initializeCron(ctx,
+		fx.Supply(flags),
+		fx.Provide(fx.Annotate(usercron.NewScanJob, fx.As(new(cronjob.Job)))),
+	)
 }
 {{- end}}

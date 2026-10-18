@@ -1,6 +1,6 @@
 # {{.ProjectName}}
 
-A Go {{if .HasHTTP}}REST API{{else if .HasGRPC}}gRPC service{{else if .HasWorker}}consumer worker{{else}}service{{end}} built with Clean Architecture.
+A Go {{if .HasHTTP}}REST API{{else if .HasGRPC}}gRPC service{{else if .HasWorker}}consumer worker{{else if .HasCron}}cron service{{else}}service{{end}} built with Clean Architecture.
 
 ## Architecture
 
@@ -20,9 +20,12 @@ internal/
 │   └── tx_manager.go       # TxManager port (WithinTx)
 │
 ├── usecase/                # Layer 2: Application Business Rules
-│   {{if .HasWorker}}├──{{else}}└──{{end}} user/               # Service (Register, Login, Get, Update, Delete, List)
+│   {{if or .HasWorker .HasCron}}├──{{else}}└──{{end}} user/               # Service (Register, Login, Get, Update, Delete, List)
 {{- if .HasWorker}}
 │   └── useraudit/          # Audit-trail service the worker dispatches into
+{{- end}}
+{{- if .HasCron}}
+│   └── userscan/           # Keyset batch walk the user-scan job runs
 {{- end}}
 │
 ├── adapter/                # Layer 3: Interface Adapters
@@ -63,8 +66,12 @@ internal/
 │   └── worker/             # Handler iface + Worker orchestrator + {{.MessageQueue}} consumer
 │       └── v1/user/        # Per-feature message handler + DTO
 {{- end}}
+{{- if .HasCron}}
+│   └── cronjob/            # Job contract + Runner (deadline, span, outcome line)
+│       └── user/           # user-scan job
+{{- end}}
 │
-├── app/                    # Entry-point glue ({{if .HasHTTP}}RunHTTPServer{{else if .HasGRPC}}RunGRPCServer{{else}}RunWorker{{end}})
+├── app/                    # Entry-point glue ({{if .HasHTTP}}RunHTTPServer{{else if .HasGRPC}}RunGRPCServer{{else if .HasCron}}RunUserScan; one Run<Job> per cron job{{else}}RunWorker{{end}})
 │
 └── infrastructure/         # Layer 4: Frameworks & Drivers (outermost)
     ├── config/             # cleanenv + embed.FS (base/development/production)
@@ -135,7 +142,7 @@ cd {{.ProjectName}}
 # Copy environment variables; the binary loads ./.env on host runs
 # (real environment variables win over it).
 cp .env.example .env
-{{- if not .HasWorker}}
+{{- if or .HasHTTP .HasGRPC}}
 
 # Generate an RS256 keypair and add the base64-encoded PEMs to .env.
 # Only the token-issuing service needs JWT_PRIVATE_KEY; verify-only services
@@ -159,11 +166,13 @@ docker compose up -d{{if eq .Database "mysql"}} mysql{{else if .HasDatabase}} po
 make migrate-up
 {{- end}}
 
-# Run the server
+# Run {{if .HasCron}}the sample job once{{else}}the server{{end}}
 {{- if .HasWorker}}
 go run main.go worker
 {{- else if .HasGRPC}}
 go run main.go grpc
+{{- else if .HasCron}}
+go run main.go cron user-scan
 {{- else}}
 go run main.go api
 {{- end}}
@@ -222,6 +231,66 @@ End-to-end demo, with a publisher project generated next to this one:
 4. Run the worker here (`go run main.go worker`), then the publisher there (`go run main.go api`).{{if eq .MessageQueue "rabbitmq"}} Start the worker first: it declares and binds the queue, and RabbitMQ drops a message published before any queue is bound.{{else}} Kafka keeps the topic, and a new consumer group starts from the oldest offset, so the order does not matter.{{end}}
 5. `curl -X POST localhost:8080/api/v1/users -H 'Content-Type: application/json' -d '{"email":"ada@example.com","name":"Ada","password":"hunter2-pass"}'`.
 6. `SELECT * FROM user_audit_log;` shows the inbound `user.created` row. Redeliver the same message and the second insert is ignored (`audit: duplicate delivery ignored` in the log).
+{{- end}}
+
+{{- if .HasCron}}
+
+### Cron jobs
+
+This binary runs one job per invocation and exits: `go run main.go cron <job>`; `go run main.go cron --help` lists the jobs. The schedule lives in the deploy layer, not here, so the scheduler supplies retries, overlap control and failure alerts.
+
+| Job | Command | What it does |
+| --- | --- | --- |
+| `user-scan` | `cron user-scan [--after-id N]` | Walks every user in id order, 500 per page (`usecase/userscan.Scan`) |
+
+Every job follows one contract:
+
+- **Idempotent.** The scheduler may retry a failed run or, without overlap control, start two at once.
+- **Resumable.** A long job reports how far it got: a failed `user-scan` names the `--after-id` that resumes it.
+- **Returns when its ctx is done.** A run gets `cron.timeout` (default `30m`) and SIGTERM cancels it; both reach the job as ctx cancellation.
+
+Exit code `0` means the job completed; `1` means anything else (job error, panic, timeout, SIGTERM, failed boot). Each run logs one outcome line — `cron: job finished`, `cron: job failed` or `cron: job interrupted` — with `job`, `run_id`, `trace_id` and `duration_ms`.
+
+A Kubernetes `CronJob` is the recommended trigger:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{.ProjectName}}-user-scan
+spec:
+  schedule: "0 2 * * *"           # daily at 02:00; set spec.timeZone to pin the zone
+  concurrencyPolicy: Forbid       # never two runs at once
+  startingDeadlineSeconds: 3600   # still start a run missed by up to an hour
+  jobTemplate:
+    spec:
+      backoffLimit: 2             # retry a failed run twice
+      activeDeadlineSeconds: 1900 # a little above cron.timeout (30m)
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: {{.ProjectName}}
+              image: {{.ProjectName}}:latest
+              args: ["cron", "user-scan"]
+              envFrom:
+                - secretRef:
+                    name: {{.ProjectName}}-env
+```
+
+On a single server, crontab works; `flock -n` stands in for `concurrencyPolicy: Forbid`, and the `cd` lets the binary find its `.env`:
+
+```bash
+0 2 * * * cd /srv/{{.ProjectName}} && flock -n /tmp/{{.ProjectName}}-user-scan.lock ./{{.ProjectName}} cron user-scan >> /var/log/{{.ProjectName}}-user-scan.log 2>&1
+```
+
+To add a job:
+
+1. Add the usecase method that does the work (see `usecase/userscan`).
+2. Add `transport/cronjob/<feature>/<job>.go`: a type with `Name()` and `Run(ctx) error` that calls it.
+3. Add `cmd/cron/<job>.go` (the cobra command and its flags) and mount it in `cmd/cron.go`.
+4. Add `Run<Job>` to `internal/app/cron.go`.
+5. Add an `Initialize<Job>Job` injector to {{if .UseWire}}`internal/infrastructure/di/wire.go` and run `make gen`{{else}}`internal/infrastructure/di/fx.go` (one `initializeCron` call){{end}}.
 {{- end}}
 
 {{- if .HasHTTP}}

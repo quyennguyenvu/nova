@@ -1,0 +1,40 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"{{.ModuleName}}/internal/infrastructure/di"
+	usercron "{{.ModuleName}}/internal/transport/cronjob/user"
+)
+
+// RunUserScan runs the user-scan job once.
+func RunUserScan(afterID int64) error {
+	return runCron(func(ctx context.Context) (*di.CronApp, func(), error) {
+		return di.InitializeUserScanJob(ctx, usercron.ScanFlags{AfterID: afterID})
+	})
+}
+
+// runCron boots one job's DI graph, runs the job once through the Runner, and
+// returns its error so cobra exits non-zero. SIGINT/SIGTERM cancel the run's
+// ctx: the job returns, DI cleanup still runs (pool closed, spans flushed),
+// and the Runner reports the run as interrupted.
+func runCron(initialize func(context.Context) (*di.CronApp, func(), error)) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	app, cleanup, err := initialize(ctx)
+	if err != nil {
+		return fmt.Errorf("initialize cron job: %w", err)
+	}
+	defer func() {
+		start := time.Now()
+		cleanup()
+		app.Logger.Info("shutdown complete", "duration_ms", time.Since(start).Milliseconds())
+	}()
+
+	return app.Runner.Run(ctx, app.Job)
+}

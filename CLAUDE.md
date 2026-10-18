@@ -9,7 +9,7 @@ Behavioral guidelines (adapted from [andrej-karpathy-skills](https://github.com/
 1. **Think before coding.** Don't assume, don't hide confusion, surface tradeoffs. State assumptions explicitly; if multiple interpretations exist, present them instead of picking silently; if a simpler approach exists, say so.
 2. **Simplicity first.** Minimum code that solves the problem, nothing speculative — no unrequested features, no abstractions for single-use code, no error handling for impossible cases. If a senior engineer would call it overcomplicated, rewrite it smaller.
 3. **Surgical changes.** Every changed line should trace to the request. Don't refactor or reformat adjacent code; match the surrounding template/style even if you'd do it differently. Remove only the imports/vars/funcs your own change orphaned; flag pre-existing dead code rather than deleting it unasked.
-4. **Goal-driven execution.** Turn the task into a verifiable goal and loop until it passes. Here that means `make lint` and `make test` stay green, and generator/template changes are additionally proven by `make test-all`, the render-then-`go vet` matrix in [internal/generator/generator_test.go](internal/generator/generator_test.go) plus `TestGeneratedProjectBootstrap`, which runs the real `make gen` → `go build` → `golangci-lint run` sequence on eight representative projects (sequential; skips when a tool is missing) — add the matrix case in the same change, not after. "Fix the bug" → write a failing test first, then make it pass.
+4. **Goal-driven execution.** Turn the task into a verifiable goal and loop until it passes. Here that means `make lint` and `make test` stay green, and generator/template changes are additionally proven by `make test-all`, the render-then-`go vet` matrix in [internal/generator/generator_test.go](internal/generator/generator_test.go) plus `TestGeneratedProjectBootstrap`, which runs the real `make gen` → `go build` → `golangci-lint run` sequence on ten representative projects (sequential; skips when a tool is missing) — add the matrix case in the same change, not after. "Fix the bug" → write a failing test first, then make it pass.
 5. **Code and docs always match.** A change is not done until every doc that describes the touched behavior says what the code does. "Docs" means `README.md`, this file, `docs/*.md`, the generated project's own docs (`templates/README.md.tmpl`, `CLAUDE.md.tmpl`, `env.example.tmpl`, and the comments in the Makefile, Dockerfile, compose and CI templates), and code comments; the plans and reviews under `docs/superpowers/` are point-in-time records and exempt.
    - Update those docs in the same change as the code, then grep for the old name, value, flag or count and fix every hit.
    - Quote code in a doc from rendered output (a `nova new` render or `make gen-api`), never from memory.
@@ -33,7 +33,7 @@ make run              # build + print the CLI help
 make clean            # remove bin/ and /tmp/nova-test-output
 make rebuild          # clean + build
 make test             # go test -short ./... (fast; skips the render-then-vet matrix)
-make test-all         # full suite: 36-case vet matrix (2 at a time) + 8 real-toolchain bootstraps (~4 min warm cache; <2.5 GB)
+make test-all         # full suite: 40-case vet matrix (2 at a time) + 10 real-toolchain bootstraps (~9 min warm cache; <2.5 GB)
 make lint             # GOGC=50 golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...
@@ -71,7 +71,7 @@ The dev machine has 16 GB RAM. One `go vet`/`go build` of a rendered project pea
 
 ### Rendering strategy
 
-[internal/generator/generator.go](internal/generator/generator.go) renders `text/template` files from an `embed.FS` (`//go:embed all:templates`). The template tree lives at [internal/generator/templates/](internal/generator/templates/). Files are selected by `cond` booleans in `buildFileList()` (which composes `entryPointFiles`, `rootFiles`, `domainFiles`, `usecaseFiles`, `adapterFiles`, `transportFiles`, `workerFiles`, `infrastructureFiles`, `pkgFiles`, `migrationFiles`, `sqlcFiles`, `toolingFiles`). Every rendered `.go` file is passed through `go/format` before writing (`formatGoSource`), so conditional template lines cannot leave the output un-gofmt'd.
+[internal/generator/generator.go](internal/generator/generator.go) renders `text/template` files from an `embed.FS` (`//go:embed all:templates`). The template tree lives at [internal/generator/templates/](internal/generator/templates/). Files are selected by `cond` booleans in `buildFileList()` (which composes `entryPointFiles`, `rootFiles`, `domainFiles`, `usecaseFiles`, `adapterFiles`, `transportFiles`, `workerFiles`, `cronFiles`, `infrastructureFiles`, `pkgFiles`, `migrationFiles`, `sqlcFiles`, `toolingFiles`). Every rendered `.go` file is passed through `go/format` before writing (`formatGoSource`), so conditional template lines cannot leave the output un-gofmt'd.
 
 ### Template naming convention
 

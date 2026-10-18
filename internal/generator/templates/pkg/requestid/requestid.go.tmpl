@@ -1,11 +1,11 @@
 // Package requestid carries the per-request correlation ID through
 // context.Context. It is transport-neutral: the HTTP RequestID middleware, the
-// gRPC RequestID interceptor and the worker dispatcher all set it at their
-// boundary, the publishers copy it onto outgoing messages, and any inner layer
-// can read it without importing a transport package. The HTTP header name
-// stays in pkg/httputil, the gRPC metadata key in transport/grpc/interceptor
-// and the message header in transport/worker — this package only owns the
-// value.
+// gRPC RequestID interceptor, the worker dispatcher and the cron Runner all
+// set it at their boundary, the publishers copy it onto outgoing messages,
+// and any inner layer can read it without importing a transport package. The
+// HTTP header name stays in pkg/httputil, the gRPC metadata key in
+// transport/grpc/interceptor and the message header in transport/worker —
+// this package only owns the value.
 package requestid
 
 import "context"

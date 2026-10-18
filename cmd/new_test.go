@@ -18,6 +18,7 @@ func TestNextStepsPerTransport(t *testing.T) {
 		{"http", "go run main.go api"},
 		{"worker", "go run main.go worker"},
 		{"grpc", "go run main.go grpc"},
+		{"cron", "go run main.go cron user-scan"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.transport, func(t *testing.T) {

@@ -100,6 +100,7 @@ func (g *Generator) buildFileList() []templateFile {
 	files = append(files, g.adapterFiles()...)
 	files = append(files, g.transportFiles()...)
 	files = append(files, g.workerFiles()...)
+	files = append(files, g.cronFiles()...)
 	files = append(files, g.infrastructureFiles()...)
 	files = append(files, g.pkgFiles()...)
 	files = append(files, g.migrationFiles()...)
@@ -203,6 +204,14 @@ func (g *Generator) usecaseFiles() []templateFile {
 			"templates/usecase/useraudit/dto.go.tmpl",
 			"internal/usecase/useraudit/dto.go",
 			cfg.HasWorker() && cfg.HasSQL(),
+		},
+		// userscan usecase — cron-only. The reference job's keyset batch walk.
+		{"templates/usecase/userscan/dto.go.tmpl", "internal/usecase/userscan/dto.go", cfg.HasCron()},
+		{"templates/usecase/userscan/service.go.tmpl", "internal/usecase/userscan/service.go", cfg.HasCron()},
+		{
+			"templates/usecase/userscan/service_test.go.tmpl",
+			"internal/usecase/userscan/service_test.go",
+			cfg.HasCron(),
 		},
 	}
 }
@@ -541,22 +550,22 @@ func (g *Generator) infrastructureFiles() []templateFile {
 		{
 			"templates/infrastructure/di/fx.go.tmpl",
 			"internal/infrastructure/di/fx.go",
-			cfg.UseFx() && (cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker()),
+			cfg.UseFx() && (cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker() || cfg.HasCron()),
 		},
 		{
 			"templates/infrastructure/di/fx_provider.go.tmpl",
 			"internal/infrastructure/di/fx_provider.go",
-			cfg.UseFx() && (cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker()),
+			cfg.UseFx() && (cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker() || cfg.HasCron()),
 		},
 		{
 			"templates/infrastructure/di/wire_provider.go.tmpl",
 			"internal/infrastructure/di/provider.go",
-			cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker(),
+			cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker() || cfg.HasCron(),
 		},
 		{
 			"templates/infrastructure/di/app.go.tmpl",
 			"internal/infrastructure/di/app.go",
-			cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker(),
+			cfg.HasHTTP() || cfg.HasGRPC() || cfg.HasWorker() || cfg.HasCron(),
 		},
 	}
 }
@@ -574,9 +583,12 @@ func (g *Generator) entryPointFiles() []templateFile {
 		{"templates/cmd/api.go.tmpl", "cmd/api.go", cfg.HasHTTP()},
 		{"templates/cmd/grpc.go.tmpl", "cmd/grpc.go", cfg.HasGRPC()},
 		{"templates/cmd/worker.go.tmpl", "cmd/worker.go", cfg.HasWorker()},
+		{"templates/cmd/cron.go.tmpl", "cmd/cron.go", cfg.HasCron()},
+		{"templates/cmd/cron/user_scan.go.tmpl", "cmd/cron/user_scan.go", cfg.HasCron()},
 		{"templates/app/api.go.tmpl", "internal/app/api.go", cfg.HasHTTP()},
 		{"templates/app/grpc.go.tmpl", "internal/app/grpc.go", cfg.HasGRPC()},
 		{"templates/app/worker.go.tmpl", "internal/app/worker.go", cfg.HasWorker()},
+		{"templates/app/cron.go.tmpl", "internal/app/cron.go", cfg.HasCron()},
 	}
 }
 
@@ -629,13 +641,28 @@ func (g *Generator) workerFiles() []templateFile {
 	return files
 }
 
+// cronFiles registers the run-once cron transport: the Job contract, the
+// Runner that applies the run policy, and the reference user-scan job.
+func (g *Generator) cronFiles() []templateFile {
+	if !g.cfg.HasCron() {
+		return nil
+	}
+	return []templateFile{
+		{"templates/transport/cronjob/job.go.tmpl", "internal/transport/cronjob/job.go", true},
+		{"templates/transport/cronjob/runner.go.tmpl", "internal/transport/cronjob/runner.go", true},
+		// Fake-job tests of the run policy; the bootstrap runs them.
+		{"templates/transport/cronjob/runner_test.go.tmpl", "internal/transport/cronjob/runner_test.go", true},
+		{"templates/transport/cronjob/user/scan.go.tmpl", "internal/transport/cronjob/user/scan.go", true},
+	}
+}
+
 func (g *Generator) pkgFiles() []templateFile {
 	cfg := g.cfg
 	return []templateFile{
 		{"templates/pkg/errors/errors.go.tmpl", "pkg/errors/errors.go", true},
 		{"templates/pkg/errors/errors_test.go.tmpl", "pkg/errors/errors_test.go", true},
 		{"templates/pkg/httputil/response.go.tmpl", "pkg/httputil/response.go", cfg.HasHTTP()},
-		// Request-id context plumbing shared by HTTP, gRPC, the worker and the publishers.
+		// Request-id context plumbing shared by HTTP, gRPC, the worker, cron and the publishers.
 		{"templates/pkg/requestid/requestid.go.tmpl", "pkg/requestid/requestid.go", true},
 		{"templates/pkg/locale/locale.go.tmpl", "pkg/locale/locale.go", true},
 		{"templates/pkg/locale/locale_en.go.tmpl", "pkg/locale/locale_en.go", true},

@@ -30,6 +30,5 @@ Docs 05 – 12 are a **pattern reference**, not an inventory of output — [02](
 - `domain/service/`
 - `domain/event/`
 - `adapter/external/`
-- `transport/cronjob/`
 
 Those sections are marked inline. Everything else mirrors a real template under [internal/generator/templates/](../internal/generator/templates/), with `{module}` standing in for the project's module path.

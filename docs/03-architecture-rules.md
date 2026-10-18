@@ -61,10 +61,10 @@ transport/                   # Delivery mechanisms (separate from adapter)
 │   ├── rpcstatus/           # AppError → gRPC status
 │   └── user.go              # UserService server
 ├── worker/                  # Consumer, dispatch policy, v1/user handler
-└── cronjob/                 # Cron job handlers (no middleware)
+└── cronjob/                 # [--transport=cron] Job contract, Runner, one package per feature
 ```
 
-`adapter/external/` and `transport/cronjob/` are patterns to grow into — `nova new` doesn't scaffold them.
+`adapter/external/` is a pattern to grow into — `nova new` doesn't scaffold it. `transport/cronjob/` is rendered by `--transport=cron` ([07](07-transport-layer.md#internaltransportcronjob)).
 
 ### INFRASTRUCTURE layer — "provides technical capabilities"
 

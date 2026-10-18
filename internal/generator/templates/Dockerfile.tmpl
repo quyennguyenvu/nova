@@ -62,4 +62,4 @@ EXPOSE ${GRPC_PORT}
 {{- end}}
 
 ENTRYPOINT ["/app/api"]
-CMD ["{{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else}}api{{end}}"]
+CMD [{{if .HasWorker}}"worker"{{else if .HasGRPC}}"grpc"{{else if .HasCron}}"cron", "user-scan"{{else}}"api"{{end}}]

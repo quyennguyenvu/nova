@@ -1,0 +1,116 @@
+package cronjob
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+	"time"
+
+	"go.opentelemetry.io/otel/trace/noop"
+
+	"{{.ModuleName}}/pkg/observability"
+	"{{.ModuleName}}/pkg/requestid"
+)
+
+var errJob = errors.New("job failed")
+
+// funcJob adapts a function to Job.
+type funcJob func(ctx context.Context) error
+
+func (funcJob) Name() string { return "test-job" }
+
+func (f funcJob) Run(ctx context.Context) error { return f(ctx) }
+
+// recLogger records each line as "<level> <msg>".
+type recLogger struct{ lines *[]string }
+
+func (l recLogger) Debug(msg string, _ ...any)             { l.add("debug", msg) }
+func (l recLogger) Info(msg string, _ ...any)              { l.add("info", msg) }
+func (l recLogger) Warn(msg string, _ ...any)              { l.add("warn", msg) }
+func (l recLogger) Error(msg string, _ ...any)             { l.add("error", msg) }
+func (l recLogger) With(string, any) observability.Logger { return l }
+func (l recLogger) add(level, msg string)                  { *l.lines = append(*l.lines, level+" "+msg) }
+
+func newTestRunner(log observability.Logger) *Runner {
+	return NewRunner(log, noop.NewTracerProvider().Tracer("test"), Policy{Timeout: 50 * time.Millisecond})
+}
+
+func TestRunOutcomes(t *testing.T) {
+	cases := []struct {
+		name     string
+		job      funcJob
+		wantErr  error // nil for success
+		wantLine string
+	}{
+		{"success", func(context.Context) error { return nil }, nil, "info cron: job finished"},
+		{"job error passes through", func(context.Context) error { return errJob }, errJob, "error cron: job failed"},
+		{
+			"timeout ends the run",
+			func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
+			context.DeadlineExceeded,
+			"error cron: job failed",
+		},
+		{
+			"panic becomes an error",
+			func(context.Context) error { panic("boom") },
+			ErrJobPanic,
+			"error cron: job failed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var lines []string
+			err := newTestRunner(recLogger{&lines}).Run(t.Context(), tc.job)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Run error = %v, want %v", err, tc.wantErr)
+			}
+			if !slices.Equal(lines, []string{tc.wantLine}) {
+				t.Errorf("log lines = %q, want [%q]", lines, tc.wantLine)
+			}
+		})
+	}
+}
+
+// TestRunInterrupted: a parent ctx cancelled mid-run (SIGTERM) is reported as
+// interrupted, not failed.
+func TestRunInterrupted(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	job := funcJob(func(runCtx context.Context) error {
+		cancel()
+		<-runCtx.Done()
+		return runCtx.Err()
+	})
+	var lines []string
+	err := newTestRunner(recLogger{&lines}).Run(ctx, job)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if !slices.Equal(lines, []string{"warn cron: job interrupted"}) {
+		t.Errorf("log lines = %q, want the interrupted line", lines)
+	}
+}
+
+// TestRunScopesTheRun: the job's ctx carries the run id that correlates its
+// logs and outbound calls.
+func TestRunScopesTheRun(t *testing.T) {
+	var runID string
+	job := funcJob(func(ctx context.Context) error {
+		runID = requestid.From(ctx)
+		return nil
+	})
+	if err := newTestRunner(observability.Nop()).Run(t.Context(), job); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if runID == "" {
+		t.Error("job ctx carries no run id")
+	}
+}
+
+func TestPolicyDefaults(t *testing.T) {
+	r := NewRunner(observability.Nop(), noop.NewTracerProvider().Tracer("test"), Policy{})
+	if r.policy.Timeout != defaultTimeout {
+		t.Errorf("zero Policy timeout = %v, want %v", r.policy.Timeout, defaultTimeout)
+	}
+}

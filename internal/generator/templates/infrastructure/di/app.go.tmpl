@@ -10,6 +10,9 @@ import (
 {{- if .HasWorker}}
 	"{{.ModuleName}}/internal/transport/worker"
 {{- end}}
+{{- if .HasCron}}
+	"{{.ModuleName}}/internal/transport/cronjob"
+{{- end}}
 )
 
 {{- if .HasHTTP}}
@@ -46,5 +49,17 @@ type WorkerApp struct {
 	Logger *logger.Logger
 	Tracer trace.Tracer
 	Worker *worker.Worker
+}
+{{- end}}
+{{- if .HasCron}}
+
+// CronApp is what every cron job injector returns: the shared run policy plus
+// the one job this process runs. Tracer is held so DI builds the tracing
+// provider first and, cleaning up in reverse, flushes the run's spans last.
+type CronApp struct {
+	Logger *logger.Logger
+	Tracer trace.Tracer
+	Runner *cronjob.Runner
+	Job    cronjob.Job
 }
 {{- end}}

@@ -10,7 +10,7 @@ nova new {project} --module=… --transport={http|grpc|worker} [--http-framework
   --queue=kafka --config=yaml --di=wire --docker --ci=github
 ```
 
-Transports are **mutually exclusive** (`Transport` is a single string), so no one run produces all of `cmd/api.go`, `cmd/grpc.go` and `cmd/worker.go` — lines marked `[HTTP]`, `[gRPC]` and `[worker]` tell you which run emits what, and `[--flag]` marks the other conditionals. See [internal/generator/generator.go](../internal/generator/generator.go) (`buildFileList`) for the authoritative selection logic.
+Transports are **mutually exclusive** (`Transport` is a single string), so no one run produces all of `cmd/api.go`, `cmd/grpc.go`, `cmd/worker.go` and `cmd/cron.go` — lines marked `[HTTP]`, `[gRPC]`, `[worker]` and `[cron]` tell you which run emits what, and `[--flag]` marks the other conditionals. See [internal/generator/generator.go](../internal/generator/generator.go) (`buildFileList`) for the authoritative selection logic.
 
 ```bash
 {project}/                                  # Root of the generated module
@@ -35,13 +35,16 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   ├── root.go                             # Root command + subcommand wiring
 │   ├── api.go                              # [HTTP]   starts the HTTP server
 │   ├── grpc.go                             # [gRPC]   starts the gRPC server
-│   └── worker.go                           # [worker] starts the queue consumer
+│   ├── worker.go                           # [worker] starts the queue consumer
+│   ├── cron.go                             # [cron]   `cron` parent; mounts one subcommand per job
+│   └── cron/                               # [cron]   one cobra command per job (user_scan.go)
 │
 ├── internal/
 │   ├── app/                                # Application lifecycle (start → signal → cleanup)
 │   │   ├── api.go                          # [HTTP]   RunHTTPServer() — boot, serve, graceful shutdown
 │   │   ├── grpc.go                         # [gRPC]   RunGRPCServer()
-│   │   └── worker.go                       # [worker] RunWorker()
+│   │   ├── worker.go                       # [worker] RunWorker()
+│   │   └── cron.go                         # [cron]   runCron() lifecycle + one Run<Job>() per job
 │   │
 │   ├── domain/                             # Layer 1 — Enterprise Business Rules
 │   │   │                                   # ⚠️ ZERO external deps; no framework/DB imports
@@ -64,9 +67,13 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   ├── service.go                  # Orchestrates the domain
 │   │   │   ├── dto.go                      # Input/Output DTOs for this feature
 │   │   │   └── service_test.go             # Unit tests with a fake for every port
-│   │   └── useraudit/                      # [worker] audit-trail feature
+│   │   ├── useraudit/                      # [worker] audit-trail feature
+│   │   │   ├── service.go
+│   │   │   └── dto.go
+│   │   └── userscan/                       # [cron] keyset batch walk the user-scan job runs
 │   │       ├── service.go
-│   │       └── dto.go
+│   │       ├── dto.go
+│   │       └── service_test.go             # Paging, resume, error and cancel with a fake repository
 │   │
 │   ├── adapter/                            # Layer 3 — Interface Adapters (implements domain ports)
 │   │   ├── repository/
@@ -128,16 +135,21 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   │   │   ├── user_test.go                # bufconn end to end (codes, auth, health, locale)
 │   │   │   ├── rpcstatus/status.go         # AppError → gRPC status
 │   │   │   └── interceptor/                # interceptor.go (RequestID, Logging, Recovery), auth.go, deadline.go, throttle.go, locale.go + tests
-│   │   └── worker/                         # [worker]
-│   │       ├── worker.go                   # Orchestrator: consumer → handler dispatch
-│   │       ├── policy.go                   # Per-message deadline, retries, parking (ErrPoison/ErrParked)
-│   │       ├── worker_test.go              # Broker-less tests of the policy
-│   │       ├── handler.go                  # Handler interface
-│   │       ├── consumer.go                 # Kafka/RabbitMQ consumer (settles ack / dead-letter / redeliver)
-│   │       ├── consumer_test.go            # Settle semantics with a fake session / acknowledger
-│   │       └── v1/user/                    # One package per feature
-│   │           ├── handler.go
-│   │           └── dto.go
+│   │   ├── worker/                         # [worker]
+│   │   │   ├── worker.go                   # Orchestrator: consumer → handler dispatch
+│   │   │   ├── policy.go                   # Per-message deadline, retries, parking (ErrPoison/ErrParked)
+│   │   │   ├── worker_test.go              # Broker-less tests of the policy
+│   │   │   ├── handler.go                  # Handler interface
+│   │   │   ├── consumer.go                 # Kafka/RabbitMQ consumer (settles ack / dead-letter / redeliver)
+│   │   │   ├── consumer_test.go            # Settle semantics with a fake session / acknowledger
+│   │   │   └── v1/user/                    # One package per feature
+│   │   │       ├── handler.go
+│   │   │       └── dto.go
+│   │   └── cronjob/                        # [cron]
+│   │       ├── job.go                      # Job interface: Name + Run(ctx) error
+│   │       ├── runner.go                   # Run policy: run_id, span, deadline, panic guard, outcome line
+│   │       ├── runner_test.go              # Outcomes with a fake job and a recording logger
+│   │       └── user/scan.go                # user-scan job → usecase/userscan; one package per feature
 │   │
 │   └── infrastructure/                     # Layer 4 — Frameworks & Drivers
 │       │                                   # PURPOSE: technical capabilities, no business logic
@@ -190,7 +202,7 @@ Transports are **mutually exclusive** (`Transport` is a single string), so no on
 │   ├── logctx/
 │   │   └── logctx.go                       # Context-attached logger (With(ctx) / From(ctx))
 │   ├── requestid/
-│   │   └── requestid.go                    # Correlation ID in ctx (With / From / Valid) — HTTP, gRPC and worker set it
+│   │   └── requestid.go                    # Correlation ID in ctx (With / From / Valid) — HTTP, gRPC, worker and cron set it
 │   └── observability/
 │       └── observability.go                # Logger port — implementations live in infrastructure/
 │

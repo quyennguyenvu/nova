@@ -181,7 +181,6 @@ Being explicit about the gaps, so nobody assumes coverage that isn't there:
 - **No refresh tokens.** `AccessTokenTTL` only; add a session id claim to `AccessTokenClaims` and `identity.UserPrincipal` together to build on.
 - **No role or permission model.** `middleware.Auth` establishes *who* the caller is and `requireSelf` enforces ownership; anything richer (roles, an admin audience) goes in the usecase and has no scaffold.
 - **gRPC is unary-only, and its health service reports process liveness.** Stream interceptors and a dependency-aware readiness check are yours to add ([07](07-transport-layer.md#internaltransportgrpc)).
-- **`transport/cronjob/` and `cmd/cron.go` are not rendered.** The `cron.go.tmpl` template exists but is not wired into `buildFileList`.
 - **Not scaffolded, documented as patterns**: `domain/valueobject/`, `domain/service/`, `domain/event/` as a package, `adapter/external/`.
 
 ---

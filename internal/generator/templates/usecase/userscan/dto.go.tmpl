@@ -1,0 +1,14 @@
+package userscan
+
+// ScanInput is where a scan starts. AfterID 0 starts from the first user; a
+// failed run's ScanResult.LastID resumes it.
+type ScanInput struct {
+	AfterID int64
+}
+
+// ScanResult reports how far a scan got. LastID is the last user id read, so
+// it is the resume point even when Scan returns an error.
+type ScanResult struct {
+	Scanned int64
+	LastID  int64
+}

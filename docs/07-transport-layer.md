@@ -1,6 +1,6 @@
 # 7. Transport layer
 
-Inbound delivery — HTTP, gRPC, worker. Converts wire formats into usecase calls and back. A sibling of `adapter/`, not a child ([04](04-placement-rationale.md#why-transport-is-a-sibling-of-adapter-not-inside-it)). ([index](README.md))
+Inbound delivery — HTTP, gRPC, worker, cron. Converts wire formats into usecase calls and back. A sibling of `adapter/`, not a child ([04](04-placement-rationale.md#why-transport-is-a-sibling-of-adapter-not-inside-it)). ([index](README.md))
 
 Transports are **mutually exclusive** in a generated project: one `--transport` flag, one of `transport/http/`, `transport/grpc/`, `transport/worker/`.
 
@@ -629,22 +629,31 @@ Kafka's ordering contract is documented where it can bite you:
 
 ## internal/transport/cronjob/
 
-**Not scaffolded.** Cron handlers are thin wrappers that call a usecase method. They belong in `transport/` because a schedule is a delivery mechanism, and they need no middleware.
+Rendered by `--transport=cron`. A cron service is run-once: `myapp cron <job>` boots the DI graph for one job, runs it, and exits `0` when it completed or `1` when it did not (job error, panic, timeout, SIGTERM, failed boot). The schedule lives in the deploy layer — a Kubernetes `CronJob` with `concurrencyPolicy: Forbid`, or crontab behind `flock -n` — which owns retries, missed runs and overlap; the generated README shows both.
+
+A job implements `Job` (`job.go`):
 
 ```go
-package cronjob
-
-type ScanExpiredOrders struct {
-    orderService *ordersvc.Service
-}
-
-func NewScanExpiredOrders(orderService *ordersvc.Service) *ScanExpiredOrders {
-    return &ScanExpiredOrders{orderService: orderService}
-}
-
-func (s *ScanExpiredOrders) Run(ctx context.Context) {
-    s.orderService.HandleExpiredOrders(ctx)
+type Job interface {
+	// Name is the job's log and span name, matching its cron subcommand.
+	Name() string
+	Run(ctx context.Context) error
 }
 ```
 
-> A `templates/cmd/cron.go.tmpl` exists in the template tree but is not wired into `buildFileList`, so no project renders it today. Treat the snippet above as the intended shape.
+`Runner.Run` (`runner.go`) applies the run policy once, the counterpart of the worker's per-message policy: it mints a `run_id` into `requestid` and scopes a logger (`job`, `run_id`, `trace_id`) into `logctx`, opens a `cron <name>` span, bounds the run with `cron.timeout` (default `30m`), turns a panic into `ErrJobPanic`, and writes one outcome line — `cron: job finished`, `cron: job failed`, or `cron: job interrupted` when SIGTERM cancelled the run. There are no in-process retries; the scheduler retries.
+
+Jobs are thin, like handlers: one package per feature, each job calling one usecase method. The reference job walks every user through the keyset `usecase/userscan.Scan` and names the resume point when it fails:
+
+```go
+func (j *ScanJob) Run(ctx context.Context) error {
+	res, err := j.scan.Scan(ctx, userscansvc.ScanInput{AfterID: j.flags.AfterID})
+	if err != nil {
+		return errors.Wrapf(err, "user-scan: resume with --after-id=%d", res.LastID)
+	}
+	logctx.From(ctx).Info("user-scan: done", "scanned", res.Scanned, "last_id", res.LastID)
+	return nil
+}
+```
+
+Each job has its own cobra command in `cmd/cron/` with its own flags (`user-scan` takes `--after-id`), and its own DI injector, `Initialize<Job>Job`, which takes the parsed flags as an argument. One injector per job means a job never builds a dependency it doesn't use, so an outage in one job's dependency cannot fail another. Every job must be idempotent, resumable, and return when its ctx is done.

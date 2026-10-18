@@ -16,6 +16,9 @@ import (
 	"{{.ModuleName}}/internal/transport/worker"
 	workeruser "{{.ModuleName}}/internal/transport/worker/v1/user"
 {{- end}}
+{{- if .HasCron}}
+	"{{.ModuleName}}/internal/transport/cronjob"
+{{- end}}
 )
 
 // provideValidator returns a single concurrent-safe *validator.Validate that
@@ -85,5 +88,13 @@ func provideWorkerPolicy(cfg *config.Config) worker.Policy {
 		MaxAttempts:    cfg.Worker.MaxAttempts,
 		RetryBackoff:   cfg.Worker.RetryBackoff,
 	}
+}
+{{- end}}
+{{- if .HasCron}}
+
+// provideCronPolicy projects the cron config onto the transport's Policy so
+// transport/cronjob stays free of the config package.
+func provideCronPolicy(cfg *config.Config) cronjob.Policy {
+	return cronjob.Policy{Timeout: cfg.Cron.Timeout}
 }
 {{- end}}

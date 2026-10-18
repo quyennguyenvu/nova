@@ -15,7 +15,7 @@ import (
 //
 //nolint:gochecknoglobals // immutable option sets; treated as consts.
 var (
-	Transports     = []string{"http", "grpc", "worker"}
+	Transports     = []string{"http", "grpc", "worker", "cron"}
 	HTTPFrameworks = []string{"fiber", "gin", "chi", "echo"}
 	Databases      = []string{"postgres", "mysql", noneStr}
 	Caches         = []string{"redis", noneStr}

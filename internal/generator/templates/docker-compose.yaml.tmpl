@@ -25,8 +25,8 @@ services:
     build:
       context: .
     image: {{.ProjectName}}:local
-    # The subcommand comes from the image's CMD ({{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else}}api{{end}}) — see Dockerfile.
-    # Secrets and per-deploy values ({{if .HasDatabase}}DB_USER/DB_PASSWORD, {{end}}{{if not .HasWorker}}JWT keys, {{end}}APP_ENV).
+    # The subcommand comes from the image's CMD ({{if .HasWorker}}worker{{else if .HasGRPC}}grpc{{else if .HasCron}}cron user-scan, which runs once and exits; run another job with `docker compose run --rm app cron <job>`{{else}}api{{end}}) — see Dockerfile.
+    # Secrets and per-deploy values ({{if .HasDatabase}}DB_USER/DB_PASSWORD, {{end}}{{if or .HasHTTP .HasGRPC}}JWT keys, {{end}}APP_ENV).
     env_file:
       - .env
 {{- if .HasDependencies}}

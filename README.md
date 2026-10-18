@@ -51,7 +51,7 @@ myproject/
 │   ├── domain/                    # Layer 1 — entities, ports (repository, publisher, hasher)
 │   ├── usecase/                   # Layer 2 — business logic + DTOs
 │   ├── adapter/                   # Layer 3 — repository impls, cache, search, publishers
-│   ├── transport/                 #            HTTP / gRPC / worker handlers + middleware
+│   ├── transport/                 #            HTTP / gRPC / worker / cron handlers + middleware
 │   └── infrastructure/            # Layer 4 — config, DB, cache, jwt, server, DI wiring
 ├── pkg/                           # Cross-cutting (errors, httputil, locale, logctx, observability)
 ├── sqlc/                          # sqlc.yaml + query/ + migrations/
@@ -74,7 +74,7 @@ Generates a complete project. With no flags it runs interactively; pass any flag
 | Flag               | Values                                   | Default                   |
 | ------------------ | ---------------------------------------- | ------------------------- |
 | `--module`         | Go module path                           | `github.com/myorg/<name>` |
-| `--transport`      | `http`, `grpc`, `worker`                 | _(none — must be set)_    |
+| `--transport`      | `http`, `grpc`, `worker`, `cron`         | _(none — must be set)_    |
 | `--http-framework` | `fiber`, `gin`, `chi`, `echo`            | `fiber`                   |
 | `--database`       | `postgres`, `mysql`, `none`              | `postgres`                |
 | `--db-driver`      | `pgx` (postgres), `database/sql` (mysql) | _(per engine)_            |
@@ -88,7 +88,7 @@ Generates a complete project. With no flags it runs interactively; pass any flag
 | `--ci`             | `github`, `none`                         | `github`                  |
 | `--force`          | _(bool)_                                 | `false`                   |
 
-Because any flag skips the prompts, a flag-driven run **must** pass `--transport`; a `worker` also needs `--queue` and a SQL `--database`. Every value is validated before a file is written: unimplemented choices (`cron`/`cli` transports, `nethttp`, `sqlite`/`mongodb`, `sqlx`/`gorm`, `raw` queries, `bigcache`, `nats`, `toml`/`env`) are rejected with a message naming the valid set, the project name must be safe for file names and Go source, and an existing non-empty target directory is refused unless you pass `--force`. [docs/01 — CLI options](docs/01-cli-options.md) has the details.
+Because any flag skips the prompts, a flag-driven run **must** pass `--transport`; a `worker` also needs `--queue` and a SQL `--database`. Every value is validated before a file is written: unimplemented choices (the `cli` transport, `nethttp`, `sqlite`/`mongodb`, `sqlx`/`gorm`, `raw` queries, `bigcache`, `nats`, `toml`/`env`) are rejected with a message naming the valid set, the project name must be safe for file names and Go source, and an existing non-empty target directory is refused unless you pass `--force`. [docs/01 — CLI options](docs/01-cli-options.md) has the details.
 
 Example — full non-interactive run:
 
@@ -188,7 +188,7 @@ make run              # build and print the CLI help
 make clean            # remove bin/ and the generated test output
 make rebuild          # clean + build
 make test             # go test -short ./... (fast; skips the render-then-vet matrix)
-make test-all         # full suite: 36-case vet matrix + 8 real-toolchain bootstraps (~4 min; run it alone)
+make test-all         # full suite: 40-case vet matrix + 10 real-toolchain bootstraps (~9 min; run it alone)
 make lint             # golangci-lint run
 make fmt              # golangci-lint fmt
 make vet              # go vet ./...

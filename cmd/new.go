@@ -138,6 +138,8 @@ func nextSteps(cfg *config.ProjectConfig) []string {
 		steps = append(steps, "go run main.go worker")
 	case cfg.HasGRPC():
 		steps = append(steps, "go run main.go grpc")
+	case cfg.HasCron():
+		steps = append(steps, "go run main.go cron user-scan")
 	default:
 		steps = append(steps, "go run main.go api")
 	}

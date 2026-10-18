@@ -1,0 +1,105 @@
+package cronjob
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
+	"{{.ModuleName}}/pkg/observability"
+	"{{.ModuleName}}/pkg/requestid"
+)
+
+// defaultTimeout bounds a run when Policy.Timeout is unset.
+const defaultTimeout = 30 * time.Minute
+
+// ErrJobPanic wraps a recovered job panic, so DI cleanup still runs and the
+// process exits non-zero instead of crashing.
+var ErrJobPanic = errors.New("job panic")
+
+// Policy bounds one run. The zero value takes the defaults.
+type Policy struct {
+	// Timeout is the run's deadline; the job's ctx expires at it.
+	Timeout time.Duration
+}
+
+func (p Policy) withDefaults() Policy {
+	if p.Timeout <= 0 {
+		p.Timeout = defaultTimeout
+	}
+	return p
+}
+
+// Runner applies the Policy to one run: it scopes a run id and a logger into
+// ctx, opens a root span, enforces the deadline, turns a panic into an error,
+// and writes exactly one outcome line — the cron counterpart of the worker's
+// per-message policy.
+type Runner struct {
+	log    observability.Logger
+	tracer trace.Tracer
+	policy Policy
+}
+
+func NewRunner(log observability.Logger, tracer trace.Tracer, policy Policy) *Runner {
+	return &Runner{log: log, tracer: tracer, policy: policy.withDefaults()}
+}
+
+// Run runs job once and returns its error. A cancelled parent ctx (SIGTERM)
+// is logged as interrupted rather than failed: the scheduler stopped the run,
+// the job did not break.
+func (r *Runner) Run(ctx context.Context, job Job) error {
+	runID := uuid.New().String()
+	ctx, span := r.tracer.Start(ctx, "cron "+job.Name())
+	defer span.End()
+
+	scoped := r.log.
+		With("job", job.Name()).
+		With("run_id", runID).
+		With("trace_id", traceIDOr(span.SpanContext()))
+	ctx = logctx.With(requestid.With(ctx, runID), scoped)
+
+	start := time.Now()
+	err := r.run(ctx, job)
+	fields := []any{"duration_ms", time.Since(start).Milliseconds()}
+	if err == nil {
+		scoped.Info("cron: job finished", fields...)
+		return nil
+	}
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+	fields = append(fields, errors.LogFields(err)...)
+	if ctx.Err() != nil {
+		scoped.Warn("cron: job interrupted", fields...)
+	} else {
+		scoped.Error("cron: job failed", fields...)
+	}
+	return err
+}
+
+// run applies the deadline and the panic guard to one call of the job.
+func (r *Runner) run(ctx context.Context, job Job) error {
+	runCtx, cancel := context.WithTimeout(ctx, r.policy.Timeout)
+	defer cancel()
+	var err error
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				err = fmt.Errorf("%w: %v", ErrJobPanic, p)
+			}
+		}()
+		err = job.Run(runCtx)
+	}()
+	return err
+}
+
+func traceIDOr(sc trace.SpanContext) string {
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
+}

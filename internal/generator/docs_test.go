@@ -54,6 +54,28 @@ func TestDocsClaims(t *testing.T) {
 		register := funcBody(t, readFile(t, filepath.Join(httpDir, "internal/usecase/user/service.go")), "Register")
 		mustContainAll(t, register, "s.tx.WithinTx(ctx,", "s.userRepo.Create(")
 	})
+	t.Run("docs/07 cronjob quotes the rendered cron transport", func(t *testing.T) {
+		t.Parallel()
+		dir := renderProject(t, cronMatrixConfig("postgres", "wire"))
+		doc := docFile(t, "07-transport-layer.md")
+		quoted := []string{
+			"func (j *ScanJob) Run(ctx context.Context) error {",
+			`return errors.Wrapf(err, "user-scan: resume with --after-id=%d", res.LastID)`,
+			"Name() string",
+		}
+		mustContainAll(t, doc, quoted...)
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/cronjob/user/scan.go")), quoted[:2]...)
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/cronjob/job.go")), quoted[2])
+		mustContainAll(t, readFile(t, filepath.Join(dir, "internal/transport/cronjob/runner.go")),
+			`"cron: job finished"`, `"cron: job failed"`, `"cron: job interrupted"`)
+		mustContainAll(t, doc,
+			"`cron: job finished`", "`cron: job failed`", "`cron: job interrupted`", "`cron.timeout`")
+		mustNotContain(t, doc, "**Not scaffolded.** Cron", "not wired into `buildFileList`")
+		mustNotContain(t, docFile(t, "13-cross-cutting.md"), "`cmd/cron.go` are not rendered")
+		mustNotContain(t, docFile(t, "03-architecture-rules.md"), "`transport/cronjob/` are patterns to grow into")
+		mustNotContain(t, docFile(t, "README.md"), "- `transport/cronjob/`")
+		mustContainAll(t, docFile(t, "02-project-layout.md"), "[cron]", "cronjob/", "userscan/", "cmd/cron.go")
+	})
 	t.Run("docs/13 CORS never widens and tracing runs before the access log", func(t *testing.T) {
 		t.Parallel()
 		assertCORSAndTraceOrder(t, httpDir)
@@ -150,7 +172,7 @@ func limitDefaults(src, pattern string) map[string]string {
 func assertRejectedValues(t *testing.T) {
 	t.Helper()
 	for _, c := range []struct{ field, value string }{
-		{"Transport", "cron"}, {"Transport", "cli"}, {"ConfigFormat", "toml"}, {"ConfigFormat", "env"},
+		{"Transport", "cli"}, {"ConfigFormat", "toml"}, {"ConfigFormat", "env"},
 		{"QueryGen", "raw"}, {"QueryGen", "gorm"},
 	} {
 		cfg := httpMatrixConfig("fiber", "postgres", "wire")
@@ -159,7 +181,7 @@ func assertRejectedValues(t *testing.T) {
 			t.Errorf("%s=%q accepted; docs/01 says it is rejected", c.field, c.value)
 		}
 	}
-	mustContainAll(t, docFile(t, "01-cli-options.md"), "`cron` and `cli` transports", "`gorm`, `raw`",
+	mustContainAll(t, docFile(t, "01-cli-options.md"), "the `cli` transport", "`gorm`, `raw`",
 		"`toml` and `env`", "`--docker=false`", "`--type`", "`worker` also needs `--queue")
 }
 

@@ -12,7 +12,7 @@ import (
 	"strings"
 {{- end}}
 	"os"
-{{- if or .HasHTTP .HasGRPC .HasDatabase .HasRedis .HasElasticsearch .HasMessageQueue}}
+{{- if or .HasHTTP .HasGRPC .HasCron .HasDatabase .HasRedis .HasElasticsearch .HasMessageQueue}}
 	"time"
 {{- end}}
 
@@ -199,9 +199,10 @@ type GRPCConfig struct {
 {{- end}}
 {{- if .HasCron}}
 
-// CronConfig holds cron job configuration.
+// CronConfig bounds one cron run; see transport/cronjob.Policy. The schedule
+// lives in the deploy layer (Kubernetes CronJob, crontab), not here.
 type CronConfig struct {
-	Spec string `{{.ConfigFormat}}:"spec" env:"CRON_SPEC"`
+	Timeout time.Duration `{{.ConfigFormat}}:"timeout" env:"CRON_TIMEOUT"`
 }
 {{- end}}
 {{- if .HasDatabase}}
@@ -479,6 +480,9 @@ func (c *Config) Summary() []any {
 		"worker_max_attempts", c.Worker.MaxAttempts,
 		"worker_handler_timeout", c.Worker.HandlerTimeout,
 	)
+{{- end}}
+{{- if .HasCron}}
+	fields = append(fields, "cron_timeout", c.Cron.Timeout)
 {{- end}}
 	return fields
 }

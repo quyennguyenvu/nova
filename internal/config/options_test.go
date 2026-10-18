@@ -17,7 +17,6 @@ func validHTTP() *ProjectConfig {
 func TestValidateRejectsUnimplemented(t *testing.T) {
 	t.Parallel()
 	cases := map[string]func(*ProjectConfig){
-		"transport cron":       func(c *ProjectConfig) { c.Transport = "cron" },
 		"transport cli":        func(c *ProjectConfig) { c.Transport = "cli" },
 		"transport typo":       func(c *ProjectConfig) { c.Transport = "htpp" },
 		"transport empty":      func(c *ProjectConfig) { c.Transport = "" },
@@ -125,15 +124,41 @@ func TestValidateFillsDefaults(t *testing.T) {
 func TestValidateErrorNamesEveryProblem(t *testing.T) {
 	t.Parallel()
 	cfg := validHTTP()
-	cfg.Transport = "cron"
+	cfg.Transport = "cli"
 	cfg.Cache = "bigcache"
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	for _, want := range []string{`transport "cron"`, `cache "bigcache"`} {
+	for _, want := range []string{`transport "cli"`, `cache "bigcache"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
+	}
+}
+
+// TestValidateAcceptsCron pins the cron transport's open shape: unlike the
+// worker it needs no broker or SQL engine, and it takes no HTTP framework.
+func TestValidateAcceptsCron(t *testing.T) {
+	t.Parallel()
+	for _, db := range []string{"postgres", "mysql", "none"} {
+		t.Run(db, func(t *testing.T) {
+			t.Parallel()
+			cfg := DefaultConfig()
+			cfg.Transport = "cron"
+			cfg.Database = db
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate cron/%s: %v", db, err)
+			}
+			if cfg.HTTPFramework != "" {
+				t.Errorf("cron kept http-framework %q", cfg.HTTPFramework)
+			}
+		})
+	}
+	withFramework := DefaultConfig()
+	withFramework.Transport = "cron"
+	withFramework.HTTPFramework = "fiber"
+	if err := withFramework.Validate(); err == nil {
+		t.Error("Validate accepted --http-framework on cron")
 	}
 }

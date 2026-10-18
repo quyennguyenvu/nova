@@ -1,0 +1,39 @@
+// Package user holds the cron jobs over the user aggregate.
+package user
+
+import (
+	"context"
+
+	userscansvc "{{.ModuleName}}/internal/usecase/userscan"
+	"{{.ModuleName}}/pkg/errors"
+	"{{.ModuleName}}/pkg/logctx"
+)
+
+// ScanFlags is the user-scan command's input. It is a named type so the DI
+// graph can inject it into NewScanJob.
+type ScanFlags struct {
+	// AfterID resumes a scan after this user id; 0 starts from the first.
+	AfterID int64
+}
+
+// ScanJob walks every user through userscansvc.Service.Scan.
+type ScanJob struct {
+	scan  *userscansvc.Service
+	flags ScanFlags
+}
+
+func NewScanJob(scan *userscansvc.Service, flags ScanFlags) *ScanJob {
+	return &ScanJob{scan: scan, flags: flags}
+}
+
+func (*ScanJob) Name() string { return "user-scan" }
+
+// Run scans once. A failed run names the --after-id that resumes it.
+func (j *ScanJob) Run(ctx context.Context) error {
+	res, err := j.scan.Scan(ctx, userscansvc.ScanInput{AfterID: j.flags.AfterID})
+	if err != nil {
+		return errors.Wrapf(err, "user-scan: resume with --after-id=%d", res.LastID)
+	}
+	logctx.From(ctx).Info("user-scan: done", "scanned", res.Scanned, "last_id", res.LastID)
+	return nil
+}

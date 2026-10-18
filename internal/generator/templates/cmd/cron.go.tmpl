@@ -3,15 +3,18 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"{{.ModuleName}}/internal/app"
+	"{{.ModuleName}}/cmd/cron"
 )
 
+// cronCommand groups the run-once jobs: `cron <job>` runs one and exits, so
+// the schedule lives in the deploy layer (Kubernetes CronJob, crontab).
 func cronCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "cron",
-		Short: "Start the cron job scheduler",
-		Run: func(*cobra.Command, []string) {
-			app.RunCronJobScheduler()
-		},
+		Short: "Run one scheduled job and exit",
 	}
+	cmd.AddCommand(
+		cron.UserScan(),
+	)
+	return cmd
 }
